@@ -40,7 +40,6 @@ from .routes import (
     diary,
     memory,
     monthly,
-    onboarding,
     privacy,
     review,
     settings as settings_routes,
@@ -247,7 +246,7 @@ def create_app() -> FastAPI:
     app.include_router(day.router)
     app.include_router(memory.router)
     app.include_router(monthly.router)
-    app.include_router(onboarding.router)
+    # DSH 专用化：onboarding 路由已移除（首次进入不再有六步质检流程）
     app.include_router(privacy.router)
     app.include_router(review.router)
     app.include_router(settings_routes.router)

@@ -9,7 +9,6 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from .. import onboarding_service
 from ..companion import companion_service
 from ..config import settings
 from ..model_registry import (
@@ -783,7 +782,10 @@ async def test_model_profile(profile_id: str):
                 connection_route=connection_route,
             ),
         )
-    onboarding_service.record_model_verification(profile.id)
+    # DSH 专用化：原来这里会 `onboarding_service.record_model_verification(profile.id)`，
+    # 把"模型已通过真实测试"记进六步向导的状态文件（供向导第 3 步跳步用）。
+    # 向导已整体移除，故不再记录 —— 模型测试结果**照常返回**（见下方 return），
+    # 设置页的「测试模型」功能完全不受影响。
     catalog_available = response.is_success and response_is_json(response)
     return {
         "ok": True,

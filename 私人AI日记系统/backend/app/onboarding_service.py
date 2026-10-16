@@ -1,145 +1,47 @@
+"""首次启动的安全默认值 —— **六步质检向导已移除，本模块只剩这一件事**。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DSH 专用化说明（2026-10-17 用户裁决）
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+上游把「首次进入」做成了一套六步向导（环境体检 / 隐私说明 / 称呼 /
+模型供应商 / 敏感能力开关 / 完成）。那套向导面向**跨 Agent 平台的新用户**
+（要选模型供应商、要逐项决定敏感能力），对 **DSH 专用**形态全部无意义 ——
+DSH 自带模型与审批策略，能力边界由 DSH 插件线决定。
+
+⇒ 本模块**已删除**的东西（连同对应的入口）：
+  - `onboarding_status()` / `complete_onboarding()`（向导的状态与提交）
+  - `record_model_verification()` / `_require_verified_model()`（向导的模型验证）
+  - `_existing_user_evidence()` / `_load_saved_state()` / `_state_path()`
+    / `_write_state()` 与 `首次启动.json` 那套状态文件
+  - 路由 `routes/onboarding.py`（`/api/onboarding/*` 三个端点）
+  - 前端 `OnboardingPage.vue` / `onboardingApi.js` / `onboardingGates.js`
+
+⇒ **刻意保留**：`prepare_first_launch_defaults()`
+  它**不是"向导的一步"**，而是一条**安全默认值**：全新安装时主动关掉
+  屏幕观察 / 系统声音 / 游戏观察 / 直接语音，避免"装完就默认偷看屏幕"。
+
+  ⚠ 保留它与本任务目标**不冲突**：用户要删的是"拦路的六步 UI"，
+    不是"首次启动的安全兜底"。删掉它会让新装环境**默认开启**屏幕观察，
+    那是明显的安全回退。故保留，并维持原语义。
+"""
 from __future__ import annotations
 
-import json
-import sqlite3
-from copy import deepcopy
-from pathlib import Path
-from typing import Any
-
-from . import db
-from .config import save_runtime_settings, settings
-from .companion.mio_profile import DEFAULT_PROFILE, load_mio_profile, save_mio_profile_from_settings
-from .model_registry import get_model_profile
-
-
-ONBOARDING_VERSION = 2
-
-
-def _state_path() -> Path:
-    return settings.data_dir / "首次启动.json"
-
-
-def _write_state(state: dict[str, Any]) -> dict[str, Any]:
-    path = _state_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    temporary.replace(path)
-    return state
-
-
-def _existing_user_evidence() -> list[str]:
-    evidence: list[str] = []
-    if settings.db_path.exists():
-        with db.get_conn() as conn:
-            for table, label in (
-                ("messages", "聊天记录"),
-                ("diaries", "日记"),
-                ("structured_memories", "结构化记忆"),
-            ):
-                try:
-                    count = int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
-                except sqlite3.OperationalError:
-                    count = 0
-                if count:
-                    evidence.append(label)
-            try:
-                manual_free_count = int(
-                    conn.execute("SELECT COUNT(*) FROM memories WHERE type != 'manual'").fetchone()[0]
-                )
-            except sqlite3.OperationalError:
-                manual_free_count = 0
-            if manual_free_count:
-                evidence.append("记忆")
-    if settings.mio_profile_path.is_file():
-        profile = load_mio_profile()
-        comparable = deepcopy(profile)
-        default = deepcopy(DEFAULT_PROFILE)
-        comparable["updated_at"] = ""
-        default["updated_at"] = ""
-        if comparable != default:
-            evidence.append("角色属性")
-    if settings.model_profiles_path.is_file():
-        evidence.append("模型供应商")
-    if any(settings.diary_dir.glob("*.md")):
-        evidence.append("日记文件")
-    return list(dict.fromkeys(evidence))
-
-
-def _load_saved_state() -> dict[str, Any] | None:
-    try:
-        data = json.loads(_state_path().read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    return data if isinstance(data, dict) else None
-
-
-def onboarding_status() -> dict[str, Any]:
-    saved = _load_saved_state()
-    if saved is not None:
-        return saved
-    evidence = _existing_user_evidence()
-    if evidence:
-        return _write_state(
-            {
-                "version": ONBOARDING_VERSION,
-                "completed": True,
-                "mode": "legacy_existing_user",
-                "completed_at": db.now_iso(),
-                "existing_data": evidence,
-            }
-        )
-    return _write_state({
-        "version": ONBOARDING_VERSION,
-        "completed": False,
-        "mode": "new_user",
-        "completed_at": "",
-        "existing_data": [],
-        "model_verification": {
-            "verified": False,
-            "model_id": "",
-            "verified_at": "",
-        },
-    })
-
-
-def record_model_verification(model_id: str) -> dict[str, Any]:
-    profile_id = str(model_id or "").strip()
-    if not profile_id:
-        raise ValueError("缺少已测试的模型 ID。")
-    profile = get_model_profile(profile_id)
-    state = onboarding_status()
-    if state.get("completed"):
-        return state
-    state["model_verification"] = {
-        "verified": True,
-        "model_id": profile.id,
-        "provider_id": profile.provider_id,
-        "provider_name": profile.provider_name,
-        "model": profile.model,
-        "verified_at": db.now_iso(),
-    }
-    return _write_state(state)
-
-
-def _require_verified_model() -> dict[str, Any]:
-    state = _load_saved_state() or {}
-    verification = state.get("model_verification")
-    if not isinstance(verification, dict) or verification.get("verified") is not True:
-        raise ValueError("请先在模型服务步骤完成一次真实聊天测试。")
-    model_id = str(verification.get("model_id") or "").strip()
-    try:
-        profile = get_model_profile(model_id)
-    except ValueError as exc:
-        raise ValueError("已测试的模型配置不存在，请重新保存并测试模型。") from exc
-    if profile.id != model_id:
-        raise ValueError("已测试的模型身份不一致，请重新测试模型。")
-    return verification
+from .config import settings
 
 
 def prepare_first_launch_defaults() -> None:
-    """Disable sensing defaults only for a genuinely new, unconfigured installation."""
-    if settings.companion_config_path.exists() or onboarding_status()["completed"]:
+    """全新、未配置的安装 → 把观察类能力默认关掉（安全默认）。
+
+    「全新且未配置」的判据：`companion_config.json` 不存在。
+
+    ⚠ 与上游的差异（有意为之，已核对语义等价）：
+      上游判据是 `companion_config_path.exists() or onboarding_status()["completed"]`。
+      向导状态文件已删，故这里**只看配置文件是否存在**：
+        - 用户配过一次 → 文件在 → 不动他的设置（与上游"completed 就不动"一致）；
+        - 全新安装 → 文件不在 → 关掉观察能力（与上游"新用户"分支一致）。
+      两种情形行为与上游**完全一致**，只是不再需要一个额外的状态文件。
+    """
+    if settings.companion_config_path.exists():
         return
     from .companion import companion_service
 
@@ -152,51 +54,3 @@ def prepare_first_launch_defaults() -> None:
             "speak_game_observations": False,
         }
     )
-
-
-def complete_onboarding(payload: dict[str, Any]) -> dict[str, Any]:
-    # 模型供应商可以跳过：第一次进入不强制配置，之后在设置中随时可配。
-    try:
-        model_verification = _require_verified_model()
-    except ValueError:
-        model_verification = {
-            "verified": False,
-            "model_id": "",
-            "provider_id": "",
-            "provider_name": "",
-            "model": "",
-            "verified_at": "",
-        }
-    name = str(payload.get("assistant_name") or "Mio").strip()
-    user_address = str(payload.get("user_address") or "你").strip()
-    if not name or len(name) > 80:
-        raise ValueError("角色名字需要是 1 至 80 个字符。")
-    if not user_address or len(user_address) > 80:
-        raise ValueError("用户称呼需要是 1 至 80 个字符。")
-
-    profile = deepcopy(load_mio_profile())
-    profile.setdefault("identity", {})["name"] = name
-    profile.setdefault("preferences", {})["user_address"] = user_address
-    save_mio_profile_from_settings(profile)
-
-    runtime_changes = {
-        "web_search_enabled": bool(payload.get("web_search_enabled", False)),
-        "qq_proactive_enabled": bool(payload.get("proactive_enabled", False)),
-        "daily_diary_auto_enabled": bool(payload.get("daily_diary_auto_enabled", False)),
-        "qq_bot_enabled": bool(payload.get("qq_enabled", False)),
-        "qq_image_send_to_model": False,
-        "daily_review_auto_enabled": False,
-        "weekly_review_enabled": False,
-    }
-    save_runtime_settings(runtime_changes)
-
-    state = {
-        "version": ONBOARDING_VERSION,
-        "completed": True,
-        "mode": "new_user_completed",
-        "completed_at": db.now_iso(),
-        "existing_data": [],
-        "model_verification": model_verification,
-        "choices": runtime_changes,
-    }
-    return _write_state(state)

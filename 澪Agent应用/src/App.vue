@@ -12,14 +12,10 @@ const { formatRealTime, formatShortTime, formatSidebarTime, weekStartFor, weekEn
 })
 
 import { useDataPrivacy } from './composables/useDataPrivacy.js'
-const { completeOnboarding, refreshOnboardingEnvironment, refreshDataPrivacy, createDataBackup, importDataBackup, restoreDataBackup, deleteDataBackup, cleanupDataBackups, togglePrivacyPause } = useDataPrivacy({
+const { refreshDataPrivacy, createDataBackup, importDataBackup, restoreDataBackup, deleteDataBackup, cleanupDataBackups, togglePrivacyPause } = useDataPrivacy({
   get dataPrivacyBusy() { return dataPrivacyBusy },
   get dataPrivacyLoading() { return dataPrivacyLoading },
   get dataPrivacyState() { return dataPrivacyState },
-  get onboardingBusy() { return onboardingBusy },
-  get onboardingEnvironment() { return onboardingEnvironment },
-  get onboardingEnvironmentBusy() { return onboardingEnvironmentBusy },
-  get onboardingError() { return onboardingError },
   get settingsFeedback() { return settingsFeedback },
   get showAppConfirm() { return showAppConfirm },
 })
@@ -481,7 +477,7 @@ import { computed, customRef, defineAsyncComponent, nextTick, onBeforeUnmount, o
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 import AppDialog from './components/AppDialog.vue'
-import OnboardingPage from './components/OnboardingPage.vue'
+// DSH 专用化：OnboardingPage 已移除（首次进入不再走六步质检）
 // Load large work surfaces on first use so the initial desktop bundle stays
 // small and the cold-start UI can become interactive sooner.
 const ChatPage = defineAsyncComponent(() => import('./components/ChatPage.vue'))
@@ -520,11 +516,7 @@ import * as qqApi from './services/qqApi.js'
 import * as settingsApi from './services/settingsApi.js'
 import * as selfStateApi from './services/selfStateApi.js'
 import * as voiceApi from './services/voiceApi.js'
-import {
-  completeOnboarding as completeOnboardingRequest,
-  loadOnboardingEnvironment,
-  loadOnboardingStatus,
-} from './services/onboardingApi.js'
+// DSH 专用化：onboardingApi 已移除（六步质检流程整删）
 import {
   cleanupAutomaticBackups,
   createCompleteBackup,
@@ -866,10 +858,7 @@ const leftSidebarHovered = ref(false)
 const rightSidebarHovered = ref(false)
 const bootstrap = ref(null)
 const providerPresets = computed(() => bootstrap.value?.provider_presets || [])
-const onboardingBusy = ref(false)
-const onboardingError = ref('')
-const onboardingEnvironment = ref(null)
-const onboardingEnvironmentBusy = ref(false)
+// DSH 专用化：onboarding* 四个 ref 已随六步质检流程移除
 const dataPrivacyState = ref({ backups: [], backupStorage: {}, privacy: { paused: false, capabilities: [] }, migrations: {} })
 const dataPrivacyLoading = ref(false)
 const dataPrivacyBusy = ref('')
@@ -2498,19 +2487,12 @@ onMounted(async () => {
   document.addEventListener('visibilitychange', handleVisibilityChange)
   window.addEventListener('storage', handleAppPreferencesStorage)
   window.addEventListener('mio:open-pet-chat', focusDesktopPetChat)
-  try {
-    const onboarding = await loadOnboardingStatus()
-    if (onboarding?.completed === false) {
-      bootstrap.value = { onboarding, models: [] }
-      loading.value = false
-      await refreshOnboardingEnvironment()
-      await syncActiveViewState('onboarding')
-      markAppReady()
-      return
-    }
-  } catch (error) {
-    errorMessage.value = error.message
-  }
+  // ★ DSH 专用化：**不再有首次进入的六步质检流程**（2026-10-17 用户裁决）。
+  //   上游那套向导面向"跨 Agent 平台的新用户"（环境体检 / 模型供应商配置 /
+  //   敏感能力开关），对 **DSH 专用**形态全部无意义 —— DSH 自带模型与审批策略，
+  //   能力边界由 DSH 插件线决定。故这里直接进入主界面（桌宠管理页）。
+  //   连带移除：OnboardingPage.vue / onboardingApi.js / onboardingGates.js
+  //   与后端 /api/onboarding/*（见 docs/DSH专用化阉割计划.md 阶段 1）。
   await loadBootstrap()
   await syncActiveViewState()
   markAppReady()
@@ -2643,17 +2625,10 @@ async function setPetChatWindowState(open) {
     </div>
   </main>
 
-  <OnboardingPage
-    v-else-if="bootstrap && bootstrap.onboarding?.completed === false"
-    :onboarding="bootstrap.onboarding"
-    :environment="onboardingEnvironment"
-    :environment-busy="onboardingEnvironmentBusy"
-    :busy="onboardingBusy"
-    :error="onboardingError"
-    @complete="completeOnboarding"
-    @refresh-environment="refreshOnboardingEnvironment"
-  />
-
+  <!-- ★ DSH 专用化：OnboardingPage 分支已移除（六步质检流程整删）。
+       故这里直接是 v-else —— 承接上方的 loading/error 判定，进主界面。
+       （原来是 v-else-if="bootstrap.onboarding?.completed === false"，删掉后
+         必须确认 v-if / v-else-if / v-else 链仍然连续，否则整块不渲染。） -->
   <div v-else :class="['app-shell', 'integrated-shell', appThemeClass, `font-${savedAppPreferences.font_size || 'medium'}`, `active-view-${activeView}`, `display-mode-${displayMode}`, { 'agent-workspace-shell': isAgentWorkspace, 'left-sidebar-hidden': !leftSidebarVisible, 'right-sidebar-hidden': !rightSidebarVisible, 'reduce-motion': savedAppPreferences.light_animations === false, 'focus-mode': savedAppPreferences.focus_mode }]">
     <UpdateNotice @open="openSettingsSection('general')" />
     <span v-for="direction in ['top', 'right', 'bottom', 'left', 'top-left', 'top-right', 'bottom-right', 'bottom-left']" :key="direction" :class="['window-resize-handle', direction]" aria-hidden="true" @pointerdown="resizeDesktopWindow(direction, $event)"></span>

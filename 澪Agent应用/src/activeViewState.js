@@ -1,5 +1,5 @@
 const VALID_VIEW_IDS = new Set([
-  'onboarding',
+  // DSH 专用化：'onboarding' 已移除（首次进入不再有六步质检流程）
   'home',
   'chat',
   'diaries',

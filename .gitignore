@@ -155,3 +155,6 @@ _dist-cleanup-safety-*/
 
 # --- 本机 agent 工作目录（宿主自建，不入库） ---
 .workbuddy-ai/
+
+# 重启脚本轮转出来的上一份后端日志（backend_out.log.prev / backend_err.log.prev）
+*.log.prev

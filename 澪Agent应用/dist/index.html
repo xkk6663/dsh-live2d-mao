@@ -11,9 +11,9 @@
     <!-- ================================================================
          本文件是 dist/index.html 的【模板】，由 scripts/compose-dist.mjs 渲染。
          三个 {{...}} 占位符由 compose-dist 从 dist-build/index.html 里取真实 hash 文件名填入：
-           index-CaMCoE3e.js   vite 产出的入口 bundle（assets/index-<hash>.js）
-           createLucideIcon-BjGR7VpU.js vite 产出的 modulepreload（assets/createLucideIcon-<hash>.js）
-           index-okP7jLeo.css     vite 产出的样式表（assets/index-<hash>.css）
+           index-DXHDsGOF.js   vite 产出的入口 bundle（assets/index-<hash>.js）
+           createLucideIcon-BPfB7xKW.js vite 产出的 modulepreload（assets/createLucideIcon-<hash>.js）
+           index-C6UEaEBZ.css     vite 产出的样式表（assets/index-<hash>.css）
          其余 14 个手写注入 <script> 标签与 ?v= 版本参数【原样保留，勿让 vite 覆盖】。
          改了手写注入层文件 → 手动升它自己的 ?v=。
          ================================================================ -->
@@ -29,9 +29,9 @@
     <script src="./core-inject/settings-clean-inject.js?v=20261013f"></script>
     <!-- 宿主注入：重建设置页（接管「设置」导航项，内嵌自有设置面板：资料/桌宠/语音/观察/提示词/小智/泡泡） -->
     <script src="./core-inject/settings-panel-inject.js?v=20261015a2"></script>
-    <script type="module" crossorigin src="./assets/index-CaMCoE3e.js?v=20261016-m0"></script>
-    <link rel="modulepreload" crossorigin href="./assets/createLucideIcon-BjGR7VpU.js">
-    <link rel="stylesheet" crossorigin href="./assets/index-okP7jLeo.css?v=20261015-petfix1">
+    <script type="module" crossorigin src="./assets/index-DXHDsGOF.js?v=20261016-m0"></script>
+    <link rel="modulepreload" crossorigin href="./assets/createLucideIcon-BPfB7xKW.js">
+    <link rel="stylesheet" crossorigin href="./assets/index-C6UEaEBZ.css?v=20261015-petfix1">
     <!-- 小智插件：图片提问（原版私人空间对话页注入 📷 上传按钮 + 粘贴图片，小智官方云视觉） -->
     <script defer src="./plugins/xiaozhi/chat-inject.js?v=20261016-imgbtn-right"></script>
     <!-- 小智插件：MCP 工具集中管理（左侧导航「小智工具」页） -->

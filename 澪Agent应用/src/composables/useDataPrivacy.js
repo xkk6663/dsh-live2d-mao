@@ -3,40 +3,17 @@
  * Dependencies are accessors so async callbacks see the latest state.
  */
 import { cleanupAutomaticBackups } from '../services/dataPrivacyApi.js'
-import { completeOnboarding as completeOnboardingRequest } from '../services/onboardingApi.js'
+// DSH 专用化：onboardingApi 已移除（首次进入不再走六步质检流程）
 import { createCompleteBackup } from '../services/dataPrivacyApi.js'
 import { deleteCompleteBackup } from '../services/dataPrivacyApi.js'
 import { importCompleteBackup } from '../services/dataPrivacyApi.js'
 import { loadDataPrivacy } from '../services/dataPrivacyApi.js'
-import { loadOnboardingEnvironment } from '../services/onboardingApi.js'
 import { restoreCompleteBackup } from '../services/dataPrivacyApi.js'
 import { setPrivacyPaused } from '../services/dataPrivacyApi.js'
 
 export function useDataPrivacy(deps) {
-  async function completeOnboarding(payload) {
-    deps.onboardingBusy.value = true
-    deps.onboardingError.value = ''
-    try {
-      await completeOnboardingRequest(payload)
-      window.location.reload()
-    } catch (error) {
-      deps.onboardingError.value = error.message
-    } finally {
-      deps.onboardingBusy.value = false
-    }
-  }
-  async function refreshOnboardingEnvironment() {
-    deps.onboardingEnvironmentBusy.value = true
-    deps.onboardingError.value = ''
-    try {
-      deps.onboardingEnvironment.value = await loadOnboardingEnvironment()
-    } catch (error) {
-      deps.onboardingEnvironment.value = null
-      deps.onboardingError.value = error.message
-    } finally {
-      deps.onboardingEnvironmentBusy.value = false
-    }
-  }
+  // DSH 专用化：completeOnboarding / refreshOnboardingEnvironment 已随
+  // 六步质检流程一并移除（后端 /api/onboarding/* 也已删）。
   async function refreshDataPrivacy({ quiet = false } = {}) {
     if (!quiet) deps.dataPrivacyLoading.value = true
     try {
@@ -154,5 +131,5 @@ export function useDataPrivacy(deps) {
       deps.dataPrivacyBusy.value = ''
     }
   }
-  return { completeOnboarding, refreshOnboardingEnvironment, refreshDataPrivacy, createDataBackup, importDataBackup, restoreDataBackup, deleteDataBackup, cleanupDataBackups, togglePrivacyPause }
+  return { refreshDataPrivacy, createDataBackup, importDataBackup, restoreDataBackup, deleteDataBackup, cleanupDataBackups, togglePrivacyPause }
 }
