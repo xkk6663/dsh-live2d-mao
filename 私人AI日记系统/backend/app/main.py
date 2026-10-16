@@ -22,8 +22,7 @@ from .screen import screen_observation_service
 from .kernel import agent_bus_service, agent_task_service
 from .agents.dsh import dsh_adapter
 from .agents.dsh import routes as dsh_plugin_routes
-from .agents.octop import octop_adapter
-from .agents.xiaozhi import routes as xiaozhi
+# DSH 专用化：octop / xiaozhi 插件已整体移除（本仓只保留 DSH 加强插件）
 from . import model_runtime
 from .runtime_identity import runtime_identity
 from .config import settings
@@ -58,7 +57,7 @@ BACKGROUND_TASK_FACTORIES = {
     "pet_event_task": pet_event_service.event_loop,
     "agent_bus_task": agent_bus_service.heartbeat_loop,
     "dsh_adapter_task": dsh_adapter.dsh_adapter_loop,
-    "octop_adapter_task": octop_adapter.octop_adapter_loop,
+    # DSH 专用化：octop_adapter_task 已移除（Octop 插件整体阉割）
 }
 
 
@@ -124,11 +123,7 @@ async def app_lifespan(app: FastAPI):
     agent_task_service.recover_interrupted()
     await creation_service.resume_active_jobs()
     await _start_background_tasks(app)
-    # 后台预合成小智触发语 TTS（edge-tts），首次发图/观察触发零合成延迟；失败静默
-    try:
-        asyncio.create_task(xiaozhi.prewarm_tts_cache(), name="tts-prewarm")
-    except Exception:  # noqa: BLE001
-        logger.exception("启动 TTS 预合成任务失败")
+    # DSH 专用化：小智 TTS 预合成任务已移除（xiaozhi 插件整体阉割，符合裁决 D1）
     maintenance_lock = asyncio.Lock()
 
     async def enter_maintenance(reason: str) -> dict[str, object]:
@@ -252,7 +247,7 @@ def create_app() -> FastAPI:
     app.include_router(settings_routes.router)
     app.include_router(stats.router)
     app.include_router(weekly.router)
-    app.include_router(xiaozhi.router)
+    # DSH 专用化：xiaozhi.router 已移除（小智插件整体阉割）
     # 插件包自带的 HTTP 面（装配职责留在 kernel/main，插件自己不抢装配权）。
     # 每个插件包对外只暴露自己的前缀，互不 import。
     app.include_router(dsh_plugin_routes.router)
