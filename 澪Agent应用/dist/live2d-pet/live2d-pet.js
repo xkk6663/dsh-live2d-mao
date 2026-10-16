@@ -235,6 +235,10 @@
   const contextMenu = document.getElementById('context-menu')
   const activityIndicator = document.getElementById('activity-indicator')
   const speechBubbleButton = contextMenu.querySelector('[data-action="speech-bubble"]')
+  // 流式气泡与横条各自独立的菜单项（用户裁决：任何气泡文本与流式气泡**独立管理**，
+  // 两个不同按钮各自显示/隐藏，互不牵连）。
+  const streamBubbleButton = contextMenu.querySelector('[data-action="stream-bubble"]')
+  const stripButton = contextMenu.querySelector('[data-action="strip"]')
   const speechLanguageButton = contextMenu.querySelector('[data-action="screenshot-ask"]')
   const agentBadgeButton = contextMenu.querySelector('[data-action="agent-badge"]')
   const speechBubble = document.getElementById('speech-bubble')
@@ -2556,6 +2560,17 @@
         ? '显示说话气泡'
         : '隐藏说话气泡'
     }
+    // 流式气泡：独立开关 live2d_stream_text_enabled（**不再**受说话气泡总开关单独决定）
+    if (streamBubbleButton) {
+      streamBubbleButton.textContent = settings.live2d_stream_text_enabled === false
+        ? '显示流式气泡'
+        : '隐藏流式气泡'
+    }
+    // 横条：独立开关（主体 localStorage 的 dismissed 与 settings 的 enabled 共同决定）
+    if (stripButton) {
+      const stripOn = !(window.__mioPetStrip && window.__mioPetStrip.isDismissed())
+      stripButton.textContent = stripOn ? '隐藏横条' : '显示横条'
+    }
     if (speechLanguageButton) {
       speechLanguageButton.textContent = '截图提问'
     }
@@ -2733,7 +2748,11 @@
 
   function applyAgentStream(payload) {
     if (!payload) return
-    if (settings.live2d_speech_bubble_enabled === false) return
+    // ★ 流式气泡与"说话气泡"是**两条独立管理**的通路（用户裁决）：
+    //   说话气泡总开关（live2d_speech_bubble_enabled）不再挡流式，
+    //   流式只认它自己的开关（live2d_stream_text_enabled）。
+    //   这是 DSH 插件线专门化：DSH 的正文流走流式，插件喊话走说话气泡，
+    //   两者由不同的菜单按钮独立显示/隐藏，互不牵连。
     if (settings.live2d_stream_text_enabled === false) return
     const texts = Array.isArray(payload.texts) ? payload.texts.map((t) => String(t == null ? '' : t)) : []
     const finalText = String(payload.final_text || '')
@@ -2790,8 +2809,9 @@
     let shown = ''
     const step = () => {
       if (!streamState || streamState.responseId !== responseId) return
-      if (settings.live2d_speech_bubble_enabled === false || settings.live2d_stream_text_enabled === false) {
-        // 用户在播放途中关掉开关：立即收尾，不留半截文本挂在屏上
+      // 只看流式自己的开关：说话气泡总开关不再影响流式（两条通路独立管理）。
+      if (settings.live2d_stream_text_enabled === false) {
+        // 用户在播放途中关掉流式开关：立即收尾，不留半截文本挂在屏上
         cancelAgentStream()
         hideSpeechBubble()
         return
@@ -2805,6 +2825,14 @@
         // 第 i 块之后等 steps[i-1]（dt 描述的是"块间间隔"）
         streamState.timer = window.setTimeout(step, steps[streamState.index - 1])
       } else {
+        // ★ 最后一块贴完：把"下一步定时器"清成 null 再收尾。
+        //   原来这里不清，`streamState.timer` 会永远留着一个**已失效的定时器 id**
+        //   （truthy），于是流走完后内部状态自相矛盾：既"有 timer"又"有 hold"。
+        //   这会让任何"是否仍在播"的判断都不可靠（本仓库 E2E 的偶发失败正是
+        //   基于这个歧义状态做的推断）。清掉后语义明确：
+        //     index <  texts.length  ⇒ timer 有值（正在播）
+        //     index === texts.length ⇒ timer 为 null、holdTimer 有值（播完停留中）
+        streamState.timer = null
         finishAgentStream(responseId, finalText, shown)
       }
     }
@@ -3241,6 +3269,41 @@
       updateContextMenuLabels()
       if (enabled && voiceLifecycleActive) showSpeechBubble(activeSpeechText)
       else if (!enabled) hideSpeechBubble()
+    }
+    // ★ 流式气泡独立开关：只影响"逐 token 流式"这条通路，不碰说话气泡，
+    //   也不碰横条（三者各自独立管理 —— 用户裁决）。
+    if (action === 'stream-bubble') {
+      const enabled = settings.live2d_stream_text_enabled === false
+      try { await persistCompanionSetting('live2d_stream_text_enabled', enabled) } catch (_) {}
+      updateContextMenuLabels()
+      // 关掉时：若正在播流，立即收尾（不留半截文本）
+      if (!enabled) {
+        cancelAgentStream()
+        // 仅当当前气泡属于流式（responseId 为 agent-stream:*）时才清，避免误伤说话气泡
+        if (String(speechBubbleResponseId || '').indexOf('agent-stream:') === 0) hideSpeechBubble()
+      }
+    }
+    // ★ 横条独立开关：与两种气泡都无关。
+    //   横条的"关闭态"持久在主体（localStorage），这里做"显示/隐藏"的双向切换。
+    if (action === 'strip') {
+      const api = window.__mioPetStrip
+      if (api) {
+        if (api.isDismissed()) {
+          // 已关闭 → 重开：清掉持久记忆，并立即展示一次让用户看到效果
+          if (typeof api.resetDismissed === 'function') api.resetDismissed()
+          api.show('横条已开启', { durationMs: 2000 })
+        } else {
+          // 开启中 → 关闭：写"已拒绝"持久态（与点 ✕ 同一语义）
+          if (typeof api.markDismissed === 'function') api.markDismissed()
+          else if (typeof api.resetDismissed === 'function') {
+            // 兼容：主体未暴露 markDismissed 时，退化为"隐藏 + 记为已关闭"
+            api.hide()
+          }
+        }
+        // 同步到服务端，让设置页与其它窗口看到一致状态（键与泡泡皮肤同族）
+        try { await persistCompanionSetting('live2d_strip_enabled', !api.isDismissed()) } catch (_) {}
+      }
+      updateContextMenuLabels()
     }
     if (action === 'agent-badge') {
       // 显示/隐藏 Agent 状态徽标（localStorage 持久化；切换时立即生效）
@@ -3794,13 +3857,18 @@
     })
 
     // ✕：用户关闭 → 记住"已拒绝"（跨会话），并立刻隐藏
+    /** ✕ 与右键菜单"隐藏横条"共用的关闭语义（只此一处，避免两条路不一致）。 */
+    function dismiss() {
+      dismissed = true
+      writeBool(KEY_DISMISSED, true)
+      doHide()
+    }
+
     safe(() => {
       if (!closeBtn) return
       closeBtn.addEventListener('click', (ev) => {
         ev.stopPropagation()
-        dismissed = true
-        writeBool(KEY_DISMISSED, true)
-        doHide()
+        dismiss()
       })
     })
 
@@ -3852,6 +3920,11 @@
           writeBool(KEY_DISMISSED, false)
         })
       },
+      // 非契约内的主体内部接口：供右键菜单"隐藏横条"用。
+      // 复用 dismiss()（与点 ✕ 同一处实现），保证菜单与 ✕ 语义**完全一致**。
+      markDismissed() {
+        safe(dismiss)
+      },
     }
   })()
 
@@ -3863,3 +3936,5 @@
     setInteractive(true)
   })
 })()
+
+
