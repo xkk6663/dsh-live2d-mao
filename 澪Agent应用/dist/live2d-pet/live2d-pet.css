@@ -691,3 +691,130 @@ body,
   object-fit: contain;
   border-radius: 6px;
 }
+
+/* ==========================================================================
+   7.6 横条（DSH 流式提示专用窗位）—— 可拖动 + ✕ 可关
+   ==========================================================================
+   定位：核心 UI 的**第二个窗位**，与 #speech-bubble 平级。
+   用途：DSH 下发的流式 token/提示走这里，说话内容走气泡 —— 两者互斥，不再打架。
+
+   为什么单独做一条而不是复用泡泡：
+   泡泡跟"谁在说话"（插件身份色）走、位置锚在角色头侧；横条是**常驻式状态条**，
+   需要自己可拖动、可关闭、可换主题，语义不同，混用会让两边都别扭。
+
+   主题：与泡泡皮肤同一套 id（default/mono/navy/peach/matcha/note/terminal/comic），
+   类名用 .pet-strip.strip-style-<id>，调色板变量与 .speech-bubble 保持同名
+   （--bubble-bg/--bubble-border/--bubble-ink/--bubble-shadow），这样皮肤定义可平移复用。
+   ========================================================================== */
+.pet-strip {
+  --bubble-bg: rgb(255 255 255 / 94%);
+  --bubble-border: rgb(105 132 140 / 26%);
+  --bubble-ink: #2d4148;
+  --bubble-shadow: 0 8px 24px rgb(24 43 50 / 16%);
+  position: absolute;
+  z-index: 13;
+  top: 8px;
+  left: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: max-content;
+  max-width: min(320px, calc(100vw - 24px));
+  padding: 6px 8px 6px 12px;
+  color: var(--bubble-ink);
+  background: var(--bubble-bg);
+  border: 1px solid var(--bubble-border);
+  border-radius: 999px;
+  box-shadow: var(--bubble-shadow);
+  font-size: 12px;
+  line-height: 1.45;
+  /* 横条要能拖、要能点 ✕ ⇒ 必须可命中（与气泡的 pointer-events:none 相反）。
+     但桌宠整体是穿透的，故只在横条自身打开命中，不影响其它区域穿透。 */
+  pointer-events: auto;
+  cursor: grab;
+  user-select: none;
+}
+
+.pet-strip[hidden] {
+  display: none;
+}
+
+.pet-strip.dragging {
+  cursor: grabbing;
+}
+
+.pet-strip #pet-strip-text {
+  display: block;
+  max-width: 260px;
+  max-height: 3.2em;
+  overflow-x: hidden;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.pet-strip-close {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  color: inherit;
+  font-size: 14px;
+  line-height: 16px;
+  text-align: center;
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  opacity: 0.6;
+  cursor: pointer;
+}
+
+.pet-strip-close:hover {
+  opacity: 1;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+}
+
+/* ---- 横条皮肤（与泡泡 8 款同 id；只覆盖调色板变量，框/圆角/投影复用）---- */
+.pet-strip.strip-style-mono {
+  --bubble-bg: rgb(36 48 54 / 96%);
+  --bubble-border: rgb(120 150 160 / 35%);
+  --bubble-ink: #e8f0f2;
+}
+
+.pet-strip.strip-style-navy {
+  --bubble-bg: color-mix(in srgb, #4f6bed 10%, rgb(255 255 255 / 97%));
+  --bubble-border: color-mix(in srgb, #4f6bed 52%, transparent);
+  --bubble-ink: color-mix(in srgb, #4f6bed 60%, #17202b);
+  --bubble-shadow: 0 8px 24px rgb(31 42 96 / 20%), 0 0 0 2px rgb(79 107 237 / 12%);
+}
+
+.pet-strip.strip-style-peach {
+  --bubble-bg: color-mix(in srgb, #f7b8c4 22%, rgb(255 255 255 / 96%));
+  --bubble-border: color-mix(in srgb, #e8618c 42%, transparent);
+  --bubble-ink: color-mix(in srgb, #a13a56 78%, #2d4148);
+}
+
+.pet-strip.strip-style-matcha {
+  --bubble-bg: color-mix(in srgb, #9db87a 18%, rgb(255 255 255 / 97%));
+  --bubble-border: color-mix(in srgb, #5f7a44 45%, transparent);
+  --bubble-ink: #33452a;
+}
+
+.pet-strip.strip-style-note {
+  --bubble-bg: #ffe27a;
+  --bubble-border: color-mix(in srgb, #c9a83c 55%, transparent);
+  --bubble-ink: #4d3f14;
+  --bubble-shadow: 0 6px 18px rgb(120 96 20 / 22%);
+}
+
+.pet-strip.strip-style-terminal {
+  --bubble-bg: #17301f;
+  --bubble-border: rgb(94 196 128 / 45%);
+  --bubble-ink: #7ee2a0;
+  --bubble-shadow: 0 8px 24px rgb(10 30 18 / 40%);
+}
+
+.pet-strip.strip-style-comic {
+  --bubble-border: #1d1d1f;
+  --bubble-shadow: 3px 3px 0 #1d1d1f;
+}

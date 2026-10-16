@@ -73,6 +73,28 @@ const INIT_SCRIPT = () => {
 /** 渲染端静态资源根（供直连磁盘用）。 */
 const RENDERER_DIR = path.join(__dirname, '..', 'dist')
 
+/**
+ * 页面初始化时会 `GET /api/companion/status` 并把返回的 `pet.settings` 灌进本地 settings。
+ * **必须把它固定住**，否则这个 E2E 的结果取决于"用户当前的真机开关状态"：
+ *
+ * 真踩过的坑（2026-10-16）：本机 `live2d_speech_bubble_enabled` 恰好是 `false`（用户自己关的），
+ * 而 `applySettings` / `applyAgentStream` 都以它为总闸门 —— 于是 [1][2][5] 全失败，
+ * 看起来像"流式气泡被 5s 轮询打掉"的产品缺陷，实际是**测试耦合了真机状态**。
+ * 更糟的是它不可复现：手动 PATCH 打开后跑到一半又被别的用例翻回去。
+ *
+ * 这里注入一份**确定的**设置快照（总开关开、流式开），让断言只反映渲染端逻辑本身。
+ * 与下方 [7] 用例注释里"避免把测试造假的载荷当成产品缺陷"是同一条纪律的延伸：
+ * 反过来，**也不要让真机状态把测试结果变成随机数**。
+ */
+const STUB_SETTINGS = {
+  live2d_speech_bubble_enabled: true,
+  live2d_stream_text_enabled: true,
+  live2d_bubble_style: 'default',
+  live2d_click_through_locked: false,
+  live2d_always_on_top: true,
+  bubble_seconds: 6,
+}
+
 async function openReady(browser) {
   const page = await browser.newPage()
   const errors = []
@@ -87,6 +109,22 @@ async function openReady(browser) {
       await route.fulfill({ path: file, contentType: 'application/javascript' })
     } else {
       await route.continue()
+    }
+  })
+  // 状态快照桩：只覆盖 settings，其余字段透传真实后端（pet/agents 等与流式断言无关）
+  await page.route('**/api/companion/status*', async (route) => {
+    try {
+      const res = await route.fetch()
+      const json = await res.json()
+      json.pet = { ...(json.pet || {}), settings: { ...STUB_SETTINGS } }
+      await route.fulfill({ response: res, json })
+    } catch (err) {
+      // 后端没起时也要能给出确定快照，保证失败原因是"流式逻辑"而不是"环境抖动"
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ pet: { settings: { ...STUB_SETTINGS } } }),
+      })
     }
   })
   await page.addInitScript(INIT_SCRIPT)
@@ -188,7 +226,8 @@ async function withPage(browser, title, fn) {
       payload: { ...BASE_STREAM, turn: 2, texts: ['第', '二', '条'], dt: [80, 80], final_text: '第二条' },
     })
     await sleep(500)
-    check('气泡内容被新流替换', (await api.text()) === '第二条', JSON.stringify(await api.text()))
+    const got = await api.text()
+    check('气泡内容被新流替换', got === '第二条', JSON.stringify(got))
   })
 
   // ---- 3. B4 降级：只有权威全文 ----

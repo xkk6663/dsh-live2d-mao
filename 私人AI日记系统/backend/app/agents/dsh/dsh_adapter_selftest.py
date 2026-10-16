@@ -1017,15 +1017,57 @@ def test_plugin_api() -> None:
     paths = sorted({r.path for r in plugin_routes.router.routes})
     # 端点清单是**故意断言**的：新增端点必须同时更新这里，
     # 以免有人顺手加了个写接口却没人注意到"本插件只读"这条约束。
-    check_eq("暴露 5 个只读端点", paths, [
+    #
+    # 2026-10-16（M6 6.5）**受控放宽**：新增 `POST /ingest` —— 插件形态
+    # （packages/mao-pet）跑在 DSH 宿主进程内，必须有一个**写入口**把 phase 推进总线；
+    # 而日志边车链路是单向只读的，无法承担这个职责。
+    # 这条约束没有被放弃，而是**改成"读接口只读 + 唯一写接口有明确安全依据"**：
+    #   - 写端点只有一个，职责在 routes.plugin_ingest 的 docstring 里写明；
+    #   - 其安全由后端全站中间件 `LocalControlMiddleware` 兜底
+    #     （app/local_security.py：回环 + 同源 + 拒 cross-site），
+    #     故下面新增了一条"中间件确实已挂载且真的会拒绝"的断言来守住这条依据。
+    check_eq("暴露 6 个只读端点 + 1 个受控写端点", paths, [
         "/api/plugin/dsh/about",
+        "/api/plugin/dsh/agent",
         "/api/plugin/dsh/diagnostics",
+        "/api/plugin/dsh/ingest",
         "/api/plugin/dsh/phases",
         "/api/plugin/dsh/status",
         "/api/plugin/dsh/update-check",
     ])
     methods = sorted({m for r in plugin_routes.router.routes for m in (r.methods or set())})
-    check_eq("端点全部只读（GET）", methods, ["GET"])
+    # 比笼统的"全部只读"更守住意图：**写方法只允许 POST，且只允许一个端点**。
+    # 将来有人加 DELETE/PUT 之类的写操作会被下面两条挡下。
+    check_eq("只读端点均为 GET + 存在 POST 写端点", methods, ["GET", "POST"])
+    _write_routes = sorted({
+        r.path for r in plugin_routes.router.routes
+        if {"POST", "PUT", "PATCH", "DELETE"} & set(r.methods or set())
+    })
+    check_eq("写端点只有 ingest 一个（新增写操作必须显式改这条）",
+             _write_routes, ["/api/plugin/dsh/ingest"])
+
+    # ★ 写端点的安全**不靠插件自己**，而靠后端全站中间件。
+    #   所以必须断言"那条中间件真的在、且真的会拒"，否则上面那条放宽就成了空头支票。
+    #   这里直接打真实 app（TestClient），验证三类来源：本机放行、跨站拒绝、非回环拒绝。
+    try:
+        from fastapi.testclient import TestClient
+        from ...main import app as _app
+        with TestClient(_app, base_url="http://127.0.0.1:8000") as _client:
+            _r_ok = _client.post("/api/plugin/dsh/ingest", json={"phase": "idle", "force": True})
+            check_eq("ingest：本机来源可写", _r_ok.status_code, 200)
+            _r_xs = _client.post("/api/plugin/dsh/ingest", json={"phase": "idle"},
+                                 headers={"sec-fetch-site": "cross-site"})
+            check_eq("ingest：跨站来源被拒（403）", _r_xs.status_code, 403)
+            _r_host = _client.post("/api/plugin/dsh/ingest", json={"phase": "idle"},
+                                   headers={"host": "evil.example.com"})
+            check_eq("ingest：非回环 Host 被拒（403）", _r_host.status_code, 403)
+            _r_bad = _client.post("/api/plugin/dsh/ingest", json={"phase": "not-a-phase"})
+            check_eq("ingest：非法 phase 返回 400", _r_bad.status_code, 400)
+            # 清掉本次自检在总线上留下的痕迹，避免污染后续断言/快照
+            from ...kernel import agent_bus_service as _bus
+            _bus.unregister("mao-pet")
+    except Exception as exc:  # noqa: BLE001
+        check("ingest 安全栅栏端到端（中间件兜底）", False, f"{type(exc).__name__}: {exc}")
 
     # A5：关于面板必须脱敏（绝不回传真实用户名）
     try:

@@ -52,6 +52,8 @@
   var pollTimer = null
   var clickTalk = true
   var styleId = 'default'
+  // 7.6 横条皮肤（与 styleId 同族，独立存储）
+  var stripStyleId = 'default'
   var streamText = true
   var images = []
   var imageWeights = {}
@@ -117,6 +119,31 @@
     return card('气泡皮肤',
       '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;">' + items + '</div>' +
       '<div style="margin-top:9px;font-size:10px;color:var(--muted,#687984);">插件身份色（如 DSH 蓝）优先于皮肤——气泡颜色跟"谁在说话"走。</div>')
+  }
+
+  // ---------- 横条皮肤（7.6：DSH 流式提示专用窗位）----------
+
+  // 横条与气泡**共用同一套皮肤 id**（default/mono/navy/…），只是作用元素不同。
+  // 所以这里复用 STYLE_DEFS 渲染，避免两处各自维护一份皮肤清单导致漂移。
+  function renderStripStyles() {
+    var items = STYLE_DEFS.map(function (s) {
+      var cur = s.id === stripStyleId
+      return '<button type="button" data-strip-style="' + s.id + '" style="display:flex;flex-direction:column;align-items:center;gap:5px;padding:9px 4px;border:1px solid ' +
+        (cur ? ACCENT : 'var(--line,#d9e2e6)') + ';border-radius:10px;background:' + (cur ? ACCENT + '10' : 'var(--surface,#fff)') +
+        ';cursor:pointer;box-shadow:' + (cur ? '0 0 0 2px ' + ACCENT + '2e' : 'none') + ';">' +
+        '<span style="width:26px;height:26px;border-radius:7px;background:' + s.swatch + ';border:1px solid #94a7ad;"></span>' +
+        '<span style="font-size:11px;color:var(--ink,#20303a);">' + s.name + '</span></button>'
+    }).join('')
+    return card('横条皮肤（DSH 流式提示）',
+      '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;">' + items + '</div>' +
+      '<div style="margin-top:9px;font-size:10px;line-height:1.8;color:var(--muted,#687984);">' +
+        '• 横条是 DSH 下发**流式提示**的专用窗位（可拖动、✕ 可关），与说话气泡**互斥**使用，不再打架。<br />' +
+        '• 形状是胶囊条，所以这里用圆角色块示意；皮肤与气泡共用同一套配色。<br />' +
+        '• 用户按 ✕ 关闭后，横条在本机**不会自动再弹**；重新想用请点下面这个按钮。' +
+      '</div>' +
+      '<div style="margin-top:9px;display:flex;gap:8px;">' +
+        '<button type="button" data-strip-reset="1" style="' + btnStyle() + '">重新启用横条</button>' +
+      '</div>')
   }
 
   // ---------- 逐 token 流式（M1） ----------
@@ -272,7 +299,7 @@
   function renderAll() {
     var body = $q('#bpBody', container)
     if (!body) return
-    body.innerHTML = renderStyles() + renderStreamText() + renderClickTalk() + renderImages() + renderSoundEvents() + renderSoundClips()
+    body.innerHTML = renderStyles() + renderStripStyles() + renderStreamText() + renderClickTalk() + renderImages() + renderSoundEvents() + renderSoundClips()
     bindAll()
     if (trim) drawTrim()
   }
@@ -457,6 +484,27 @@
         saveSettings({ live2d_bubble_style: styleId }, '皮肤已切换').then(function () { refresh() })
       })
     })
+
+    // 7.6 横条皮肤：写 live2d_strip_style（与气泡皮肤同族）。
+    // 桌宠渲染端认这个键并热应用（applySettings → __mioPetStrip.applyStyle）。
+    body.querySelectorAll('[data-strip-style]').forEach(function (btn) {
+      btn.addEventListener('click', function (e) {
+        e.stopPropagation()
+        stripStyleId = btn.getAttribute('data-strip-style')
+        saveSettings({ live2d_strip_style: stripStyleId }, '横条皮肤已切换').then(function () { refresh() })
+      })
+    })
+
+    // 「重新启用横条」：清掉用户按 ✕ 留下的"已拒绝"长期记忆。
+    // 该状态存在桌宠窗口的 localStorage（主体拥有），设置页读不到，
+    // 故经服务端 settings 下发一个一次性信号，由渲染端执行 resetDismissed()。
+    var stripResetBtn = $q('[data-strip-reset]', body)
+    if (stripResetBtn) {
+      stripResetBtn.addEventListener('click', function (e) {
+        e.stopPropagation()
+        saveSettings({ pet_strip_reset_token: Date.now() }, '横条已重新启用（桌宠下次刷新即生效）')
+      })
+    }
 
     var streamCb = $q('#bpStreamText', body)
     if (streamCb) {
@@ -809,6 +857,7 @@
       if (!container || container.isConnected !== undefined && !container.isConnected) { stopPoll(); return }
       var st = (res[0] && res[0].pet && res[0].pet.settings) || {}
       styleId = String(st.live2d_bubble_style || 'default')
+      stripStyleId = String(st.live2d_strip_style || 'default')
       clickTalk = st.pet_click_talk_enabled !== false
       streamText = st.live2d_stream_text_enabled !== false
       soundEvents = (st.pet_sound_events && typeof st.pet_sound_events === 'object') ? JSON.parse(JSON.stringify(st.pet_sound_events)) : {}

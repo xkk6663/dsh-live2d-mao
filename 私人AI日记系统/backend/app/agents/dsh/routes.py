@@ -20,12 +20,28 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
 
 from ...companion import about_service
-from . import dsh_adapter
+from . import dsh_adapter, ingest
 
 router = APIRouter(prefix="/api/plugin/dsh", tags=["plugin:dsh"])
+
+
+class IngestPayload(BaseModel):
+    """插件推送的 phase 事件（``packages/mao-pet`` → 桌宠总线）。
+
+    字段全部可选（除 ``phase``），缺省走 ``ingest`` 里的默认身份，
+    这样插件可以只发 `{"phase":"thinking"}` 这种最小体。
+    """
+
+    phase: str = Field(..., description="总线 12 态词汇之一")
+    agent_id: str = Field("", description="缺省 mao-pet")
+    name: str = Field("", description="缺省 Mao-pet")
+    accent: str = Field("", description="身份色，缺省 #4F6BED")
+    state: dict[str, Any] = Field(default_factory=dict, description="短字段上下文")
+    force: bool = Field(False, description="绕过 300ms 同 phase 节流（phase 变化时建议 true）")
 
 # 本插件对外声明的能力与状态语义（前端面板据此渲染，无需硬编码）
 PHASE_META: dict[str, dict[str, str]] = {
@@ -170,6 +186,9 @@ async def plugin_about() -> dict[str, Any]:
             "/api/plugin/dsh/diagnostics",
             "/api/plugin/dsh/about",
             "/api/plugin/dsh/update-check",
+            # M6 6.5：插件形态的写入口（回环受限）+ 联调只读快照
+            "POST /api/plugin/dsh/ingest",
+            "/api/plugin/dsh/agent",
         ],
     }
     return payload
@@ -180,6 +199,46 @@ async def plugin_update_check() -> dict[str, Any]:
     """更新检查。**只在用户点击时调用**（本端点不缓存、不轮询）。"""
     current = about_service.read_mio_version()
     return await asyncio.to_thread(about_service.check_update, current)
+
+
+@router.post("/ingest")
+async def plugin_ingest(payload: IngestPayload) -> dict[str, Any]:
+    """插件（``packages/mao-pet``）把 phase 推进桌宠总线——本插件包**唯一的写入口**。
+
+    链路::
+
+        DSH 宿主进程内的 mao-pet 插件
+          └─ POST /api/plugin/dsh/ingest        ← 本端点（回环受限，见下）
+                └─ ingest.ingest()              ← 身份注册 + state 白名单收敛
+                      └─ agent_bus_service.emit ← 节流/抢焦点/WS 广播都在这里
+                            └─ WS agent_phase → 桌宠切动画
+
+    **安全**：不在此处写栅栏——后端已装 ``LocalControlMiddleware``
+    （``app/local_security.py``，挂载于 ``main.py``），全站强制"回环 Host + 同源 Origin +
+    拒 ``Sec-Fetch-Site: cross-site``"，因此本写端点**自动**只接受本机来源。
+    重复实现会让两处口径漂移，故有意留空。
+
+    返回 400 表示 phase 不在总线词汇内（比让 ``emit`` 抛 ValueError 变成 500 更清楚）；
+    422 由 FastAPI 对缺 ``phase`` 的请求体自动给出。
+    """
+    try:
+        return await asyncio.to_thread(
+            ingest.ingest,
+            phase=payload.phase,
+            agent_id=payload.agent_id,
+            name=payload.name,
+            accent=payload.accent,
+            state=payload.state,
+            force=payload.force,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/agent")
+async def plugin_agent_snapshot(agent_id: str = "") -> dict[str, Any]:
+    """该 agent 在总线上的当前快照（插件侧联调/自检用，只读）。"""
+    return {"ok": True, "agent": ingest.snapshot_for(agent_id or ingest.DEFAULT_AGENT_ID)}
 
 
 def _bus_status(info: dict[str, Any]) -> str:

@@ -354,6 +354,15 @@
   let speechBubbleCharacterCount = 0
   let speechBubbleVisibleCount = 0
   let speechBubbleResponseId = ''
+  // 「说话气泡」总开关上一次**已生效**的值。用于识别"开着→关掉"的下降沿，
+  // 避免 pollStatus 重复推送同一个假值（快照缺键 / 开关关闭态）时反复误隐气泡。
+  // 初值用 null 表示「尚未建立基线」：首个快照只用来**记基线**，不算下降沿。
+  // （若初值给 true，则启动那一刻 start() 里那次 await pollStatus 带回来的首个假值
+  //   会被误判成"用户刚关掉开关"，正好落在流开始前后，把气泡提前打掉——实测复现。）
+  // 真机上用户主动关开关发生在基线建立之后，仍会被正确识别为下降沿并立即隐藏。
+  let speechBubbleEnabledApplied = null
+  // 7.6：上一次已处理的"重新启用横条"令牌（防止轮询重复复位用户的 ✕ 决定）
+  let stripResetTokenSeen = ''
   let streamFirstAudioTimer = null
   let lastMotionGroup = ''
   let lastMotionPlayedAt = 0
@@ -1646,6 +1655,26 @@
       if (bs && nextSettings && Object.prototype.hasOwnProperty.call(nextSettings, 'live2d_bubble_style')) {
         bs.setStyle(nextSettings.live2d_bubble_style, speechBubble)
       }
+      // 7.6 横条主题：与泡泡皮肤同一条热应用通路（settings 下发 → 立即套类）。
+      // 键名 `live2d_strip_style`；插件侧契约里的 `pet_strip_style` 是它的**别名**，
+      // 两个键都认，避免插件与设置页各叫一套（历史上有过键名漂移的事故）。
+      const stripApi = window.__mioPetStrip
+      if (stripApi && nextSettings) {
+        const key = Object.prototype.hasOwnProperty.call(nextSettings, 'live2d_strip_style')
+          ? 'live2d_strip_style'
+          : (Object.prototype.hasOwnProperty.call(nextSettings, 'pet_strip_style') ? 'pet_strip_style' : null)
+        if (key) stripApi.applyStyle(nextSettings[key])
+        // 「重新启用横条」：设置页下发一个一次性 token，渲染端据此清掉"用户已拒绝"的持久记忆。
+        // 用 token 变化（而不是布尔值）是为了让"再点一次"也能生效；同时记住已处理过的值，
+        // 避免轮询反复拿到同一个 token 时重复复位（那会让用户刚 ✕ 掉的横条又被翻回来）。
+        if (Object.prototype.hasOwnProperty.call(nextSettings, 'pet_strip_reset_token')) {
+          const token = String(nextSettings.pet_strip_reset_token || '')
+          if (token && token !== stripResetTokenSeen) {
+            stripResetTokenSeen = token
+            if (typeof stripApi.resetDismissed === 'function') stripApi.resetDismissed()
+          }
+        }
+      }
       // 音效事件配置（每事件开关/音量/自定义片段）
       const snd = window.__mioPetSound
       if (snd && nextSettings && Object.prototype.hasOwnProperty.call(nextSettings, 'pet_sound_events')) {
@@ -1663,7 +1692,26 @@
     }
     root.classList.toggle('click-through-locked', Boolean(settings.live2d_click_through_locked))
     updateContextMenuLabels()
-    if (!settings.live2d_speech_bubble_enabled) hideSpeechBubble()
+    // ★「关掉气泡就隐藏」只在**开关真的从开→关发生变化**、或**当前没有活跃流式会话**时才生效
+    //   （2026-10-16 修回归：流式气泡被轮询打掉）。
+    //   原写法 `if (!enabled) hideSpeechBubble()` 是无条件执行，而 applySettings 会被
+    //   pollStatus() 在 start() 里 await 一次、之后每 5s（非 Electron 1.8s）再调：
+    //       hideSpeechBubble ← applySettings ← pollStatus ← start
+    //   hideSpeechBubble 内部第一件事就是 cancelAgentStream()，于是正在播的流式气泡
+    //   被轮询直接清空+隐藏（实测：文本 635ms 播完后立刻被清，finishAgentStream 里
+    //   hold max(3500ms, 字数×60ms) 的 holdTimer 从未有机会生效）。
+    //   触发条件是快照里 `live2d_speech_bubble_enabled` 为假值——开关关闭态、或任一
+    //   快照缺该键（E2E 桩 getState() 返回 {settings:{}} 即此情形）都会命中，属真实回归。
+    //
+    //   判据用「下降沿」而不是单独看 streamState，因为 pollStatus 是**在途异步**的：
+    //   start() 里那次 await pollStatus 可能在流开始前就发出，回包落在流播放中途，
+    //   此时 streamState 可能恰好为 null（上一段流刚收尾），只看 streamState 会漏判。
+    //   记录上一次已生效的开关值 speechBubbleEnabledApplied，只有它从「非 false」变成
+    //   false 的那一次才 hide —— 用户主动关开关仍立即隐藏，轮询重复推送同一假值不再误伤。
+    const bubbleEnabledNow = settings.live2d_speech_bubble_enabled !== false
+    const bubbleJustDisabled = speechBubbleEnabledApplied !== null && speechBubbleEnabledApplied && !bubbleEnabledNow
+    speechBubbleEnabledApplied = bubbleEnabledNow
+    if (bubbleJustDisabled && streamState === null) hideSpeechBubble()
     const nextModel = selectedModelId()
     // currentModelId 只在加载**完成**后才赋值：大模型加载要数秒，若只看它，
     // 每次 5s 轮询都会误判"还没切过去"而重新加载一遍（形象不停重载）。
@@ -3591,6 +3639,221 @@
     isVisible: () => !speechBubble.hidden,
     setEnabled: (on) => { settings.live2d_speech_bubble_enabled = on !== false },
   }
+
+  // ---------------------------------------------------------------------------
+  // 7.6 横条（DSH 流式提示专用窗位）—— 主体侧实现
+  // ---------------------------------------------------------------------------
+  // 契约以 packages/mao-pet/lib/strip.js 头部 docstring 为准（**签名不得改**）。
+  //
+  // 为什么要这条通道：横条是**核心 UI 的第二个窗位**。按 §3.5 的教训，
+  // 插件只能经 `window.__mioPet*` 访问核心 UI，**不得直接改 DOM**——
+  // 否则"关掉某个插件横条就没了"会在任何一次插件重构后复发。
+  // 文档（项目接管执行方案 §18）也是这么预设的："横条组件若需主体暴露，
+  // 走 window.__mioPet* 通道，与 __mioPetBubble 同一模式。"
+  //
+  // 职责分界（与插件层刻意分工，别把状态放错边）：
+  //   - **主体**（这里）：横条 DOM、**拖动位置**、**关闭态**、主题类应用 → 跨会话持久；
+  //   - **插件**：何时推内容、何时抑制 → 会话内。插件热重载不该丢掉用户拖好的位置。
+  //
+  // 铁律：**任何方法都不得抛异常**（外部调用方是第三方插件，抛异常会把它们带崩）。
+  // 所有实现体一律内部 try/catch 并返回安全值。
+  window.__mioPetStrip = (function () {
+    const KEY_STYLE = 'live2d_strip_style'
+    const KEY_POS = 'mio-pet-strip-pos'
+    const KEY_DISMISSED = 'mio-pet-strip-dismissed'
+
+    const el = document.getElementById('pet-strip')
+    const textEl = document.getElementById('pet-strip-text')
+    const closeBtn = document.getElementById('pet-strip-close')
+
+    // 主题：与泡泡皮肤同一套 id（default/mono/navy/…），类名用 strip-style-*
+    let styleId = 'default'
+    let enabled = true
+    let visible = false
+    // 关闭态**跨会话持久**（localStorage）：用户 ✕ 掉之后不该下次启动又冒出来。
+    // 注意与插件侧的"本会话抑制"是两层：这里是"用户已拒绝这个窗位"的长期记忆。
+    let dismissed = false
+    let hideTimer = null
+    let buffer = ''
+
+    function safe(fn, fallback) {
+      try { return fn() } catch (_) { return fallback }
+    }
+
+    function readBool(key) {
+      return safe(() => window.localStorage.getItem(key) === '1', false)
+    }
+    function writeBool(key, value) {
+      safe(() => window.localStorage.setItem(key, value ? '1' : '0'))
+    }
+
+    dismissed = readBool(KEY_DISMISSED)
+    safe(() => {
+      const saved = window.localStorage.getItem(KEY_STYLE)
+      if (saved) styleId = saved
+    })
+    // 拖动位置持久（主体拥有位置状态，插件热重载不受影响）
+    safe(() => {
+      const raw = window.localStorage.getItem(KEY_POS)
+      if (!raw) return
+      const pos = JSON.parse(raw)
+      if (Number.isFinite(pos?.left) && Number.isFinite(pos?.top)) {
+        el.style.left = `${pos.left}px`
+        el.style.top = `${pos.top}px`
+        el.style.right = 'auto'
+        el.style.bottom = 'auto'
+      }
+    })
+
+    function applyStyle(id) {
+      const wanted = String(id || '').trim() || 'default'
+      // 清掉既有 strip 皮肤类再挂新的（与 pet-bubble-styles.js 的 apply 同机制）
+      Array.from(el.classList)
+        .filter((c) => c.indexOf('strip-style-') === 0)
+        .forEach((c) => el.classList.remove(c))
+      if (wanted !== 'default') el.classList.add(`strip-style-${wanted}`)
+      styleId = wanted
+      safe(() => window.localStorage.setItem(KEY_STYLE, wanted))
+      return styleId
+    }
+
+    function doHide() {
+      visible = false
+      el.hidden = true
+      window.clearTimeout(hideTimer)
+      hideTimer = null
+      buffer = ''
+      if (textEl) textEl.textContent = ''
+    }
+
+    function scheduleHide(durationMs) {
+      window.clearTimeout(hideTimer)
+      hideTimer = null
+      const ms = Number(durationMs) || 0
+      if (ms > 0) hideTimer = window.setTimeout(doHide, Math.max(600, ms))
+    }
+
+    function render() {
+      if (textEl) {
+        textEl.textContent = buffer
+        textEl.scrollTop = textEl.scrollHeight
+      }
+      el.hidden = false
+      visible = true
+    }
+
+    /** 统一的"能不能显示"判定：禁用 / 用户已关 / 气泡总开关关闭 时都拒绝。 */
+    function canShow() {
+      if (!enabled) return false
+      if (dismissed) return false
+      return true
+    }
+
+    // 拖动：pointer 事件（与桌宠窗口拖动同一套思路，但作用在横条自身）
+    safe(() => {
+      let dragging = false
+      let startX = 0
+      let startY = 0
+      let originLeft = 0
+      let originTop = 0
+
+      el.addEventListener('pointerdown', (ev) => {
+        if (ev.target === closeBtn) return
+        dragging = true
+        const rect = el.getBoundingClientRect()
+        originLeft = rect.left
+        originTop = rect.top
+        startX = ev.clientX
+        startY = ev.clientY
+        el.classList.add('dragging')
+        safe(() => el.setPointerCapture(ev.pointerId))
+      })
+
+      el.addEventListener('pointermove', (ev) => {
+        if (!dragging) return
+        const left = originLeft + (ev.clientX - startX)
+        const top = originTop + (ev.clientY - startY)
+        el.style.left = `${left}px`
+        el.style.top = `${top}px`
+        el.style.right = 'auto'
+        el.style.bottom = 'auto'
+      })
+
+      function endDrag(ev) {
+        if (!dragging) return
+        dragging = false
+        el.classList.remove('dragging')
+        safe(() => el.releasePointerCapture(ev.pointerId))
+        const rect = el.getBoundingClientRect()
+        safe(() => window.localStorage.setItem(
+          KEY_POS, JSON.stringify({ left: Math.round(rect.left), top: Math.round(rect.top) }),
+        ))
+      }
+      el.addEventListener('pointerup', endDrag)
+      el.addEventListener('pointercancel', endDrag)
+    })
+
+    // ✕：用户关闭 → 记住"已拒绝"（跨会话），并立刻隐藏
+    safe(() => {
+      if (!closeBtn) return
+      closeBtn.addEventListener('click', (ev) => {
+        ev.stopPropagation()
+        dismissed = true
+        writeBool(KEY_DISMISSED, true)
+        doHide()
+      })
+    })
+
+    applyStyle(styleId)
+
+    return {
+      show(text, opts) {
+        return safe(() => {
+          if (!canShow()) return false
+          const o = opts || {}
+          buffer = String(text == null ? '' : text)
+          render()
+          if (o.sticky) scheduleHide(0)
+          else scheduleHide(o.durationMs == null ? 5000 : o.durationMs)
+          return true
+        }, false)
+      },
+      append(token, _opts) {
+        return safe(() => {
+          if (!canShow()) return false
+          buffer += String(token == null ? '' : token)
+          render()
+          scheduleHide(0)
+          return true
+        }, false)
+      },
+      hide() { safe(doHide) },
+      isVisible() { return safe(() => visible && !el.hidden, false) },
+      isDismissed() { return safe(() => dismissed, false) },
+      setEnabled(on) {
+        safe(() => {
+          enabled = on !== false
+          if (!enabled) doHide()
+        })
+      },
+      applyStyle(id) { return safe(() => applyStyle(id), styleId) },
+      info() {
+        return safe(() => ({
+          visible: visible && !el.hidden,
+          dismissed,
+          enabled,
+          styleId,
+        }), { visible: false, dismissed: false, enabled: false, styleId: 'default' })
+      },
+      // 非契约内的主体内部接口：供设置页"重新启用横条"用（清掉"已拒绝"记忆）
+      resetDismissed() {
+        safe(() => {
+          dismissed = false
+          writeBool(KEY_DISMISSED, false)
+        })
+      },
+    }
+  })()
 
   start().catch((error) => {
     loading.hidden = true
