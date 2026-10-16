@@ -2437,6 +2437,12 @@
         // 与 agent_bubble 的分工：agent_bubble = "说一句完整的话"（气泡自己按字均速
         // 打字机）；agent_stream = "把上游逐块交来的正文按上游节奏铺开"。
         applyAgentStream(payload)
+      } else if (message.type === 'agent_strip') {
+        // 7.6 横条（DSH 流式提示专用窗位）——**独立于气泡的第三条通路**。
+        // 走核心 API `window.__mioPetStrip`，渲染端不直接改 DOM。
+        // 与 agent_stream / agent_bubble 互不影响：横条被关掉时这里返回 false，
+        // 气泡照常工作；反之亦然（用户裁决：三条通路独立管理）。
+        applyAgentStrip(payload)
       } else if (message.type === 'speak') {
         if (!xzPluginOn) return
         const text = String(payload.text || payload.content || '').trim()
@@ -2838,6 +2844,53 @@
     }
     // 首块立即上屏：流式的"首字延迟"取决于上游何时把第一块交来，气泡不额外引入延迟
     step()
+  }
+
+  // ---------------------------------------------------------------------------
+  // 7.6 横条投递：WS `agent_strip` → 核心 API `window.__mioPetStrip`
+  // ---------------------------------------------------------------------------
+  // 为什么要有一条独立通路（而不是复用 agent_stream）：
+  //   `__mioPetStrip` 是**桌宠窗口**的核心 API，而插件跑在 DSH 宿主进程、
+  //   其注入行所在的又是 **DSH Web GUI 窗口** —— 三者互不相通。
+  //   所以横条内容必须经后端总线转发：插件 → /api/plugin/dsh/strip → 总线
+  //   → WS agent_strip → 这里 → __mioPetStrip。
+  //
+  // 与 agent_stream / agent_bubble 的**独立性**（用户裁决）：
+  //   本函数只碰横条；横条被用户关掉时 `show/append` 会返回 false（静默忽略），
+  //   气泡那两条通路完全不受影响。反过来也一样。
+  function applyAgentStrip(payload) {
+    if (!payload) return false
+    const api = window.__mioPetStrip
+    // 主体没实现横条（旧版桌宠）时静默忽略：不报错、不重试风暴。
+    if (!api) return false
+    const kind = String(payload.kind || '').toLowerCase()
+    try {
+      if (kind === 'show') {
+        return api.show(String(payload.text || ''), {
+          sessionId: String(payload.session || ''),
+          sticky: Boolean(payload.sticky),
+          durationMs: Number(payload.durationMs) || 0,
+        }) === true
+      }
+      if (kind === 'append') {
+        return api.append(String(payload.text || ''), {
+          sessionId: String(payload.session || ''),
+        }) === true
+      }
+      if (kind === 'hide') {
+        api.hide()
+        return true
+      }
+      if (kind === 'style') {
+        // 皮肤由主体落地（插件不碰 DOM/CSS 类）
+        api.applyStyle(String(payload.styleId || ''))
+        return true
+      }
+      return false
+    } catch (_) {
+      // 契约要求主体任何方法都不得抛；这里再兜一层，绝不让一条坏消息带崩渲染循环
+      return false
+    }
   }
 
   async function persistCompanionSetting(key, value) {

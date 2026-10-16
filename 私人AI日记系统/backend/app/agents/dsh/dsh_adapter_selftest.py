@@ -946,7 +946,23 @@ def test_stream_frontend_contract() -> None:
     check("用最终文本校正（零丢字/零重复）", "finishAgentStream" in src)
     check("气泡被其他来源占用时会中断流", "cancelAgentStream()" in src.split("function showSpeechBubble")[1][:600]
           if "function showSpeechBubble" in src else False)
-    check("流式受气泡开关约束", "live2d_stream_text_enabled" in src)
+    check("流式受其自己的开关约束（live2d_stream_text_enabled）",
+          "live2d_stream_text_enabled" in src)
+    # ★ 2026-10-16 用户裁决：**三条通路独立管理**
+    #   （说话气泡 / 流式气泡 / 横条 各自的菜单按钮独立显示隐藏）。
+    #   原先 applyAgentStream 开头有一道 `live2d_speech_bubble_enabled === false` 就 return，
+    #   会把流式连带关掉 —— 已移除。下面两条**防止它被改回去**。
+    #
+    #   ⚠ 必须**去掉注释再查**：这段函数上方有解释性注释也提到了旧开关名
+    #     （说明"为什么不再依赖它"），直接搜字符串会误判成"代码里还在用"。
+    #     这个坑本自检第一次跑就踩到了 —— 故这里先剥注释，只盯可执行代码。
+    _stream_fn = src.split("function applyAgentStream")[1].split("\n  }")[0] if "function applyAgentStream" in src else ""
+    _stream_code = re.sub(r"//[^\n]*", "", _stream_fn)          # 行注释
+    _stream_code = re.sub(r"/\*.*?\*/", "", _stream_code, flags=re.S)  # 块注释
+    check("★ 流式不再被说话气泡总开关挡（解耦未被改回）",
+          "live2d_speech_bubble_enabled" not in _stream_code)
+    check("★ 横条有独立的 WS 通路 applyAgentStrip",
+          "function applyAgentStrip" in src and "agent_strip" in src)
 
 
 # ---------------------------------------------------------------------------
@@ -1021,30 +1037,36 @@ def test_plugin_api() -> None:
     # 2026-10-16（M6 6.5）**受控放宽**：新增 `POST /ingest` —— 插件形态
     # （packages/mao-pet）跑在 DSH 宿主进程内，必须有一个**写入口**把 phase 推进总线；
     # 而日志边车链路是单向只读的，无法承担这个职责。
-    # 这条约束没有被放弃，而是**改成"读接口只读 + 唯一写接口有明确安全依据"**：
-    #   - 写端点只有一个，职责在 routes.plugin_ingest 的 docstring 里写明；
+    # 这条约束没有被放弃，而是**改成"读接口只读 + 写接口逐个显式登记 + 有明确安全依据"**：
+    #   - 写端点全部在此登记，职责在各 route 的 docstring 里写明；
     #   - 其安全由后端全站中间件 `LocalControlMiddleware` 兜底
     #     （app/local_security.py：回环 + 同源 + 拒 cross-site），
     #     故下面新增了一条"中间件确实已挂载且真的会拒绝"的断言来守住这条依据。
-    check_eq("暴露 6 个只读端点 + 1 个受控写端点", paths, [
+    #
+    # 2026-10-16（M7 7.6）再增 `POST /strip`：横条窗位的投递末端。
+    #   `window.__mioPetStrip` 只存在于**桌宠窗口**，而插件跑在宿主进程、
+    #   注入行又在 DSH Web GUI 窗口 —— 三者互不相通，故横条内容必须经总线转发：
+    #   插件 → /strip → 总线 strip() → WS agent_strip → 桌宠窗口 → __mioPetStrip。
+    check_eq("暴露 6 个只读端点 + 2 个受控写端点", paths, [
         "/api/plugin/dsh/about",
         "/api/plugin/dsh/agent",
         "/api/plugin/dsh/diagnostics",
         "/api/plugin/dsh/ingest",
         "/api/plugin/dsh/phases",
         "/api/plugin/dsh/status",
+        "/api/plugin/dsh/strip",
         "/api/plugin/dsh/update-check",
     ])
     methods = sorted({m for r in plugin_routes.router.routes for m in (r.methods or set())})
-    # 比笼统的"全部只读"更守住意图：**写方法只允许 POST，且只允许一个端点**。
+    # 比笼统的"全部只读"更守住意图：**写方法只允许 POST，且必须逐个登记**。
     # 将来有人加 DELETE/PUT 之类的写操作会被下面两条挡下。
     check_eq("只读端点均为 GET + 存在 POST 写端点", methods, ["GET", "POST"])
     _write_routes = sorted({
         r.path for r in plugin_routes.router.routes
         if {"POST", "PUT", "PATCH", "DELETE"} & set(r.methods or set())
     })
-    check_eq("写端点只有 ingest 一个（新增写操作必须显式改这条）",
-             _write_routes, ["/api/plugin/dsh/ingest"])
+    check_eq("写端点仅 ingest + strip（新增写操作必须显式改这条）",
+             _write_routes, ["/api/plugin/dsh/ingest", "/api/plugin/dsh/strip"])
 
     # ★ 写端点的安全**不靠插件自己**，而靠后端全站中间件。
     #   所以必须断言"那条中间件真的在、且真的会拒"，否则上面那条放宽就成了空头支票。
@@ -1063,11 +1085,37 @@ def test_plugin_api() -> None:
             check_eq("ingest：非回环 Host 被拒（403）", _r_host.status_code, 403)
             _r_bad = _client.post("/api/plugin/dsh/ingest", json={"phase": "not-a-phase"})
             check_eq("ingest：非法 phase 返回 400", _r_bad.status_code, 400)
+
+            # /strip（7.6 横条投递末端）同样受中间件保护，逐条验
+            _s_show = _client.post("/api/plugin/dsh/strip",
+                                   json={"kind": "show", "text": "自检内容"})
+            check_eq("strip：本机来源可写（show）", _s_show.status_code, 200)
+            check_eq("strip：响应含 delivered", bool(_s_show.json().get("delivered")), True)
+            _s_app = _client.post("/api/plugin/dsh/strip", json={"kind": "append", "text": "x"})
+            check_eq("strip：append 可写", _s_app.status_code, 200)
+            _s_hide = _client.post("/api/plugin/dsh/strip", json={"kind": "hide"})
+            check_eq("strip：hide 可写（无需 text）", _s_hide.status_code, 200)
+            _s_style = _client.post("/api/plugin/dsh/strip",
+                                    json={"kind": "style", "styleId": "terminal"})
+            check_eq("strip：style 可写", _s_style.status_code, 200)
+            _s_kind = _client.post("/api/plugin/dsh/strip", json={"kind": "nonsense"})
+            check_eq("strip：非法 kind 返回 400", _s_kind.status_code, 400)
+            _s_notext = _client.post("/api/plugin/dsh/strip", json={"kind": "show"})
+            check_eq("strip：show 缺 text 返回 400", _s_notext.status_code, 400)
+            _s_422 = _client.post("/api/plugin/dsh/strip", json={})
+            check_eq("strip：缺 kind 返回 422", _s_422.status_code, 422)
+            _s_xs = _client.post("/api/plugin/dsh/strip", json={"kind": "hide"},
+                                 headers={"sec-fetch-site": "cross-site"})
+            check_eq("strip：跨站来源被拒（403）", _s_xs.status_code, 403)
+            _s_host = _client.post("/api/plugin/dsh/strip", json={"kind": "hide"},
+                                   headers={"host": "evil.example.com"})
+            check_eq("strip：非回环 Host 被拒（403）", _s_host.status_code, 403)
+
             # 清掉本次自检在总线上留下的痕迹，避免污染后续断言/快照
             from ...kernel import agent_bus_service as _bus
             _bus.unregister("mao-pet")
     except Exception as exc:  # noqa: BLE001
-        check("ingest 安全栅栏端到端（中间件兜底）", False, f"{type(exc).__name__}: {exc}")
+        check("写端点安全栅栏端到端（中间件兜底）", False, f"{type(exc).__name__}: {exc}")
 
     # A5：关于面板必须脱敏（绝不回传真实用户名）
     try:

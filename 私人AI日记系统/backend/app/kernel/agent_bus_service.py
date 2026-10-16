@@ -417,6 +417,59 @@ class AgentBus:
         pet_event_service.publish("agent_stream", body)
         return True
 
+    def strip(self, agent_id: str, payload: dict[str, Any]) -> bool:
+        """插件 → 桌宠**横条窗位**（7.6：DSH 流式提示专用窗）。
+
+        为什么单独一条通道，而不是复用 ``stream`` / ``announce``：
+
+          ============ ========================================== ==================
+          通道         语义                                        渲染位置
+          ============ ========================================== ==================
+          ``announce`` "说一句完整的话"（按字数打字机）              说话气泡
+          ``stream``   逐 token 正文，按上游节奏铺开                  说话气泡（流式）
+          ``strip``    流式/提示的**横条窗位**，可拖动、可 ✕、可换肤   横条
+          ============ ========================================== ==================
+
+        三者是**独立管理**的三条通路（用户裁决）：关掉说话气泡不该影响横条，
+        关掉横条也不该影响气泡。渲染端各认各的开关。
+
+        ``payload.kind`` 决定横条动作：
+          - ``"show"``   ：整段文本上屏（``text`` 必填），可选 ``durationMs``/``sticky``
+          - ``"append"`` ：追加一段（``text`` 必填）—— 流式逐 token 用这个
+          - ``"hide"``   ：收起内容（**不改**"用户已关闭"状态）
+          - ``"style"``  ：应用皮肤（``styleId`` 必填）
+
+        总线依旧**不认识任何具体插件**：``payload`` 由插件自定，总线只补身份字段后透传。
+        返回 False 表示未广播（插件停用/未注册/kind 非法/内容为空）。
+        """
+        if not isinstance(payload, dict):
+            return False
+        kind = str(payload.get("kind") or "").strip().lower()
+        if kind not in {"show", "append", "hide", "style"}:
+            return False
+        # show/append 必须有正文；hide/style 不需要
+        if kind in {"show", "append"} and not str(payload.get("text") or "").strip():
+            return False
+        if kind == "style" and not str(payload.get("styleId") or "").strip():
+            return False
+        with self._lock:
+            agent = self._agents.get(agent_id)
+            if agent is None or not agent.enabled:
+                return False
+            name = agent.name
+            accent = agent.accent
+            seq = agent.seq
+        body = {
+            "agent_id": agent_id,
+            "agent_name": name,
+            "accent": accent,
+            "bus_seq": seq,
+            "ts": datetime.now().astimezone().isoformat(timespec="milliseconds"),
+        }
+        body.update(payload)
+        pet_event_service.publish("agent_strip", body)
+        return True
+
     def _decide_active_locked(self, agent: AgentState, phase: str, now: float) -> None:
         """活跃聚焦：谁有资格占据桌宠的"身体"。"""
         new_priority = PHASE_PRIORITY.get(phase, 6)
@@ -570,6 +623,11 @@ def announce(agent_id: str, text: str, *, duration_ms: int = 0) -> bool:
 def stream(agent_id: str, payload: dict[str, Any]) -> bool:
     """插件 → 桌宠逐 token 流式文本（增量追加）。见 ``AgentBus.stream``。"""
     return bus.stream(agent_id, payload)
+
+
+def strip(agent_id: str, payload: dict[str, Any]) -> bool:
+    """插件 → 桌宠横条窗位（7.6：DSH 流式提示专用窗）。见 ``AgentBus.strip``。"""
+    return bus.strip(agent_id, payload)
 
 
 def set_status(agent_id: str, status: str, *, error: str | None = None) -> None:

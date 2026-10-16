@@ -115,11 +115,23 @@ export const MODE = Object.freeze({
  * @param {object} [opts.win]    window 形状对象（测试注入；缺省 globalThis）
  * @param {object} [opts.logger]
  * @param {Function} [opts.onDegrade] 降级回调（诊断/日志用）
+ * @param {object} [opts.remote] **宿主侧远程代理**（没有浏览器 window 时用）
+ *   形状：`{ show(text,opts), append(text,opts), hide(), isVisible(), isDismissed(),
+ *           setEnabled(on), applyStyle(id), info() }`，返回值语义与浏览器侧一致。
+ *
+ *   **为什么需要它**（本次补齐的关键一环，别删）：
+ *   `window.__mioPetStrip` 只存在于**桌宠窗口**；插件宿主跑在 DSH 的 Node 子进程里，
+ *   那里永远没有这个全局 —— 所以宿主侧 `stripApi()` 恒为 null，横条内容**永远送不出去**。
+ *   远程代理把动作转成 `POST /api/plugin/dsh/strip`，由后端经 WS `agent_strip`
+ *   转发到桌宠窗口（与 `agent_stream` 同一条链路思路）。
+ *   没有它，7.6 在真机上只能降级走气泡，"横条"这一形态等于没落地。
  */
 export function createStripController(opts = {}) {
   const win = opts.win || (typeof globalThis !== 'undefined' ? globalThis : {})
   const logger = opts.logger || { info: () => {}, warn: () => {}, debug: () => {} }
   const onDegrade = typeof opts.onDegrade === 'function' ? opts.onDegrade : () => {}
+  /** 宿主侧远程代理（可为 null：纯浏览器/测试环境不需要）。 */
+  const remote = opts.remote && typeof opts.remote === 'object' ? opts.remote : null
 
   /** 当前占用窗位的内容模式（互斥的载体）。 */
   let mode = MODE.IDLE
@@ -130,9 +142,9 @@ export function createStripController(opts = {}) {
   /** 降级只告警一次，避免刷屏。 */
   let degradeWarned = false
 
-  /** 取主体实现的横条 API（不存在则 null）。 */
+  /** 取主体实现的横条 API（浏览器全局优先；宿主侧回落远程代理）。 */
   function stripApi() {
-    return safeCall(() => {
+    const local = safeCall(() => {
       const api = win[STRIP_GLOBAL]
       // 必须排除数组：`typeof [] === 'object'`，而数组不是合法的 API 对象。
       // 另外要求至少实现 show 或 append —— 否则"通道存在但不可用"，
@@ -141,6 +153,13 @@ export function createStripController(opts = {}) {
       if (typeof api.show !== 'function' && typeof api.append !== 'function') return null
       return api
     }, null)
+    if (local) return local
+    // 宿主侧：没有浏览器全局，但有远程代理时，横条**依然可用**（经后端 → WS 转发）。
+    // 这条分支是 7.6 能在真机跑通的前提。
+    if (remote && (typeof remote.show === 'function' || typeof remote.append === 'function')) {
+      return remote
+    }
+    return null
   }
 
   /** 取降级用的气泡 API（不存在则 null）。 */

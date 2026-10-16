@@ -19,6 +19,7 @@ import { createConnector } from './events.js'
 import { PHASES, WORK_PHASES, FACT_PHASES } from './phases.js'
 import { createPusher, AGENT_ID, AGENT_NAME, AGENT_ACCENT } from './push/pusher.js'
 import { createHttpTransport } from './push/transports/http.js'
+import { createStripRemote } from './push/strip-remote.js'
 import { createRejectionGate } from './security/fence.js'
 import { createStreamAssembler, parseStreamFrame } from './stream.js'
 import { createApprovalDecider, describeApproval, GRANT, REJECT, CANCELLED } from './approval.js'
@@ -37,9 +38,25 @@ import { safeCall } from './util.js'
  * 已注销 → 加载 404。内联行 + 吞掉 onerror 让我们**永远不会因为自己的
  * 前端资源缺失而把宿主拖挂**（whale #154 的原始致命错误就是这条）。
  *
- * ⚠ M6 阶段本行是**占位且安全的**：它只尝试加载 `/mao-pet/bridge.js`，
- * 前端资源缺失时静默失败（桌宠连接完全不受影响 —— 推送走宿主侧 HTTP，与前端无关）。
- * 这条注入行存在的意义是**验证踩坑结论①②**，为 M7 的 7.6（横条/气泡前端）留位。
+ * ────────────────────────────────────────────────────────────────────────
+ * ⚠ 这条注入行的定位（2026-10-16 定稿，避免后人误以为它是功能主路径）
+ * ────────────────────────────────────────────────────────────────────────
+ * 它**不是**横条/气泡的投递通道。DSH GUI 窗口里**没有** `window.__mioPetStrip`
+ * （那是**桌宠窗口**的核心 API），所以在这里注入脚本无论如何也够不到桌宠。
+ * 真正的链路是宿主侧的：::
+ *
+ *   插件(宿主) → POST /api/plugin/dsh/{ingest,strip} → 总线 → WS → 桌宠窗口
+ *
+ * 那这条行还有什么用？**它验证 whale 的两条致命踩坑结论**：
+ *   ① `apply()` 第一件事就注册注入行（晚了宿主就收集不到）；
+ *   ② 注入行必须用 `kind:'script'` **内联**，不能用 `script-src`
+ *      （后者失败会 reject 整个 boot，应用起不来）。
+ * 这两条是「插件形态能不能用」的地基，值得留一条**真实生效**的注入行来守住它。
+ *
+ * 因此 `/mao-pet/bridge.js` 现在由本插件**真的提供**（见下方 registerRoute），
+ * 内容是一个极小的探针：挂 `window.__maoPetBridge` 并回传一次握手。
+ * 这样"注入行是否真的进了页面"**可被验证**，而不是靠一个 404 猜。
+ * 它**只做自证**，不参与任何业务投递 —— 桌宠连接完全不依赖它。
  */
 const DESKTOP_BRIDGE_ROW_TEXT =
   '(function(){try{var d=document.body||document.head||document.documentElement;if(!d)return;'
@@ -48,6 +65,26 @@ const DESKTOP_BRIDGE_ROW_TEXT =
 
 /** 注入行去重标记。 */
 const BRIDGE_SRC_MARK = '/mao-pet/bridge.js'
+
+/**
+ * `bridge.js` 的响应体：一个**只做自证**的极小探针。
+ *
+ * 不碰 DOM、不碰业务、不依赖任何核心 API —— 只为回答一个问题：
+ * "注入行到底有没有进到 DSH GUI 页面里"。
+ * 排障时在 DSH GUI 的 devtools 里看 `window.__maoPetBridge` 即可。
+ */
+const BRIDGE_JS_BODY = `/* Mao-pet bridge (self-check beacon only) */
+(function () {
+  try {
+    window.__maoPetBridge = {
+      plugin: 'mao-pet',
+      at: Date.now(),
+      // 供排障：确认注入行确实进了本窗口
+      note: 'injection row OK; pet delivery is host-side (HTTP -> bus -> WS)',
+    }
+  } catch (e) {}
+})()
+`
 
 export default {
   name: 'mao-pet',
@@ -165,12 +202,16 @@ export default {
       // ── 7.4 多 session 气泡栈（上限 12）──
       const bubbles = createBubbleStack({ logger, max: MAX_SESSION_BUBBLES })
 
-      // ── 7.6 横条编排（插件侧；主体侧 __mioPetStrip 由 Lead 实现）──
-      // 客户端全局在**渲染层**，宿主侧这里读不到 → 传空对象，
-      // 由前端 bridge（/mao-pet/bridge.js，M7 前端阶段）接线后再注入。
-      // 编排层已对"横条缺席"做优雅降级（回落气泡），故此处安全。
+      // ── 7.6 横条编排 ──
+      // ⚠ 关键：**宿主侧没有 `window.__mioPetStrip`**（那是桌宠窗口的 API）。
+      //   故必须传 `remote` 代理，否则横条内容永远送不出去、只会降级成气泡，
+      //   7.6 的"横条"形态等于没落地（这是本仓库补上的最后一公里）。
+      //   链路：本代理 → POST /api/plugin/dsh/strip → 总线 → WS agent_strip
+      //         → 桌宠窗口 applyAgentStrip() → window.__mioPetStrip
+      const stripRemote = createStripRemote({ logger })
       const strip = createStripController({
         win: (typeof globalThis !== 'undefined' ? globalThis : {}),
+        remote: stripRemote,
         logger,
       })
 
@@ -218,6 +259,22 @@ export default {
           res.end(JSON.stringify(body))
         } catch (err) {}
       }
+
+      // 注入行加载的前端资源：一个**自证用**的极小探针（不参与业务投递）。
+      // 提供真实响应而不是让它 404 —— 否则"注入行到底进没进页面"无从验证，
+      // 而且 404 会在 DSH GUI devtools 里刷红，看着像插件坏了。
+      safeCall(() => registerRoute({
+        method: 'GET',
+        path: '/mao-pet/bridge.js',
+        handler: async (req, res) => {
+          try {
+            res.statusCode = 200
+            res.setHeader('content-type', 'application/javascript; charset=utf-8')
+            res.setHeader('cache-control', 'no-store')
+            res.end(BRIDGE_JS_BODY)
+          } catch (err) {}
+        },
+      }))
 
       // 只读诊断：桌宠连接器当前状态（排障主入口）
       safeCall(() => registerRoute({

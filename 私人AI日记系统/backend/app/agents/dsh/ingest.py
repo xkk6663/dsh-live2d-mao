@@ -196,6 +196,76 @@ def ingest(
     }
 
 
+def push_strip(
+    *,
+    kind: str,
+    text: str = "",
+    style_id: str = "",
+    session_id: str = "",
+    duration_ms: int = 0,
+    sticky: bool = False,
+    agent_id: str = "",
+    name: str = "",
+    accent: str = "",
+) -> dict[str, Any]:
+    """把一条**横条动作**推给桌宠（7.6 的投递末端）。
+
+    横条是**独立于气泡**的窗位（用户裁决：三条通路各自独立管理）。
+    本函数只负责"把动作送进总线"，不做任何渲染决策 —— 与 ``ingest`` 同层。
+
+    ``kind``：
+      - ``show``   ：整段上屏（``text`` 必填）
+      - ``append`` ：追加一段（``text`` 必填）—— 流式逐 token 用这个
+      - ``hide``   ：收起内容（**不改**"用户已关闭"状态）
+      - ``style``  ：应用皮肤（``style_id`` 必填）
+
+    :raises ValueError: kind 非法或必填字段缺失（路由层转 400）。
+    """
+    wanted = _as_text(kind, 20).lower()
+    if wanted not in {"show", "append", "hide", "style"}:
+        raise ValueError(
+            f"未知 kind: {wanted!r}（可用：show, append, hide, style）"
+        )
+    body_text = _as_text(text, 4000)
+    if wanted in {"show", "append"} and not body_text:
+        raise ValueError(f"kind={wanted} 需要非空 text")
+    sid = _as_text(style_id, 40)
+    if wanted == "style" and not sid:
+        raise ValueError("kind=style 需要非空 styleId")
+
+    aid = _as_text(agent_id, 60) or DEFAULT_AGENT_ID
+    aname = _as_text(name, 60) or DEFAULT_AGENT_NAME
+    aaccent = _as_text(accent, 20) or DEFAULT_ACCENT
+    ensure_registered(aid, aname, aaccent)
+    agent_bus_service.set_status(aid, "online")
+    agent_bus_service.heartbeat(aid)
+
+    payload: dict[str, Any] = {"kind": wanted}
+    if body_text:
+        payload["text"] = body_text
+    if sid:
+        payload["styleId"] = sid
+    if session_id:
+        payload["session"] = _as_text(session_id, 120)
+    try:
+        ms = int(duration_ms or 0)
+    except (TypeError, ValueError):
+        ms = 0
+    if ms > 0:
+        payload["durationMs"] = ms
+    if sticky:
+        payload["sticky"] = True
+
+    delivered = agent_bus_service.strip(aid, payload)
+    return {
+        "ok": True,
+        "agent_id": aid,
+        "kind": wanted,
+        # False = 未广播（插件被停用 / agent 未注册）
+        "delivered": bool(delivered),
+    }
+
+
 def snapshot_for(agent_id: str) -> dict[str, Any]:
     """当前总线上的该 agent 快照（插件自检/联调用，只读）。"""
     agent = agent_bus_service.get(_as_text(agent_id, 60) or DEFAULT_AGENT_ID)

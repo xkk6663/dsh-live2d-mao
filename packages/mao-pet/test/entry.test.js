@@ -170,11 +170,38 @@ test('入口 · root.inject 只等 webServer（不拖住注入行）', () => {
   assert.deepEqual(h.record.injectCalls[0], ['webServer'])
 })
 
-test('入口 · 注册了 3 条只读路由', () => {
+test('入口 · 注册了 4 条只读路由', () => {
   const h = makeHarness()
   plugin.apply(h.root)
   const paths = h.record.routes.map((r) => r.path).sort()
-  assert.deepEqual(paths, ['/mao-pet/capabilities', '/mao-pet/phases', '/mao-pet/status'])
+  // bridge.js：注入行加载的自证探针（**不参与业务投递**，见 lib/index.js 顶部长注释）。
+  // 提供它而不是让它 404，是为了"注入行到底进没进页面"可被验证。
+  assert.deepEqual(paths, [
+    '/mao-pet/bridge.js', '/mao-pet/capabilities', '/mao-pet/phases', '/mao-pet/status',
+  ])
+})
+
+test('入口 · bridge.js 只做自证：不碰 DOM、不依赖核心 API', async () => {
+  const h = makeHarness()
+  plugin.apply(h.root)
+  const route = h.record.routes.find((r) => r.path === '/mao-pet/bridge.js')
+  assert.ok(route, '应注册 bridge.js 路由')
+  assert.equal(route.method, 'GET')
+  let body = ''
+  const headers = {}
+  const res = {
+    statusCode: 0,
+    setHeader(k, v) { headers[k] = v },
+    end(s) { body = s },
+  }
+  // 必须给合法回环 Host —— 路由被安全栅栏包着，空 Host 会被正确拒成 403（那是栅栏在干活）
+  await route.handler({ method: 'GET', headers: { host: '127.0.0.1:19387' } }, res)
+  assert.equal(res.statusCode, 200)
+  assert.match(String(headers['content-type'] || ''), /javascript/)
+  assert.match(body, /__maoPetBridge/)
+  // 关键：不碰任何核心 API / DOM —— 否则就违反了"插件不改主体 DOM"的裁决（D4）
+  assert.ok(!body.includes('__mioPetStrip'), 'bridge 不应触碰横条核心 API')
+  assert.ok(!body.includes('document.'), 'bridge 不应触碰 DOM')
 })
 
 test('入口 · 所有路由都是 GET（只读，无写面）', () => {

@@ -235,6 +235,54 @@ async def plugin_ingest(payload: IngestPayload) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+class StripPayload(BaseModel):
+    """插件推送的**横条动作**（7.6：DSH 流式提示专用窗位）。
+
+    与 ``IngestPayload``（phase）分开建模，因为语义完全不同：
+    一个是"我在干什么"（驱动动画/徽标），一个是"这条窗位显示什么"。
+    """
+
+    kind: str = Field(..., description="show / append / hide / style")
+    text: str = Field("", description="show/append 必填")
+    styleId: str = Field("", description="style 必填")
+    sessionId: str = Field("", description="来源会话（可选）")
+    durationMs: int = Field(0, description="自动隐藏时长，0=由主体决定")
+    sticky: bool = Field(False, description="true=流式追加中，不排自动隐藏")
+    agent_id: str = Field("", description="缺省 mao-pet")
+    name: str = Field("", description="缺省 Mao-pet")
+    accent: str = Field("", description="身份色，缺省 #4F6BED")
+
+
+@router.post("/strip")
+async def plugin_strip(payload: StripPayload) -> dict[str, Any]:
+    """插件把**横条动作**推给桌宠（7.6 的最后一公里）。
+
+    为什么需要这条：``__mioPetStrip`` 是**桌宠窗口**里的核心 API，
+    而插件跑在 DSH 宿主进程、注入行所在的是 **DSH Web GUI 窗口** ——
+    三者互不相通。所以横条内容必须走::
+
+        插件 → 本端点 → 总线 → WS ``agent_strip`` → 桌宠窗口 → ``__mioPetStrip``
+
+    **安全**：与 ``/ingest`` 同源，由后端全站 ``LocalControlMiddleware`` 兜底
+    （回环 + 同源 + 拒 cross-site），此处不重复实现。
+    """
+    try:
+        return await asyncio.to_thread(
+            ingest.push_strip,
+            kind=payload.kind,
+            text=payload.text,
+            style_id=payload.styleId,
+            session_id=payload.sessionId,
+            duration_ms=payload.durationMs,
+            sticky=payload.sticky,
+            agent_id=payload.agent_id,
+            name=payload.name,
+            accent=payload.accent,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/agent")
 async def plugin_agent_snapshot(agent_id: str = "") -> dict[str, Any]:
     """该 agent 在总线上的当前快照（插件侧联调/自检用，只读）。"""
