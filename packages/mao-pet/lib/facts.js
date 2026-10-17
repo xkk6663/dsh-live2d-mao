@@ -41,6 +41,8 @@ export function emptyFacts() {
     last_error: '',
     // 流式正文判据：最近一条 assistant/message 是否**纯文字**（无 tool-call 块）
     last_message_text_only: false,
+    // ★ 最近一条 assistant 纯文本（供多会话气泡栈投递"最近一句话"，截断防超长）
+    last_message_text: '',
     // 会话
     session_id: '',
   }
@@ -195,6 +197,11 @@ export function foldEvent(facts, event, session) {
       // assistant/message 同时含 tool-call 块，用 has_text 会长期误报 streaming
       // （移植 `dsh_adapter.py:461-465`）。
       facts.last_message_text_only = isTextOnlyMessage(payload)
+      // ★ 保存最近一条纯文本（供气泡栈/审批/提问展示"最近一句话"），
+      //   截断 400 字（与 bubble-stack 的 400 上限一致，防超长外泄）。
+      facts.last_message_text = facts.last_message_text_only
+        ? clampStr(extractText(payload), 400)
+        : ''
       facts.retrying = false
       break
     }
@@ -234,6 +241,32 @@ export function foldEvent(facts, event, session) {
 
   const changed = before !== facts.last_event || beforePhaseish !== phaseSignature(facts)
   return { changed, type }
+}
+
+/**
+ * 从 assistant/message payload 里提取纯文本（拼接所有 text 块）。
+ *
+ * 容错三种真实形状（与 isTextOnlyMessage 一致）：`content:[{type:'text'}]`、
+ * `blocks:[{type:'text'}]`、以及只有 `text` 字符串的退化形状。
+ */
+export function extractText(payload) {
+  if (!payload || typeof payload !== 'object') return ''
+  const blocks = Array.isArray(payload.content)
+    ? payload.content
+    : Array.isArray(payload.blocks)
+      ? payload.blocks
+      : null
+  if (blocks) {
+    const parts = []
+    for (const b of blocks) {
+      if (!b || typeof b !== 'object') continue
+      if ((b.type === 'text' || b.type === 'text-delta') && String(b.text || '')) {
+        parts.push(String(b.text))
+      }
+    }
+    return parts.join('')
+  }
+  return typeof payload.text === 'string' ? payload.text : ''
 }
 
 /**

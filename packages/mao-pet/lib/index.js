@@ -17,6 +17,7 @@
 
 import { createConnector } from './events.js'
 import { PHASES, WORK_PHASES, FACT_PHASES } from './phases.js'
+import { isTextOnlyMessage, extractText } from './facts.js'
 import { createPusher, AGENT_ID, AGENT_NAME, AGENT_ACCENT } from './push/pusher.js'
 import { createHttpTransport } from './push/transports/http.js'
 import { createStripRemote } from './push/strip-remote.js'
@@ -201,6 +202,55 @@ export default {
 
       // ── 7.4 多 session 气泡栈（上限 12）──
       const bubbles = createBubbleStack({ logger, max: MAX_SESSION_BUBBLES })
+
+      // ★ 7.4 接线（2026-10-17 闭合回路）：把气泡栈接进事件流。
+      //   之前 bubbles.push 从没被调用 = 死代码。现在：纯文本 assistant 消息
+      //   → 按 session 压入气泡栈 → 活跃者（优先级最高/最新）变化时，
+      //   经 pushBubble 把"最近一句话"投给桌宠说话气泡。
+      //   这样并发多 session 时只让最该说话的那个冒泡，互不覆盖。
+      let lastBubbleActive = ''
+      safeCall(() => {
+        disposers.push(ctx.on('session/event', (session, event) => {
+          safeCall(() => {
+            // 只喂"纯文本 assistant 消息"（带 tool-call 块的是工具调用，不冒泡正文）
+            if (!event || event.type !== 'assistant/message') return
+            const data = event.data && typeof event.data === 'object' ? event.data : {}
+            if (!isTextOnlyMessage(data)) return
+            const text = extractText(data).trim()
+            if (!text) return
+            const res = bubbles.push(session, { text, phase: 'streaming' })
+            // 活跃者变化 → 投递新活跃者的最近一句话
+            if (res.accepted && res.active && res.active !== lastBubbleActive) {
+              lastBubbleActive = res.active
+              const activeText = bubbles.textOf(res.active)
+              if (activeText) {
+                // 气泡存活时长交给桌宠主体（pushBubble duration 0 = 主体默认）
+                Promise.resolve()
+                  .then(() => pusher.pushBubble(activeText, 0))
+                  .catch(() => {})
+              }
+            }
+            // 会话结束（turn/end）时从栈移除，避免过期气泡一直占着
+          })
+        }, { global: true }))
+      })
+      // turn/end → 移除该 session 的气泡（会话已结束，不再需要占窗位）
+      safeCall(() => {
+        disposers.push(ctx.on('session/event', (session, event) => {
+          safeCall(() => {
+            if (!event || event.type !== 'turn/end') return
+            bubbles.remove(session)
+            const a = bubbles.active()
+            if (a !== lastBubbleActive) {
+              lastBubbleActive = a
+              if (a) {
+                const t = bubbles.textOf(a)
+                if (t) Promise.resolve().then(() => pusher.pushBubble(t, 0)).catch(() => {})
+              }
+            }
+          })
+        }, { global: true }))
+      })
 
       // ── 7.6 横条编排 ──
       // ⚠ 关键：**宿主侧没有 `window.__mioPetStrip`**（那是桌宠窗口的 API）。

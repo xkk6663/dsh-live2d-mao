@@ -137,6 +137,12 @@ export function createBubbleStack(opts = {}) {
       return ranked()[0]?.sessionId ?? null
     },
 
+    /** 取某会话当前气泡文本（无则空串）。 */
+    textOf(sessionId) {
+      const e = entries.get(String(sessionId || ''))
+      return e ? e.text : ''
+    },
+
     /** 当前栈内容（按优先级排序，只读快照）。 */
     snapshot() {
       return ranked().map((e) => ({

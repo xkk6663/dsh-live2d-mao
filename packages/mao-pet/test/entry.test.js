@@ -150,15 +150,19 @@ test('入口 · 注入行不覆盖旧的 script-src 行（向后兼容）', () =
   assert.equal(table.length, 1, '已存在旧行时不该再插内联行')
 })
 
-test('入口 · apply() 注册了 4 类事件监听（含 {global:true}）', () => {
+test('入口 · apply() 注册了事件监听（含 {global:true}）', () => {
   const h = makeHarness()
   plugin.apply(h.root)
-  assert.equal(h.record.sessionEvent.length, 1)
+  // session/event 现在有 3 个旁路（主链路 phase + 气泡栈喂入 + turn/end 移除），
+  // 各自独立兜底；streamEvent 1 个、approvalEvent 1 个
+  assert.equal(h.record.sessionEvent.length, 3)
   assert.equal(h.record.streamEvent.length, 1)
   assert.equal(h.record.approvalEvent.length, 1)
 
   // ★ 7.4 多 session 必须加 {global:true}
   assert.deepEqual(h.record.sessionEvent[0].o, { global: true })
+  assert.deepEqual(h.record.sessionEvent[1].o, { global: true })
+  assert.deepEqual(h.record.sessionEvent[2].o, { global: true })
   assert.deepEqual(h.record.streamEvent[0].o, { global: true })
   // 审批监听：scope 由 waterfall 决定，不加 global
   assert.equal(h.record.approvalEvent[0].o, undefined)
