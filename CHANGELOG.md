@@ -990,9 +990,11 @@ Agent 面板覆盖不退出、小智语音"没讲完就结束"。
 
 ## 上游对照
 
+来源链：`ochiru520/Mio`（原始）→ `xkk6663/Mao`（跨 Agent 平台）→ `xkk6663/dsh-live2d-mao`（本项目，DSH 专用）
+
 | 版本 | 说明 |
 |---|---|
-| ochiru520/Mio（上游） | 原版桌宠：Electron + Vue SPA + FastAPI，含 Agent 工作台/QQ 对话/付费模型等 |
+| ochiru520/Mio（原始上游） | 原版桌宠：Electron + Vue SPA + FastAPI，含 Agent 工作台/QQ 对话/付费模型等 |
 | Mao v1.0 | 阉割原版无关功能，接入小智免费云（核心融合完成） |
 | Mao v2.0 | 发布版：历史全可视化、双发/气泡修复、内存优化、更名 Mao、独立仓库 |
 | Mao v3.0 | 设置与工具管理重构版：设置页重建、MCP 工具集中管理、完全自由拖拽 |
@@ -1001,3 +1003,4 @@ Agent 面板覆盖不退出、小智语音"没讲完就结束"。
 | Mao v3.3 | 桌宠交互与性能优化：穿透架构根治、卡顿降帧、多 Agent 状态栏、水印消除 |
 | Mao v3.4 | 语音引擎切换（edge-tts + 预合成缓存）、视线跟随、徽标 12 态着色、启动定位稳定 |
 | Mao v3.5 | 性能优化收尾（穿透去重 + getBounds 收敛）、Agent 面板自动收起、小智语音完整播放修复 |
+| **dsh-live2d-mao**（本项目） | 从 Mao v4.1 fork：阉割小智/Octop 等非 DSH 能力，插件改名 dsh-live2d-mao，12 态专用化，发布 npm 并上架市场 |

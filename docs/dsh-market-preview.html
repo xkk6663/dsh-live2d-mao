@@ -367,7 +367,11 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File restart_mio.ps1 -ForcePet
 <h3 id="_8">安装插件（可选，推荐）</h3>
 <p>没有插件时，桌宠通过<strong>日志边车</strong>读 DSH 会话日志（有 1~2 秒延迟）；<br />
 装上插件后，走<strong>实时事件流</strong>（即时、更细的功能状态）。</p>
-<pre><code class="language-powershell">dsh plugin --profile desktop add link:C:\Users\xiao1\Mao-dsh-pet\packages/dsh-live2d-mao
+<pre><code class="language-powershell"># 从 npm 装（推荐，一条命令）
+dsh plugin --profile web add dsh-live2d-mao
+
+# 桌面客户端用 desktop profile
+dsh plugin --profile desktop add dsh-live2d-mao
 </code></pre>
 <blockquote>
 <p>插件跑在 DSH 进程内，推送时<strong>复用 DSH 的身份</strong>——桌宠上只会看到一个 <code>DSH</code>，不会多出第二个名字。</p>
@@ -458,7 +462,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File restart_mio.ps1 -ForcePet
 <hr />
 <h2 id="_11">🏗️ 技术架构（一句话版）</h2>
 <pre><code>DSH 会话事件 ──┬─→ 日志边车（读会话日志，兜底路径）
-              └─→ mao-pet 插件（DSH 进程内，实时路径）
+              └─→ dsh-live2d-mao 插件（DSH 进程内，实时路径）
                         ↓
               12 态状态总线（FastAPI）
                         ↓
@@ -569,17 +573,34 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File restart_mio.ps1 -ForcePet
 </tr>
 </tbody>
 </table>
-<h3 id="_15">致谢</h3>
+<h3 id="_15">项目由来与致谢</h3>
+<p>本项目<strong>不是从零写的</strong>。它的来源链是三段：</p>
+<pre><code>ochiru520/Mio              原始上游：Electron + Vue SPA + FastAPI 桌宠
+        │  魔改
+        ▼
+xkk6663/Mao                跨 Agent 平台桌宠（统一 12 phase 状态总线 + 多适配器）
+        │  DSH 专用化 + 阉割
+        ▼
+xkk6663/dsh-live2d-mao     本项目：只做 DSH 的 Live2D 桌宠
+</code></pre>
 <blockquote>
+<p>🙏 <strong><a href="https://github.com/ochiru520/Mio">ochiru520/Mio</a></strong> —— <strong>原始上游</strong>。整个桌宠本体<br />
+（Electron 外壳 + Vue SPA 管理窗 + FastAPI 后端 + Live2D 渲染管线）源自 Mio。<br />
+没有它就没有这一脉。Mio 是通用的跨 Agent 桌宠平台，本项目是在其基础上做的 DSH 特化分支。</p>
+<p>🙏 <strong><a href="https://github.com/xkk6663/Mao">xkk6663/Mao</a></strong> —— <strong>直接上游</strong>。在 Mio 基础上改造出的<br />
+跨 Agent 平台桌宠版本（统一 12 phase 状态总线、小智/DSH/Octop 多适配器、Agent 管理页与状态徽标）。<br />
+本仓库从 Mao 的 v4.1 基线 fork 出来，阉割掉非 DSH 的插件与能力，专用化为纯 DSH 桌宠。</p>
 <p>🙏 <strong>@Mao绒绒家园</strong>（B站 UID 431301506）提供「大肥鱼」免费公皮，让这只桌宠有了灵魂。</p>
 <p>🙏 <strong>@氵六青</strong>（B站）制作「DS 鲸鱼娘」模型并授权开源分发；角色原作 <strong>上善无形</strong>、DeepSeek 女仆二创 <strong>ZipZipPipe</strong>。</p>
-<p>🙏 <a href="https://github.com/A8Chann/dsh-pet-live2d">A8Chann/dsh-pet-live2d</a> —— 我们参考了它把 Live2D 桌宠接入 DSH 的做法，本项目是它的独立实现（不同架构：插件只推事件 + 独立 Electron 桌宠窗口，而非 Web GUI 内嵌）。</p>
+<p>🙏 <a href="https://github.com/A8Chann/dsh-pet-live2d">A8Chann/dsh-pet-live2d</a> —— 在「把 Live2D 桌宠接进 DSH」<br />
+这件事上给了我们思路参考，也是 DS 鲸鱼娘模型的分发渠道。本项目与它是<strong>两套独立实现</strong>：<br />
+它是 Web GUI 内嵌，我们是插件只推事件 + 独立 Electron 桌宠窗口。</p>
 </blockquote>
 <p><strong>内置音效片段</strong>：来源见 <a href="docs/后续开发方向.md"><code>docs/后续开发方向.md</code></a> 技术债一节。</p>
 <hr />
 <div align="center">
 
-**Mao-pet** · 为 DeepSeek Harness 而生的 Live2D 桌宠
+<b>Mao-pet</b> · 为 DeepSeek Harness 而生的 Live2D 桌宠
 
 </div>
   </div>

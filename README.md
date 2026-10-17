@@ -2,17 +2,17 @@
 
 <img src="docs/images/plugin-avatar.png" width="140" alt="Mao-pet" />
 
-# Mao-pet · DSH 专用 Live2D 桌宠
+<h1>Mao-pet · DSH 专用 Live2D 桌宠</h1>
 
-**把 DeepSeek Harness 的工作状态，变成一只住在你桌面上的 Live2D 看板娘。**
+<p><b>把 DeepSeek Harness 的工作状态，变成一只住在你桌面上的 Live2D 看板娘。</b></p>
 
-她不是贴图，是**会呼吸、会看你、会跟着 DSH 干活动起来**的桌宠。
+<p>她不是贴图，是<b>会呼吸、会看你、会跟着 DSH 干活动起来</b>的桌宠。</p>
 
-[![platform](https://img.shields.io/badge/platform-Windows-0078D6)](#)
-[![agent](https://img.shields.io/badge/agent-DSH%20only-orange)](#)
-[![Live2D](https://img.shields.io/badge/Live2D-Cubism%204-ff69b4)](#)
-[![phase](https://img.shields.io/badge/工作状态-12%20态-4F6BED)](#)
-[![license](https://img.shields.io/badge/license-MIT-2ca02c)](#)
+<a href="https://github.com/xkk6663/dsh-live2d-mao"><img src="https://img.shields.io/badge/platform-Windows-0078D6" alt="platform" /></a>
+<a href="https://github.com/xkk6663/dsh-live2d-mao"><img src="https://img.shields.io/badge/agent-DSH%20only-orange" alt="agent" /></a>
+<a href="https://github.com/xkk6663/dsh-live2d-mao"><img src="https://img.shields.io/badge/Live2D-Cubism%204-ff69b4" alt="Live2D" /></a>
+<a href="https://github.com/xkk6663/dsh-live2d-mao"><img src="https://img.shields.io/badge/%E5%B7%A5%E4%BD%9C%E7%8A%B6%E6%80%81-12%20%E6%80%81-4F6BED" alt="phase" /></a>
+<a href="https://github.com/xkk6663/dsh-live2d-mao"><img src="https://img.shields.io/badge/license-MIT-2ca02c" alt="license" /></a>
 
 </div>
 
@@ -198,7 +198,11 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File restart_mio.ps1 -ForcePet
 装上插件后，走**实时事件流**（即时、更细的功能状态）。
 
 ```powershell
-dsh plugin --profile desktop add link:C:\Users\xiao1\Mao-dsh-pet\packages/dsh-live2d-mao
+# 从 npm 装（推荐，一条命令）
+dsh plugin --profile web add dsh-live2d-mao
+
+# 桌面客户端用 desktop profile
+dsh plugin --profile desktop add dsh-live2d-mao
 ```
 
 > 插件跑在 DSH 进程内，推送时**复用 DSH 的身份**——桌宠上只会看到一个 `DSH`，不会多出第二个名字。
@@ -242,7 +246,7 @@ dsh plugin --profile desktop add link:C:\Users\xiao1\Mao-dsh-pet\packages/dsh-li
 
 ```
 DSH 会话事件 ──┬─→ 日志边车（读会话日志，兜底路径）
-              └─→ mao-pet 插件（DSH 进程内，实时路径）
+              └─→ dsh-live2d-mao 插件（DSH 进程内，实时路径）
                         ↓
               12 态状态总线（FastAPI）
                         ↓
@@ -321,13 +325,35 @@ DSH 会话事件 ──┬─→ 日志边车（读会话日志，兜底路径�
 | **DS 鲸鱼娘** | B 站 **@氵六青**（VTube Studio 模型） | **CC BY-NC-SA 4.0**（署名 · **非商业** · 相同方式共享）。角色版权链：**上善无形**（鲸鱼娘角色原作，原创 OC「溟月」）→ **ZipZipPipe**（DeepSeek 女仆二创）→ **氵六青**（本模型）。经作者授权转载开源，但**基础版权未解除**，商业使用需分别取得三人授权 |
 | Hiyori / Haru / Mao / Mark / Rice / Wanko | Live2D 官方 | 免费示例模型 |
 
-### 致谢
+### 项目由来与致谢
 
+本项目**不是从零写的**。它的来源链是三段：
+
+```
+ochiru520/Mio              原始上游：Electron + Vue SPA + FastAPI 桌宠
+        │  魔改
+        ▼
+xkk6663/Mao                跨 Agent 平台桌宠（统一 12 phase 状态总线 + 多适配器）
+        │  DSH 专用化 + 阉割
+        ▼
+xkk6663/dsh-live2d-mao     本项目：只做 DSH 的 Live2D 桌宠
+```
+
+> 🙏 **[ochiru520/Mio](https://github.com/ochiru520/Mio)** —— **原始上游**。整个桌宠本体
+> （Electron 外壳 + Vue SPA 管理窗 + FastAPI 后端 + Live2D 渲染管线）源自 Mio。
+> 没有它就没有这一脉。Mio 是通用的跨 Agent 桌宠平台，本项目是在其基础上做的 DSH 特化分支。
+>
+> 🙏 **[xkk6663/Mao](https://github.com/xkk6663/Mao)** —— **直接上游**。在 Mio 基础上改造出的
+> 跨 Agent 平台桌宠版本（统一 12 phase 状态总线、小智/DSH/Octop 多适配器、Agent 管理页与状态徽标）。
+> 本仓库从 Mao 的 v4.1 基线 fork 出来，阉割掉非 DSH 的插件与能力，专用化为纯 DSH 桌宠。
+>
 > 🙏 **@Mao绒绒家园**（B站 UID 431301506）提供「大肥鱼」免费公皮，让这只桌宠有了灵魂。
 >
 > 🙏 **@氵六青**（B站）制作「DS 鲸鱼娘」模型并授权开源分发；角色原作 **上善无形**、DeepSeek 女仆二创 **ZipZipPipe**。
 >
-> 🙏 [A8Chann/dsh-pet-live2d](https://github.com/A8Chann/dsh-pet-live2d) —— 我们参考了它把 Live2D 桌宠接入 DSH 的做法，本项目是它的独立实现（不同架构：插件只推事件 + 独立 Electron 桌宠窗口，而非 Web GUI 内嵌）。
+> 🙏 [A8Chann/dsh-pet-live2d](https://github.com/A8Chann/dsh-pet-live2d) —— 在「把 Live2D 桌宠接进 DSH」
+> 这件事上给了我们思路参考，也是 DS 鲸鱼娘模型的分发渠道。本项目与它是**两套独立实现**：
+> 它是 Web GUI 内嵌，我们是插件只推事件 + 独立 Electron 桌宠窗口。
 
 **内置音效片段**：来源见 [`docs/后续开发方向.md`](docs/后续开发方向.md) 技术债一节。
 
@@ -335,6 +361,6 @@ DSH 会话事件 ──┬─→ 日志边车（读会话日志，兜底路径�
 
 <div align="center">
 
-**Mao-pet** · 为 DeepSeek Harness 而生的 Live2D 桌宠
+<b>Mao-pet</b> · 为 DeepSeek Harness 而生的 Live2D 桌宠
 
 </div>
