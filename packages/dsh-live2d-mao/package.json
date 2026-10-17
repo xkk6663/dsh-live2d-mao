@@ -20,7 +20,9 @@
     "cordis.patch.yml",
     "README.md",
     "PROVENANCE.md",
-    "icon.png"
+    "icon.png",
+    "screenshots.json",
+    "assets"
   ],
   "dsh": {
     "bundle": {
