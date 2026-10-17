@@ -33,6 +33,7 @@
         <button type="button" data-action="chat">打开/关闭对话窗口</button>
         <button type="button" data-action="gallery">更换形象</button>
         <button type="button" data-action="size">调整大小</button>
+        <button type="button" data-action="opacity">调整不透明度</button>
         <!-- DSH 专用化：「截图提问」已移除（依赖 /api/xiaozhi/vision，随小智插件阉割） -->
         <button type="button" data-action="speech-bubble">隐藏说话气泡</button>
         <!-- ★ 用户裁决：流式正文放进**横条**显示（气泡只显示工具状态）。
@@ -47,6 +48,11 @@
       <section id="size-panel" class="size-panel" hidden>
         <header id="size-panel-header"><strong>桌宠大小</strong><output id="size-value">150%</output></header>
         <input id="size-slider" type="range" min="80" max="240" step="1" value="150" aria-label="桌宠大小" />
+      </section>
+      <!-- ★ 调整不透明度（2026-10-17 复用「调整大小」的面板逻辑） -->
+      <section id="opacity-panel" class="size-panel" hidden>
+        <header id="opacity-panel-header"><strong>桌宠不透明度</strong><output id="opacity-value">100%</output></header>
+        <input id="opacity-slider" type="range" min="10" max="100" step="5" value="100" aria-label="桌宠不透明度" />
       </section>
     </main>
     <script src="./libs/live2dcubismcore.min.js"></script>
@@ -67,6 +73,6 @@
            xiaozhi/xiaozhi-chat.{html,js}（小智快速对话浮窗）。
          它们依赖的 /api/xiaozhi/* 后端路由已随插件阉割，保留只会持续 WS 重连失败。
          将来若要做 DSH 语音，应走**新的 DSH 插件通路**，不要复活这套小智实现。 -->
-    <script src="./live2d-pet.js?v=20261017-interaction"></script>
+    <script src="./live2d-pet.js?v=20261017-opacity"></script>
   </body>
 </html>

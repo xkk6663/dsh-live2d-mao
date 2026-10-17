@@ -438,7 +438,6 @@
       body.appendChild(row('透明穿透', '鼠标点击穿透（锁定后生效）', makeSwitch(!!s.live2d_smart_passthrough, '透明穿透'), 'live2d_smart_passthrough'))
       body.appendChild(row('对话气泡', '显示小智对话气泡', makeSwitch(!!s.live2d_speech_bubble_enabled, '对话气泡'), 'live2d_speech_bubble_enabled'))
       body.appendChild(section('交互打磨'))
-      body.appendChild(row('不透明度', '模型本体透明度（气泡/徽标不受影响）', makeSlider(s.live2d_pet_opacity != null ? s.live2d_pet_opacity : 100, 10, 100, 5, '%'), 'live2d_pet_opacity'))
       body.appendChild(row('锁定位置', '开启后桌宠不可拖动（点击互动仍有效）', makeSwitch(!!s.live2d_pet_locked, '锁定位置'), 'live2d_pet_locked'))
       body.appendChild(row('SHIFT 拖动', '开启后需按住 Shift 才能拖动，防误拖', makeSwitch(!!s.live2d_pet_shift_drag, 'SHIFT 拖动'), 'live2d_pet_shift_drag'))
       body.appendChild(row('拖拽惯性', '松手后按拖动速度惯性滑行、阻尼停稳', makeSwitch(s.live2d_pet_inertia !== false, '拖拽惯性'), 'live2d_pet_inertia'))

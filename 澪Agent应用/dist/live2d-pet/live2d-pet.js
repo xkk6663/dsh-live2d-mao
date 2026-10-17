@@ -247,6 +247,9 @@
   const sizePanel = document.getElementById('size-panel')
   const sizeSlider = document.getElementById('size-slider')
   const sizeValue = document.getElementById('size-value')
+  const opacityPanel = document.getElementById('opacity-panel')
+  const opacitySlider = document.getElementById('opacity-slider')
+  const opacityValue = document.getElementById('opacity-value')
 
   let app = null
   let model = null
@@ -3027,13 +3030,14 @@
   let lastUiOpenReport = null
   function reportUiOpen() {
     if (!electronRuntime || !window.mioDesktop || !window.mioDesktop.setUiOpen) return
-    // UI 打开 = 任一模态面板可见（含 A7 角色图库——历史漏报导致图库点击全穿透）
+    // UI 打开 = 任一模态面板可见（含 A7 角色图库 + 不透明度面板——历史漏报导致点击全穿透）
     let galleryOpen = false
     try {
       const g = document.getElementById('pet-gallery')
       galleryOpen = Boolean(g && !g.hidden)
     } catch (_) {}
-    const open = !contextMenu.hidden || !sizePanel.hidden || galleryOpen
+    const opacityOpen = Boolean(opacityPanel && !opacityPanel.hidden)
+    const open = !contextMenu.hidden || !sizePanel.hidden || galleryOpen || opacityOpen
     if (open === lastUiOpenReport) return
     lastUiOpenReport = open
     window.mioDesktop.setUiOpen(open)
@@ -3282,14 +3286,19 @@
   document.addEventListener('pointerdown', (event) => {
     if (!contextMenu.contains(event.target)) contextMenu.hidden = true
     if (!sizePanel.contains(event.target) && event.target?.dataset?.action !== 'size') sizePanel.hidden = true
+    // ★ 不透明度面板同样「点外部/点其它菜单项就收起」
+    if (opacityPanel && !opacityPanel.contains(event.target) && event.target?.dataset?.action !== 'opacity') opacityPanel.hidden = true
   })
 
-  function positionSizePanelNear(event) {
-    const rect = sizePanel.getBoundingClientRect()
+  // ★ 定位某个面板到点击位置旁（sizePanel / opacityPanel 复用）
+  function positionSizePanelNear(event, panelEl) {
+    const p = panelEl || sizePanel
+    if (!p) return
+    const rect = p.getBoundingClientRect()
     const px = Number(event?.clientX ?? window.innerWidth - rect.width - 16)
     const py = Number(event?.clientY ?? window.innerHeight - rect.height - 16)
-    sizePanel.style.left = `${Math.max(8, Math.min(window.innerWidth - rect.width - 8, px))}px`
-    sizePanel.style.top = `${Math.max(8, Math.min(window.innerHeight - rect.height - 8, py))}px`
+    p.style.left = `${Math.max(8, Math.min(window.innerWidth - rect.width - 8, px))}px`
+    p.style.top = `${Math.max(8, Math.min(window.innerHeight - rect.height - 8, py))}px`
   }
 
   // A7 角色图库：条目来自既有 models 接口（含 preview_url），本函数只做定位
@@ -3350,6 +3359,14 @@
     if (action === 'size') {
       sizePanel.hidden = false
       positionSizePanelNear(event)
+    }
+    if (action === 'opacity') {
+      // ★ 调整不透明度（2026-10-17 复用「调整大小」面板逻辑）
+      const cur = Number(settings.live2d_pet_opacity ?? 100)
+      opacitySlider.value = String(Math.max(10, Math.min(100, cur)))
+      opacityValue.value = `${opacitySlider.value}%`
+      opacityPanel.hidden = false
+      positionSizePanelNear(event, opacityPanel)
     }
     if (action === 'gallery') {
       // A7：桌宠内直接换形象（不必打开管理页）
@@ -3537,6 +3554,55 @@
     window.clearTimeout(sizeCommitTimer)
     const bridge = await waitForBridge()
     await bridge.set_size(Number(sizeSlider.value))
+  })
+
+  // ★ 调整不透明度（2026-10-17 复用「调整大小」面板逻辑）：
+  //   header 拖动 + slider 实时设模型 alpha + 防抖写回后端。
+  let opacityCommitTimer = null
+  const opacityHeader = document.getElementById('opacity-panel-header')
+  let opacityDrag = null
+  opacityHeader?.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0) return
+    opacityDrag = {
+      pointerId: event.pointerId, startX: event.clientX, startY: event.clientY,
+      left: opacityPanel.offsetLeft, top: opacityPanel.offsetTop,
+    }
+    try { opacityHeader.setPointerCapture(event.pointerId) } catch (_) {}
+  })
+  opacityHeader?.addEventListener('pointermove', (event) => {
+    if (!opacityDrag || opacityDrag.pointerId !== event.pointerId) return
+    const dx = event.clientX - opacityDrag.startX
+    const dy = event.clientY - opacityDrag.startY
+    const rect = opacityPanel.getBoundingClientRect()
+    opacityPanel.style.left = `${Math.max(4, Math.min(window.innerWidth - rect.width - 4, opacityDrag.left + dx))}px`
+    opacityPanel.style.top = `${Math.max(4, Math.min(window.innerHeight - rect.height - 4, opacityDrag.top + dy))}px`
+  })
+  const endOpacityDrag = (event) => {
+    if (opacityDrag && opacityDrag.pointerId === event.pointerId) opacityDrag = null
+  }
+  opacityHeader?.addEventListener('pointerup', endOpacityDrag)
+  opacityHeader?.addEventListener('pointercancel', endOpacityDrag)
+
+  opacitySlider.addEventListener('pointerdown', (event) => {
+    try { opacitySlider.setPointerCapture(event.pointerId) } catch (_) {}
+  })
+  opacitySlider.addEventListener('pointerup', (event) => {
+    try { opacitySlider.releasePointerCapture(event.pointerId) } catch (_) {}
+  })
+  opacitySlider.addEventListener('input', () => {
+    const pct = Number(opacitySlider.value)
+    opacityValue.value = `${pct}%`
+    settings.live2d_pet_opacity = pct
+    // 实时生效：只改模型 alpha，气泡/徽标/横条不受影响
+    if (model) model.alpha = Math.max(0.1, Math.min(1, pct / 100))
+    window.clearTimeout(opacityCommitTimer)
+    opacityCommitTimer = window.setTimeout(async () => {
+      try { await persistCompanionSetting('live2d_pet_opacity', pct) } catch (_) {}
+    }, 200)
+  })
+  opacitySlider.addEventListener('change', async () => {
+    window.clearTimeout(opacityCommitTimer)
+    try { await persistCompanionSetting('live2d_pet_opacity', Number(opacitySlider.value)) } catch (_) {}
   })
 
   window.addEventListener('resize', fitModel)
