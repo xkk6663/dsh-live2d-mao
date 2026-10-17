@@ -3804,15 +3804,14 @@
       el.style.height = `${r * 1.45}em`
       el.style.maxHeight = 'none'
       if (textEl) {
-        textEl.style.whiteSpace = r === 1 ? 'nowrap' : 'normal'
         textEl.style.height = `${r * 1.4}em`
-        textEl.style.overflowY = r === 1 ? 'hidden' : 'hidden'
+        // white-space 交给 CSS（normal 换行为主）；rows=1 的滚动字幕
+        // 由 render() 检测溢出后切 .marquee 类，这里不强制。
       }
     }
-    safe(() => {
-      const saved = Number(window.localStorage.getItem(KEY_WIDTH))
-      if (Number.isFinite(saved) && saved > 0) applyWidth(saved)
-    })
+    // 启动时**不再**从 localStorage 套用旧的手动拉伸值（2026-10-17 终版语义）：
+    // 宽度由「设置页默认宽度 >0 → 固定；否则 CSS 默认 420px」决定，文字在框内换行。
+    // 用户手动拉伸只在拖动会话内生效（临时），避免旧的疯长宽度一直残留。
 
     // 主题：与泡泡皮肤同一套 id（default/mono/navy/…），类名用 strip-style-*
     let styleId = 'default'
@@ -3931,20 +3930,27 @@
       if (textEl) {
         // 用 innerHTML 才能让 <code> 生效；renderStripText 已整体转义，安全。
         textEl.innerHTML = renderStripText(buffer)
-        // ★ 滚动字幕（2026-10-17 用户要求）：append 后滚到最右，让新字始终在
-        //   右端可见、旧字被左边界裁掉自然"滑出"。滚动要在 innerHTML 之后、
-        //   且需要浏览器先排版，故下一帧再滚（否则 scrollWidth 还是旧值）。
+        // ★ 滚动字幕（2026-10-17 终版）：**只在单行(1行)且文字真溢出时**才启用——
+        //   加 .marquee（nowrap）后下一帧滚到最右，新字右端出现、旧字左边界滑出。
+        //   多行模式正常换行，不滚动。之前无条件 nowrap + 无宽度上限，
+        //   导致横条随文字无限变长、永不换行（用户实测反馈）。
         window.requestAnimationFrame(() => {
-          if (textEl) textEl.scrollLeft = textEl.scrollWidth
+          if (!textEl || !visible) return
+          const overflow = textEl.scrollWidth > textEl.clientWidth + 1
+          if (rows === 1 && overflow) {
+            el.classList.add('marquee')
+            textEl.scrollLeft = textEl.scrollWidth
+          } else {
+            el.classList.remove('marquee')
+            textEl.scrollLeft = 0
+          }
         })
       }
       el.hidden = false
       visible = true
-      // ★ 个性化默认值（2026-10-17）：显示时应用默认宽度与行数。
-      //   语义：设置页给了默认宽度(>0) 就按它；否则用"上次手动拉伸"的值；都没有则自适应。
-      const manualW = Number(safe(() => window.localStorage.getItem(KEY_WIDTH), 0))
+      // ★ 宽度语义（终版）：设置页默认宽 >0 → 固定它；否则回 CSS 默认 420px
+      //   （文字在框内换行，横条不随内容疯长）。手动拉伸只在用户拖手柄时生效。
       if (defaultWidth > 0) applyWidth(defaultWidth)
-      else if (manualW > 0) applyWidth(manualW)
       if (rows > 0) applyRows(rows)
       // 横条可见 ⇒ 上报命中区（主进程按区域关穿透）。**不要**在这里
       // setInteractive(true)：那是整窗开关，会把屏幕全挡住。
@@ -4006,7 +4012,9 @@
 
     // ── 左右拉伸：用户要求"流式气泡的左右大小应该可手动拉伸"（2026-10-17）──
     //  两个贴边窄手柄各自独立拖：拖左手柄改左边位置+反算宽度，拖右手柄只改宽度。
-    //  用 pointer capture 保证拖出手柄外仍跟手；结束时把宽度落 localStorage 持久化。
+    //  用 pointer capture 保证拖出手柄外仍跟手。
+    //  ★ 终版语义：拉伸宽度是**本会话临时值**，不再写 localStorage 持久化——
+    //    固定宽度交给设置页「默认宽度」（跨会话）；否则用 CSS 默认 420px 换行。
     safe(() => {
       grips.forEach((grip) => {
         const side = grip.getAttribute('data-strip-grip')
@@ -4031,6 +4039,8 @@
               el.style.left = `${startLeft + (startW - w)}px`
               el.style.right = 'auto'
             }
+            // 宽度变了：退出滚动字幕态（下一帧 render 会重算是否溢出）
+            el.classList.remove('marquee')
             // 拉伸中矩形在变：同步命中区
             reportStripBounds()
           }
@@ -4040,11 +4050,6 @@
             grip.removeEventListener('pointermove', onMove)
             grip.removeEventListener('pointerup', onUp)
             grip.removeEventListener('pointercancel', onUp)
-            // 持久化宽度（位置由既有拖动逻辑持久化，这里只存宽）
-            safe(() => {
-              const w = Math.round(el.getBoundingClientRect().width)
-              window.localStorage.setItem(KEY_WIDTH, String(clampWidth(w)))
-            })
           }
           grip.addEventListener('pointermove', onMove)
           grip.addEventListener('pointerup', onUp)

@@ -235,8 +235,15 @@ function loadRuntimeState() {
 function saveRuntimeState(changes) {
   const state = { ...loadRuntimeState(), ...changes }
   const temporary = `${STATE_PATH}.tmp`
-  fs.writeFileSync(temporary, JSON.stringify(state, null, 2), 'utf8')
-  fs.renameSync(temporary, STATE_PATH)
+  // ★ 容错（2026-10-17）：写状态失败（EPERM/磁盘/占用）**绝不能**让未捕获异常
+  //   弹"A JavaScript error in the main process"把桌宠卡死——状态只是 UI 偏好
+  //   （点击穿透锁定/模型选择等），写失败仅记日志，桌宠继续跑。
+  try {
+    fs.writeFileSync(temporary, JSON.stringify(state, null, 2), 'utf8')
+    fs.renameSync(temporary, STATE_PATH)
+  } catch (err) {
+    console.error('[state] saveRuntimeState 失败（已忽略，桌宠继续运行）:', err.message)
+  }
   return state
 }
 

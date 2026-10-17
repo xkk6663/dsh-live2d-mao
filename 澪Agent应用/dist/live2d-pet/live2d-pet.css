@@ -718,9 +718,11 @@ body,
   display: flex;
   align-items: center;
   gap: 6px;
-  /* 宽度：默认按内容自适应；**用户拉伸过就固定像素宽**（JS 写 style.width）。
-     用户要求"无限拉长、任意控制长度"（2026-10-17）：上限只受屏幕宽度约束。 */
-  width: max-content;
+  /* 宽度语义（2026-10-17 终版）：
+     - 默认（未设默认宽、未拉伸）：**固定 420px**，文字在框内换行，横条不随内容疯长；
+     - 设置页设了默认宽度 / 用户手动拉伸：JS 写 style.width 固定像素；
+     - 上限只受屏幕宽度约束。之前 width:max-content + nowrap 会让横条随文字无限变长。 */
+  width: 420px;
   min-width: 150px;
   max-width: calc(100vw - 24px);
   padding: 6px 8px 6px 12px;
@@ -748,19 +750,22 @@ body,
 
 .pet-strip #pet-strip-text {
   display: block;
-  /* ★ 横条个性化（2026-10-17 用户需求）：高度/行数由设置页控制，JS 写 inline。
-     rows=1 时单行滚动字幕（nowrap + 横向滚出）；rows>1 时换行填满 N 行、超出的纵向裁掉。
-     默认 1 行，高度由 JS applyRows 写 inline 覆盖。 */
+  /* ★ 横条文字（2026-10-17 终版）：正常换行填满 N 行（行数由设置页控制），
+     超出的行裁掉。多行换行是**主行为**；只有 rows=1 且文字超一行时才走
+     滚动字幕（JS 检测溢出后加 .marquee 切 nowrap+滚动）。 */
   max-width: none;
   width: 100%;
   height: 1.4em;           /* 默认一行高（被 JS inline 覆盖） */
   line-height: 1.4em;
-  overflow-x: hidden;      /* 横向滚出的旧字由左边界裁掉 */
-  overflow-y: hidden;      /* 纵向超出的行裁掉 */
-  white-space: nowrap;     /* 默认单行（JS 按 rows>1 切 normal） */
+  overflow: hidden;
+  white-space: normal;     /* ★ 换行为主（不再永远 nowrap） */
   word-break: break-word;
   min-width: 0;
   flex: 1 1 auto;
+}
+/* 滚动字幕态（JS 加/删）：单行 + 横向滚动，新字右端出现、旧字左边界滑出 */
+.pet-strip.marquee #pet-strip-text {
+  white-space: nowrap;
 }
 
 /* ★ 内联代码药丸（用户 2026-10-17 反馈）：把 `/api/xiaozhi/ws` 这类路径/代码段
