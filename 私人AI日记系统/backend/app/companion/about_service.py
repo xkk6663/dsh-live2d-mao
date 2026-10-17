@@ -138,23 +138,26 @@ def _pet_ws_status(pet_event_service: Any) -> dict[str, Any]:
 def check_update(current: str, *, timeout: float = 6.0) -> dict[str, Any]:
     """检查更新（**只在用户主动点击时调用**；不联网时不产生任何请求）。
 
-    数据源：PyPI 上的 ``mio-companion``（若该项目未发布，则如实返回"未接入"）。
-    刻意不猜 URL、不爬网页：拿不到就报"未接入"，比返回假版本号安全。
+    数据源（2026-10-17 改）：npm 上的 ``dsh-live2d-mao``。
+    本项目是 DSH 插件，发布/更新统一走 npm（dshmarket 市场也盯 npm 的 latest dist-tag），
+    故版本源收敛到 npm，与市场、`dsh plugin add` 三者一致。
+    原实现查 PyPI 的 ``mio-companion``（Mao 时代的旧包名，从未发布），
+    永远返回"未接入"，等于失效 —— 已移除。
     """
-    pkg = "mio-companion"
-    url = f"https://pypi.org/pypi/{pkg}/json"
+    pkg = "dsh-live2d-mao"
+    url = f"https://registry.npmjs.org/{pkg}/latest"
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Mio-Pet/1.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "dsh-live2d-mao/1.0"})
         with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
             data = json.loads(resp.read().decode("utf-8"))
-        latest = str((data.get("info") or {}).get("version") or "").strip()
+        latest = str((data or {}).get("version") or "").strip()
         if not latest:
-            return {"ok": True, "checked": True, "source": "pypi", "current": current,
-                    "latest": "", "has_update": False, "note": "上游未返回版本号"}
+            return {"ok": True, "checked": True, "source": "npm", "current": current,
+                    "latest": "", "has_update": False, "note": "npm 未返回版本号"}
         return {
             "ok": True,
             "checked": True,
-            "source": "pypi",
+            "source": "npm",
             "current": current,
             "latest": latest,
             "has_update": _is_newer(latest, current),
@@ -162,13 +165,13 @@ def check_update(current: str, *, timeout: float = 6.0) -> dict[str, Any]:
         }
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
-            return {"ok": True, "checked": True, "source": "pypi", "current": current,
+            return {"ok": True, "checked": True, "source": "npm", "current": current,
                     "latest": "", "has_update": False,
-                    "note": "本项目未发布到 PyPI，更新检查未接入（不影响使用）"}
+                    "note": "npm 上未找到 dsh-live2d-mao，更新检查未接入（不影响使用）"}
         return {"ok": False, "checked": True, "note": f"上游返回 HTTP {exc.code}"}
     except Exception as exc:  # noqa: BLE001
         # 网络不可用是**正常情况**（离线/内网），不是错误，故 ok=True 但注明未检查
-        return {"ok": True, "checked": False, "source": "pypi", "current": current,
+        return {"ok": True, "checked": False, "source": "npm", "current": current,
                 "latest": "", "has_update": False,
                 "note": f"网络不可用，已跳过：{type(exc).__name__}"}
 
