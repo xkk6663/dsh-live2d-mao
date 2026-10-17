@@ -3,7 +3,7 @@
 # 用法（等仓库满 1 天后再做，即 2026-10-18 13:53 之后）：
 #   1. fork https://github.com/awesome-dsh-plugin/awesome-dsh-plugin
 #   2. 在 fork 里新建 data/plugins/xkk6663__dsh-live2d-mao.yml
-#      内容就是下面 "投稿内容" 之后的部分（本注释头不要带过去）
+#      内容就是下面注释头之后的部分（本注释头不要带过去）
 #   3. 提 PR，标题：Add dsh-live2d-mao (DSH-specialized Live2D desktop pet)
 #
 # 文件名规则：data/plugins/<owner>__<repo>.yml（双下划线）
@@ -14,11 +14,11 @@
 #     · 截图 → 读本仓库 package.json 旁的 screenshots.json（probe-screenshots.mjs）
 #     · 能力清单 → 按代码重算
 #
-# 卖点排序（面向「想不想装」的用户）：无需 token → 一键接通 → 实时状态 → 交互与形象。
-# 12 态 / 3 条独立通路 / 数量词均已对代码核实，维护者会逐条比对。
+# 写法对标 catalog 里同类桌面挂件的紧凑风格：定位句 + 冒号 + 斜杠分组特性，不写完整解释。
+# 数量词均已对代码核实（维护者会逐条数）：12 态 / 8 款模型 / 7 类音效。
 url: https://github.com/xkk6663/dsh-live2d-mao
 name: xkk6663/dsh-live2d-mao
 category: fun
 description:
-  en: 'A Live2D desktop pet that mirrors DeepSeek Harness work state in real time. No API key, token or account: it reads only your local DSH session logs and plugin events, so it works the moment DSH is running and never calls a cloud endpoint. A real skeletal Live2D model (Cubism 4) lives in its own desktop window, driven by a 12-phase bus - planning, thinking, executing-tool, streaming, waiting-input, awaiting-approval, complete, error, paused, idle, heartbeat - so the animation, head badge and eye tracking all follow the actual turn, not a timer. Three independent channels: a tool-status bubble that names the tool in use, a token-by-token streaming strip that carries reply text with code highlighting and scrollback, and a head badge that changes colour per phase (each colour customisable). Plus drag with inertia, lock position, Shift-drag to avoid mis-taps, 10-100% opacity, 8 built-in models with per-model motion and expression slot binding, and 7 event sounds.'
-  zh: '把 DeepSeek Harness 的工作状态实时变成桌面上的 Live2D 看板娘。不需要 API Key、token 或账号：只读本机 DSH 会话日志与插件事件，DSH 一跑起来就生效，不向任何云端端点发请求。真实骨骼动画（Cubism 4）住在独立桌宠窗口里，由 12 态总线驱动——规划、思考中、执行工具、回复中、聆听中、待确认、完成、出错、暂停、待机、在线，动画、头顶徽标与视线都跟着真实轮次走而不是定时器。三条独立通路：工具状态气泡直接点名正在用的工具；逐 token 流式横条承载回复正文，带代码高亮与历史滚动；头顶徽标按状态变色（每态颜色可自定义）。另有拖拽惯性、锁定位置、Shift 防误拖、10-100% 不透明度、8 款内置模型（支持逐模型绑定动作与表情槽位）和 7 类事件音效。'
+  en: 'DSH desktop Live2D pet that needs no API key or token. 12-phase real-time state (planning/thinking/executing-tool/streaming/waiting-input/awaiting-approval/complete/error), tool-status bubble naming the tool in use, token-by-token streaming strip with code highlighting and scrollback, phase-coloured head badge with per-phase custom colours, per-model motion/expression slot binding, 8 built-in models, drag inertia, lock position, Shift-drag, 10-100% opacity, eye tracking, 7 event sounds.'
+  zh: 'DSH 桌面右下角的 Live2D 桌宠，无需 API Key/token：12 态实时工作状态(规划/思考中/执行工具/回复中/聆听中/待确认/完成/出错)、工具气泡(点名正在用的工具)、逐 token 流式横条(代码高亮/历史滚动)、状态徽标(每态颜色可自定义)、逐模型动作表情绑定、8 款内置模型、拖拽惯性/锁定位置/Shift 防误拖/不透明度/视线跟随、7 类音效。'
