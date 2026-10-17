@@ -5,6 +5,17 @@
 
 ---
 
+## v1.0.1（2026-10-17）· **市场展示资源**：5 张实拍截图 + screenshots.json
+
+- **市场展示**：新增 `screenshots.json` + `assets/` 5 张实拍截图（桌宠界面展示 / 12 态面板 / 动作表情 / 主题设置 / 模型库），
+  供 dsh-market 以 AppStore 风格画廊展示；`files` 清单补 `screenshots.json` + `assets`
+- **署名更正**（法律相关）：`whale-deepseek` 模型即 **DS 鲸鱼娘**，作者 B站 **@氵六青**，
+  许可 **CC BY-NC-SA 4.0**；角色版权链 **上善无形**（原作 OC「溟月」）→ **ZipZipPipe**（DeepSeek 女仆二创）→ **氵六青**（本模型）。
+  `PROVENANCE.md` 同步更正——icon.png 实际由鲸鱼娘待机画面裁切（属「改编」，须按 SA 共享），原写作「大肥鱼立绘」有误
+- **README 致谢**：补 A8Chann/dsh-pet-live2d（架构参考 + 模型分发致谢）
+- **更新检查修复**：`check_update` 数据源从 PyPI 旧包名 `mio-companion`（从未发布，恒显「未接入」）改为 **npm `dsh-live2d-mao`**
+- **GitHub**：推送至 `xkk6663/dsh-live2d-mao`，topics 加 `dsh-plugin`（市场上架硬性要求）
+
 ## v1.0.0（2026-10-17）· **DSH 专用化正式版**：插件改名 + 合并身份 + 发布就绪
 
 - **插件更名**：`mao-pet` → `dsh-live2d-mao`（npm 包名 + cordis id + 目录名），显示名 DSH-Live2D-Mao
