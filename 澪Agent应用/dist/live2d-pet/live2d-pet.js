@@ -3795,18 +3795,19 @@
       el.style.maxWidth = 'none'   // 显式宽度优先，避免被 max-width 再夹一次
       el.classList.add('resized')
     }
-    // ★ 行数（个性化，2026-10-17）：把横条高度设成 N 行（1-5）。rows=1 → 单行滚动字幕
-    //   （nowrap + 横向滚出）；rows>1 → 换行填满 N 行、超出纵向裁掉。height/white-space
-    //   写 inline 优先于 CSS 默认。
+    // ★ 行数（个性化，2026-10-17 最终裁决）：N 是**最大显示行数上限**。
+    //   文字**正常换行**、横条高度随内容自然生长，最多显示 N 行、超出裁掉。
+    //   （之前把高度写死 N 行 + rows 默认 1，文字换行第二行就被裁掉，
+    //   看起来像"不会换行"——正是用户报的 BUG 根因。）
     function applyRows(n) {
       if (!el) return
       const r = Math.max(1, Math.min(5, Math.round(Number(n) || 1)))
-      el.style.height = `${r * 1.45}em`
-      el.style.maxHeight = 'none'
+      // 横条本体高度自适应内容，只设最大高度（N 行 + padding 余量）
+      el.style.height = 'auto'
+      el.style.maxHeight = `${r * 1.45 + 0.7}em`
       if (textEl) {
-        textEl.style.height = `${r * 1.4}em`
-        // white-space 交给 CSS（normal 换行为主）；rows=1 的滚动字幕
-        // 由 render() 检测溢出后切 .marquee 类，这里不强制。
+        textEl.style.height = 'auto'
+        textEl.style.maxHeight = `${r * 1.4}em`
       }
     }
     // 启动时**不再**从 localStorage 套用旧的手动拉伸值（2026-10-17 终版语义）：
@@ -3930,30 +3931,18 @@
       if (textEl) {
         // 用 innerHTML 才能让 <code> 生效；renderStripText 已整体转义，安全。
         textEl.innerHTML = renderStripText(buffer)
-        // ★ 滚动字幕（2026-10-17 终版）：**只在单行(1行)且文字真溢出时**才启用——
-        //   加 .marquee（nowrap）后下一帧滚到最右，新字右端出现、旧字左边界滑出。
-        //   多行模式正常换行，不滚动。之前无条件 nowrap + 无宽度上限，
-        //   导致横条随文字无限变长、永不换行（用户实测反馈）。
-        window.requestAnimationFrame(() => {
-          if (!textEl || !visible) return
-          const overflow = textEl.scrollWidth > textEl.clientWidth + 1
-          if (rows === 1 && overflow) {
-            el.classList.add('marquee')
-            textEl.scrollLeft = textEl.scrollWidth
-          } else {
-            el.classList.remove('marquee')
-            textEl.scrollLeft = 0
-          }
-        })
+        // ★ 文字**始终正常换行**（2026-10-17 最终裁决）：用户明确要换行，
+        //   不要滚动字幕。之前"单行溢出就切 nowrap 滚动"会把换行压成单行，
+        //   正是"文字无法正常换行"的根因。这里不再切换 marquee，交给 CSS
+        //   white-space:normal + word-break:break-word 正常断行。
       }
       el.hidden = false
       visible = true
-      // ★ 宽度语义（终版）：设置页默认宽 >0 → 固定它；否则回 CSS 默认 420px
-      //   （文字在框内换行，横条不随内容疯长）。手动拉伸只在用户拖手柄时生效。
+      // ★ 宽度语义（终版）：设置页默认宽 >0 → 固定它；否则 CSS 默认 420px
+      //   （文字在框内换行，横条不随内容疯长）。
       if (defaultWidth > 0) applyWidth(defaultWidth)
       if (rows > 0) applyRows(rows)
-      // 横条可见 ⇒ 上报命中区（主进程按区域关穿透）。**不要**在这里
-      // setInteractive(true)：那是整窗开关，会把屏幕全挡住。
+      // 横条可见 ⇒ 上报命中区（主进程按区域关穿透）。
       reportStripBounds()
     }
 

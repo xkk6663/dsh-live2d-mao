@@ -716,7 +716,7 @@ body,
   top: 8px;
   left: 8px;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 6px;
   /* 宽度语义（2026-10-17 终版）：
      - 默认（未设默认宽、未拉伸）：**固定 420px**，文字在框内换行，横条不随内容疯长；
@@ -729,7 +729,7 @@ body,
   color: var(--bubble-ink);
   background: var(--bubble-bg);
   border: 1px solid var(--bubble-border);
-  border-radius: 999px;
+  border-radius: 14px;   /* 多行友好的圆角矩形（原 999px 胶囊在多行时变形） */
   box-shadow: var(--bubble-shadow);
   font-size: 12px;
   line-height: 1.45;
@@ -750,22 +750,18 @@ body,
 
 .pet-strip #pet-strip-text {
   display: block;
-  /* ★ 横条文字（2026-10-17 终版）：正常换行填满 N 行（行数由设置页控制），
-     超出的行裁掉。多行换行是**主行为**；只有 rows=1 且文字超一行时才走
-     滚动字幕（JS 检测溢出后加 .marquee 切 nowrap+滚动）。 */
+  /* ★ 横条文字（2026-10-17 最终裁决）：**始终正常换行**，高度随内容自然生长，
+     最多显示 N 行（设置页「显示行数」= 上限）、超出裁掉。 */
   max-width: none;
   width: 100%;
-  height: 1.4em;           /* 默认一行高（被 JS inline 覆盖） */
+  height: auto;            /* 自适应内容高度（不再锁一行） */
   line-height: 1.4em;
   overflow: hidden;
-  white-space: normal;     /* ★ 换行为主（不再永远 nowrap） */
+  white-space: normal;     /* 正常换行 */
   word-break: break-word;
+  overflow-wrap: anywhere; /* 长路径/URL 也能断行 */
   min-width: 0;
   flex: 1 1 auto;
-}
-/* 滚动字幕态（JS 加/删）：单行 + 横向滚动，新字右端出现、旧字左边界滑出 */
-.pet-strip.marquee #pet-strip-text {
-  white-space: nowrap;
 }
 
 /* ★ 内联代码药丸（用户 2026-10-17 反馈）：把 `/api/xiaozhi/ws` 这类路径/代码段
