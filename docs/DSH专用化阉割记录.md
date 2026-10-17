@@ -128,6 +128,56 @@ DSH 专用化的**代码阉割**（阶段 1~3）已在此前提交完成；本�
 ## 6. 后续开发方向（建议，待用户裁决）
 
 1. **DSH 语音通路**（新功能，非复活小智）：当前 `voice` phase 为预留态。若要做 DSH 语音，走**新的 DSH 插件通路**（如 DSH 侧 TTS 事件 → 总线 → 桌宠口型），不碰旧 `pet-xz-audio.js`。
-2. **真机联调收尾**：`dsh_config.json` 是 gitignored 的本地环境文件，新 clone 需手动建（否则 DSH 显示「未启用」）；建议补一份 `dsh_config.example.json` 模板。
-3. **测试 harness 投递确认**：`e2e_stream_pet.cjs` 的 2 项具名豁免源于 harness 投递缺陷（evaluate 返回 ≠ 处理器跑到），建议把 push 改成「投递后页面回执确认」，可彻底移除豁免。
+2. ~~**dsh_config.example.json 模板**~~ ✅ 已补（`私人AI日记系统/dsh_config.example.json`，新 clone 照抄改名即可）。
+3. ~~**测试 harness 投递确认**~~ ✅ 已根治（push 改为「页面回执确认」，连跑 5/5 全绿，豁免降级为安全网）。
 4. **`audio_diag.py` 上游归因**：本次只在**本仓**加了白名单；上游 Mao 的 `.gitignore` 仍有同样的 `*_diag*.py` 误伤，若需可在 Mao 侧同步修（但不污染 Mao 仓库，需用户另行裁决）。
+
+---
+
+## 7. 阶段 4 之后的迭代（2026-10-17 下午）
+
+> 收口之后又按用户反馈做了多轮 UI 与启动修复，这里补记，避免后续接手重复踩坑。
+
+### 7.1 横条三修（`1bc40b2`）
+
+用户报三个横条 BUG，逐个修：
+
+| 问题 | 根因 | 修法 |
+|---|---|---|
+| 必须右键才能拖/关 | 横条可见时 `setInteractive(true)` 是**整窗**开关，被 mousemove 翻回穿透；只有右键菜单打开（menuOpen=true）才保持交互 | 照抄 modelBounds 的**区域命中**机制：渲染层上报横条矩形 `mio-desktop:strip-bounds`，主进程只在鼠标落进横条矩形时关穿透 |
+| 整屏被挡（B站播不了） | `setInteractive(true)` 让全屏透明窗口整体可交互，挡住横条后面整块屏幕 | 同上：区域命中代替整窗交互，横条之外照常穿透 |
+| 文字截断/拉长不铺满 | `#pet-strip-text` 写死 `max-width:260px; max-height:3.2em` | 去上限、flex:1 铺满、去掉内部滚动 |
+
+### 7.2 滚动字幕 + 外壳错仓库（`7f69090`）
+
+- **滚动字幕**：横条限高一行、单行不换行，append 后滚到最右，新字右端出现、旧字被左边界裁掉滑出。
+- **外壳错仓库**（双击/拖关不生效的真根因之一）：`restart_mio.ps1` 之前把 Electron 工作目录设成 electron.exe 所在仓库，本仓库 node_modules 缺失时回落到 **Mao 主仓库的 main.js**（没有区域命中/双击 DSH/strip-bounds 改动）。修正：工作目录固定指向本仓库 live2d-desktop。
+
+### 7.3 双击 DSH + dsh_config 模板 + E2E 回执（`5dd09c8`）
+
+- **双击桌宠直达 DSH 面板**：新 IPC `mio-desktop:open-dsh-panel` → 主进程打开管理窗并在其渲染层触发 `__mioDshPanel.show()`（带 6s 就绪重试）。
+- **`dsh_config.example.json`**：新 clone 照抄改名即可。
+- **E2E 回执确认**：`push` 改为「页面回执确认」投递，根治连跑偶发丢消息。
+
+### 7.4 ★ 外壳起不来的三层真根因（`5ee97b7`，最坑，务必记录）
+
+桌宠外壳改完 main.js 后**怎么都起不来**（electron 秒崩），逐层定位出三个叠加的根因：
+
+1. **`ELECTRON_RUN_AS_NODE=1`**（DSH 宿主环境变量）继承给 electron.exe → 退化成 node 模式（`bad option: --no-sandbox`、`require('electron')` 返回空、`app` undefined）。两个启动脚本开头必须 `Remove-Item env:ELECTRON_RUN_AS_NODE`。
+2. **本仓库 `pet-data/pet-instance` 无法创建 chromium 单实例锁**（`SingletonLock` Error 5）。Mao 目录有一条 AppContainer capability SID（`S-1-4-49512934-974561200`）的显式 Allow 规则，本仓库 git clone 缺失；`icacls`/`Set-Acl` 复制**无法稳定修复**。唯一可靠解：复用 Mao 主仓库的 `pet-data/pet-instance` 作为 electron userData（只存缓存/锁，不含源码，两仓库共享无害），状态数据仍走本仓库。
+3. **Electron 工作目录回落到 Mao**（见 7.2），导致加载 Mao 的旧 main.js。
+
+> 修复后验证：electron 的 `app-path` 指向本仓库 `Mao-dsh-pet\澪Agent应用\live2d-desktop`，5~6 进程稳定运行。
+> **启动方式**：用户桌面 `重启后端+一键拉起桌宠.cmd` → 调 `restart_mio.ps1`；改外壳（main.js/preload.js）后要 `-ForcePet`。
+
+### 7.5 横条个性化设置（`cd278fd9`）
+
+设置页新增「横条」tab（资料/桌宠/语音/泡泡/**横条**），三个控件，值走 `PATCH /api/companion/settings` → `settings_changed` → 桌宠热应用：
+
+| 键 | 控件 | 默认 | 说明 |
+|---|---|---|---|
+| `live2d_strip_width` | 宽度滑条 | 0 | 打开横条初始宽度；0=自适应，>0=固定像素 |
+| `live2d_strip_rows` | 行数滑条 | 1 | 横条一次显示几行；1=滚动字幕，多行=换行铺满 |
+| `live2d_strip_style` | 皮肤下拉 | default | 8 款配色，为「横条 UI 可更换」预留扩展点 |
+
+后端三处同步：`routes/companion.py` 写入白名单模型 + `companion_service.py` DEFAULT_CONFIG + 前端 `settings-panel-inject.js` settingsKeys。

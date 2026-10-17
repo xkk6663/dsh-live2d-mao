@@ -28,7 +28,7 @@
 | 辅助脚本 | `pet-sound.js`（音效）/ `pet-idle-talk.js`（空闲自语）/ `pet-gallery.js`（图库）/ `pet-bubble-styles.js`（皮肤）/ `pet-random-image.js` / `plugin-bus.js` |
 | Electron 窗口 | `澪Agent应用\live2d-desktop\main.js` 中 `mainWindow`（穿透判定 + 16Hz 鼠标推送） |
 
-> ⚠ **横条 `#pet-strip` 是核心 UI**：插件只能经 `window.__mioPetStrip`（`show/append/hide/isVisible/isDismissed/setEnabled/applyStyle/info`）访问，不得直接改 DOM。横条承载 DSH 流式正文，支持左右拉伸、拖动、✕ 关闭，内联代码（`` `code` `` / ``` 围栏 ```）渲染成药丸。
+> ⚠ **横条 `#pet-strip` 是核心 UI**：插件只能经 `window.__mioPetStrip`（`show/append/hide/isVisible/isDismissed/setEnabled/applyStyle/setDefaultWidth/setRows/info`）访问，不得直接改 DOM。横条承载 DSH 流式正文，支持左右拉伸（无限拉长）、拖动、✕ 关闭，内联代码（`` `code` `` / ``` 围栏 ```）渲染成药丸；**单行滚动字幕**（文字占满后旧字向左滑出）。个性化（默认宽度/行数/皮肤）在设置页「横条」tab 配置，经 `settings_changed` 热应用。
 
 ### 2.2 对话横条（点桌宠弹出）
 
@@ -50,7 +50,7 @@
 | 核心注入层 | `dist\core-inject\`（settings-panel-inject / bubble-panel-inject / agent-switch-inject / health-panel-inject 等） |
 | Electron 窗口 | `main.js` 中 `petAdminWindow` |
 
-> ⚠ **DSH 专用化（2026-10-17）**：`dist/plugins/` 现在**只剩 `dsh/`**（xiaozhi/octop 已删）；导航只剩「桌宠 / 设置 / DSH」三项；`ChatPage`（小智对话页）、`OnboardingPage`（六步质检）、「观察」tab、「截图提问」均已移除。
+> ⚠ **DSH 专用化（2026-10-17）**：`dist/plugins/` 现在**只剩 `dsh/`**（xiaozhi/octop 已删）；主导航只剩「桌宠 / 设置 / DSH」三项；`ChatPage`（小智对话页）、`OnboardingPage`（六步质检）、「观察」tab、「截图提问」均已移除。设置页 tab：资料 / 桌宠 / 语音 / 泡泡 / **横条**。**双击桌宠本体** = 直达 DSH 面板（走 `mio-desktop:open-dsh-panel`，主进程在管理窗渲染层触发 `__mioDshPanel.show()`）。
 
 ### 2.4 辅助文件（Electron 进程侧）
 
@@ -135,12 +135,18 @@
 | 项 | 位置 |
 |---|---|
 | 一键启动 | `start_mio.ps1`（后端 + Electron，幂等） |
-| 一键重启 | `restart_mio.ps1`（先 `taskkill /T /F` 停树再拉起，解决旧进程占 8000 端口） |
+| 一键重启 | `restart_mio.ps1`（先 `taskkill /T /F` 停树再拉起，解决旧进程占 8000 端口）；**改外壳（main.js/preload.js）后要加 `-ForcePet`** |
 | 桌宠数据目录 | `pet-data\Live2D桌宠`（后端与 Electron 经 `MIO_PET_STATE_DIR` 统一） |
 | 副屏边界 | `phys_bounds.ps1`（**被 main.js 引用，勿移**） |
 | DSH 自检 | `cd 私人AI日记系统\backend` → `.venv\Scripts\python.exe -m app.agents.dsh.dsh_adapter_selftest` |
 | 摄入自检 | `.venv\Scripts\python.exe -m app.agents.dsh.ingest_selftest` |
 | DSH 边车手测 | `node 私人AI日记系统\backend\app\agents\dsh\dsh_log_stream.mjs --once` |
+
+> ⚠ **桌宠外壳起不来的三层真根因**（2026-10-17 定位，后续接手必读，否则会重复踩）：
+> 1. `ELECTRON_RUN_AS_NODE=1`（DSH 宿主环境变量）继承给 electron.exe → 退化成 node 模式。启动脚本开头必须清掉。
+> 2. 本仓库 `pet-data/pet-instance` 无法创建 chromium 单实例锁（Error 5，Mao 目录有 AppContainer SID 的 Allow 规则、本仓库缺失且 ACL 复制无效）。脚本回落到 **Mao 的 pet-instance** 作 electron userData。
+> 3. Electron 工作目录必须固定指向本仓库 live2d-desktop（否则加载 Mao 的旧 main.js，双击 DSH / 横条区域命中全失效）。
+> 详见 `docs/DSH专用化阉割记录.md` §7.4。
 
 ---
 

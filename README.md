@@ -39,7 +39,7 @@
 | 🧩 **插件本体** | `packages/mao-pet`：Cordis 插件（npm 名 `mao-pet`），把 DSH 会话事件推成桌宠 phase/流式/横条 |
 | 📡 **12 态状态总线** | 后端 `agent_bus_service` 统一 12 phase（idle/planning/thinking/executing_tool/streaming/waiting_input/voice/complete/error/paused/awaiting_approval/heartbeat） |
 | ⚡ **逐 token 流式** | DSH 正文按上游**原始节奏**逐块铺进桌宠**横条**（不是整段弹出），收尾权威全文校正，零丢字零重复 |
-| 🗂️ **横条窗位** | `#pet-strip` 专属窗位：DSH 流式正文（含内联代码药丸着色）+ 左右可拉伸 + 可拖动 + ✕ 可关 |
+| 🗂️ **横条窗位** | `#pet-strip` 专属窗位：DSH 流式正文（含内联代码药丸着色 + 单行滚动字幕）+ 左右无限拉伸 + 可拖动 + ✕ 可关；默认宽度/行数/皮肤可在设置页「横条」tab 个性化 |
 | 👧 **Live2D 桌宠** | PixiJS + Cubism 渲染；内置模型分区管理、切换写穿服务端持久化、视线跟随、自由拖拽 |
 | 🎨 **泡泡工坊** | 8 款气泡皮肤 + 点击互动序列 + 图片素材库 + 音效事件（波形裁剪），均归桌宠主体、插件只经 `window.__mioPetBubble` 说话 |
 | ✅ **审批 / 提问应答** | `awaiting_approval` / `waiting_input` phase 驱动桌宠动画与徽标；插件侧 `approval` / `questions` 模块 |
@@ -176,6 +176,6 @@ dsh plugin --profile desktop add link:C:\Users\xiao1\Mao-dsh-pet\packages\mao-pe
 | `docs/M7-协议测绘-源码级.md` | M7 协议测绘（源码级，DSH 事件→phase 映射） |
 | `docs/M7-7.6-横条通道契约.md` / `M7-7.6-实现报告.md` | 横条「最后一公里」契约与实现 |
 
-**更新记录**：DSH 专用化系列提交见 `git log`（`dsh-only-slim` 分支）：7.6 横条接通 → DSH 插件线 v0.1 → 三条通路独立 → 阶段1 删质检 → 阶段2 后端阉割 → 阶段3 前端阉割 → DSH 面板+设置修复 → 流式对齐 → 方案A 删净小智资源 → 本次收口。
+**更新记录**：DSH 专用化系列提交见 `git log`（`dsh-only-slim` 分支）：7.6 横条接通 → DSH 插件线 v0.1 → 三条通路独立 → 阶段1 删质检 → 阶段2 后端阉割 → 阶段3 前端阉割 → DSH 面板+设置修复 → 流式对齐 → 方案A 删净小智资源 → 收口清理 → 横条三修（区域命中/无限拉伸/代码着色）→ 滚动字幕 → 双击 DSH + dsh_config 模板 + E2E 回执 → 外壳三层真根因修复 → 横条个性化设置。
 
 **开发守则**：改界面先查 `SRC-MAP-源码地图.md`。Vue 源码改 `src/` 后 `npm run build:dist` 重建；手写注入层（`dist/core-inject`/`kernel`/`plugins`/`live2d-pet`）直接改并升 `?v=`。改后端 `python -m py_compile` 校验。
