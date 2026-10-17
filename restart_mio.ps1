@@ -21,6 +21,9 @@
 param(
     # 只重启后端，跳过桌宠那一步
     [switch]$SkipPet,
+    # 强制重启桌宠（即使已在运行）。改过 main.js / preload.js（Electron 外壳）
+    # 后必须用它，否则运行中的旧外壳不会加载新代码。
+    [switch]$ForcePet,
     # 等待后端就绪的最长秒数（默认 30，venv 兜底会再等 20）
     [int]$ReadyTimeoutSec = 30
 )
@@ -61,12 +64,23 @@ foreach ($cand in $electronCandidates) {
     if (Test-Path $cand) { $electronExe = $cand; break }
 }
 # electron.exe -> dist -> electron -> node_modules -> live2d-desktop（即工作目录）
-$electronWorkDir = $null
-if ($electronExe) {
-    $d = Split-Path -Parent $electronExe   # dist
-    $d = Split-Path -Parent $d             # electron
-    $d = Split-Path -Parent $d             # node_modules
-    $electronWorkDir = Split-Path -Parent $d
+#
+# ★ 关键修正（2026-10-17）：Electron **工作目录决定它加载哪份 main.js/preload.js**。
+#   之前的逻辑把工作目录设成"electron.exe 所在仓库的 live2d-desktop"，于是当本仓库
+#   node_modules 缺失、electron.exe 回落到 Mao 主仓库时，外壳跑的是 **Mao 的 main.js**
+#   —— Mao 的 main.js 没有本仓库的横条区域命中 / 双击 DSH / strip-bounds 等改动，
+#   表现为"双击没反应、要右键才能拖/关"。
+#   修正：electron.exe 二进制可以复用 Mao 的（node_modules 没进版本库），但**工作目录
+#   必须固定指向本仓库的 live2d-desktop**，让 main.js/preload.js 一定用本仓库那份。
+$electronWorkDir = Join-Path $root '澪Agent应用\live2d-desktop'
+if (-not (Test-Path (Join-Path $electronWorkDir 'main.js'))) {
+    # 兜底：本仓库 live2d-desktop 不存在时再回落（理论上不该发生）
+    if ($electronExe) {
+        $d = Split-Path -Parent $electronExe   # dist
+        $d = Split-Path -Parent $d             # electron
+        $d = Split-Path -Parent $d             # node_modules
+        $electronWorkDir = Split-Path -Parent $d
+    }
 }
 
 # 就绪探测用 /api/companion/agents（纯读总线，稳定）；
@@ -313,12 +327,27 @@ if ($SkipPet) {
     Write-Step '[4/4] -SkipPet：不动桌宠'
 } else {
     $electronRunning = [bool](Get-Process -Name electron -ErrorAction SilentlyContinue)
-    if ($electronRunning) {
+    if ($electronRunning -and -not $ForcePet) {
         # 有意**不重启**桌宠：重启后端只让 WS 短暂断开，桌宠会自动重连，
         # 重启窗口会打断用户正在看的东西（且窗口是用户手动起的）。
         Write-Step '[4/4] 桌宠已在运行，跳过（后端重启后它会自动重连 WS）'
         Write-Host '      提示：若要让页面内容用本次改动，请刷新桌宠窗口（Ctrl+R）或手动重开；' -ForegroundColor DarkGray
         Write-Host '            页面由后端静态托管，后端已换成新仓库，但旧页面仍在内存里。' -ForegroundColor DarkGray
+        Write-Host '      ⚠ 若改动的是 Electron 外壳（main.js/preload.js），刷新无效，' -ForegroundColor Yellow
+        Write-Host '        必须加 -ForcePet 重启：pwsh ... restart_mio.ps1 -ForcePet' -ForegroundColor Yellow
+    } elseif ($electronRunning -and $ForcePet) {
+        Write-Step '[4/4] -ForcePet：强制重启桌宠外壳（加载新 main.js/preload.js）'
+        # 关掉所有 electron 桌宠窗口（Mao 与本仓库共用的外壳都属桌宠，安全杀掉）
+        Get-Process -Name electron -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 800
+        if ($electronExe -and (Test-Path $electronExe) -and $electronWorkDir) {
+            Write-Host "      外壳: $electronExe" -ForegroundColor DarkGray
+            Write-Host "      工作目录: $electronWorkDir" -ForegroundColor DarkGray
+            $petPid = Start-Wmi $electronExe '--no-sandbox .' $electronWorkDir
+            Write-Step "      桌宠窗口已拉起 (pid=$petPid)，几秒内出现"
+        } else {
+            Write-Warn2 '      找不到 electron.exe 或本仓库 live2d-desktop'
+        }
     } else {
         Write-Step '[4/4] 桌宠未运行，正在启动...'
         if ($electronExe -and (Test-Path $electronExe) -and $electronWorkDir) {

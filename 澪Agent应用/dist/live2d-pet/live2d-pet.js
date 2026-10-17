@@ -3905,7 +3905,12 @@
       if (textEl) {
         // 用 innerHTML 才能让 <code> 生效；renderStripText 已整体转义，安全。
         textEl.innerHTML = renderStripText(buffer)
-        textEl.scrollTop = textEl.scrollHeight
+        // ★ 滚动字幕（2026-10-17 用户要求）：append 后滚到最右，让新字始终在
+        //   右端可见、旧字被左边界裁掉自然"滑出"。滚动要在 innerHTML 之后、
+        //   且需要浏览器先排版，故下一帧再滚（否则 scrollWidth 还是旧值）。
+        window.requestAnimationFrame(() => {
+          if (textEl) textEl.scrollLeft = textEl.scrollWidth
+        })
       }
       el.hidden = false
       visible = true

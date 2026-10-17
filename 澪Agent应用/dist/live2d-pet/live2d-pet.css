@@ -748,14 +748,17 @@ body,
 
 .pet-strip #pet-strip-text {
   display: block;
-  /* ★ 文字铺满整条（2026-10-17 用户反馈）：之前写死 max-width:260px + max-height:3.2em，
-     拉长横条后文字仍被锁在 260px 里、还被高度截断（后半段显示不出来）。
-     改为：宽随横条铺满，高不限，整条向下自然生长。 */
+  /* ★ 滚动字幕式（2026-10-17 用户要求）：限高一行，单行不换行；
+     文字从左往右推进，占满横条后旧字被左边界裁掉（视觉上"丢弃"），
+     新字始终在右端出现 —— 像滚动字幕一样。 */
   max-width: none;
-  overflow-x: hidden;
-  overflow-y: hidden;
-  white-space: pre-wrap;
-  word-break: break-word;
+  width: 100%;
+  height: 1.4em;           /* 严格一行高 */
+  line-height: 1.4em;
+  overflow-x: hidden;      /* 左边界裁掉滚出的旧字 */
+  overflow-y: hidden;      /* 禁纵向滚动 */
+  white-space: nowrap;     /* 单行，不换行 */
+  word-break: normal;
   min-width: 0;
   flex: 1 1 auto;
 }
