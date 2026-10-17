@@ -23,7 +23,6 @@ import { createHttpTransport } from './push/transports/http.js'
 import { createStripRemote } from './push/strip-remote.js'
 import { createRejectionGate } from './security/fence.js'
 import { createStreamAssembler, parseStreamFrame } from './stream.js'
-import { summarizeAll, readProjection } from './projections.js'
 import { createBubbleStack, isSubSession, sessionIdOf, MAX_SESSION_BUBBLES } from './bubble-stack.js'
 import { createStripController, STRIP_STYLE_KEYS } from './strip.js'
 import { safeCall } from './util.js'
@@ -238,10 +237,12 @@ export default {
       })
 
       // ── 7.5 projections：直读宿主服务，不用 session/follow ──
+      // ⚠ 2026-10-17 清理：原有一个 `readProjectionsFor()` 包装（summarizeAll），
+      //   但**从来没有调用方**（当时没有 UI 消费 projections）—— 死代码已删。
+      //   `projectionService` 保留：capabilities 路由用它如实报告该能力是否可用；
+      //   `lib/projections.js` 与它的测试也保留（未来接「上下文压力/用量」UI 时直接用）。
       const projectionService = safeCall(
         () => ctx.get?.('sessionProjections') || ctx.sessionProjections, null)
-      const readProjectionsFor = (session) => safeCall(
-        () => summarizeAll(projectionService, session), {})
 
       // 热重载/卸载时必须清干净：否则定时器与监听器泄漏到下一次 apply
       safeCall(() => root.effect(() => () => {

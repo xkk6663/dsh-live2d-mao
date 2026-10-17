@@ -50,7 +50,10 @@
 | 核心注入层 | `dist\core-inject\`（settings-panel-inject / bubble-panel-inject / agent-switch-inject / health-panel-inject 等） |
 | Electron 窗口 | `main.js` 中 `petAdminWindow` |
 
-> ⚠ **DSH 专用化（2026-10-17）**：`dist/plugins/` 现在**只剩 `dsh/`**（xiaozhi/octop 已删）；主导航只剩「桌宠 / 设置 / DSH」三项；`ChatPage`（小智对话页）、`OnboardingPage`（六步质检）、「观察」tab、「截图提问」均已移除。设置页 tab：资料 / 桌宠 / 语音 / 泡泡 / **横条**。**双击桌宠本体** = 直达 DSH 面板（走 `mio-desktop:open-dsh-panel`，主进程在管理窗渲染层触发 `__mioDshPanel.show()`）。
+> ⚠ **DSH 专用化（2026-10-17）**：`dist/plugins/` 现在**只剩 `dsh/`**（xiaozhi/octop 已删）；主导航只剩「桌宠 / 设置 / DSH」三项；`ChatPage`（小智对话页）、`OnboardingPage`（六步质检）、「观察」tab、「截图提问」均已移除。
+> **设置页 tab：资料 / 桌宠 / 语音 / 主题**（2026-10-17 起「泡泡」「横条」合并为「主题」：上半横条尺寸/皮肤，下半泡泡工坊）。
+> **双击桌宠本体** = 直达 DSH 面板（走 `mio-desktop:open-dsh-panel`，主进程在管理窗渲染层触发 `__mioDshPanel.show()`）。
+> **右键菜单项**：打开/关闭对话窗口 · 更换形象 · 调整大小 · **调整不透明度** · 隐藏说话气泡 · 隐藏流式提示 · 隐藏状态徽标 · 打开 Mio · 关闭桌宠。
 
 ### 2.4 辅助文件（Electron 进程侧）
 
