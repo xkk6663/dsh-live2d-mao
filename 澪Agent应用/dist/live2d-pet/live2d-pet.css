@@ -750,18 +750,36 @@ body,
 
 .pet-strip #pet-strip-text {
   display: block;
-  /* ★ 横条文字（2026-10-17 最终裁决）：**始终正常换行**，高度随内容自然生长，
-     最多显示 N 行（设置页「显示行数」= 上限）、超出裁掉。 */
+  /* ★ 横条文字（2026-10-17 最终）：按限制宽度正常换行、往下递增到结束；
+     高度固定 N 行（设置页「显示行数」），超出的历史由右侧竖条滚动浏览，
+     新消息追加到底部自动滚到底（最新在最下）。 */
   max-width: none;
   width: 100%;
-  height: auto;            /* 自适应内容高度（不再锁一行） */
+  height: 1.4em;           /* 默认一行高（被 JS inline 按行数覆盖） */
   line-height: 1.4em;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;        /* 超出可上下滚动（竖条） */
   white-space: normal;     /* 正常换行 */
   word-break: break-word;
   overflow-wrap: anywhere; /* 长路径/URL 也能断行 */
   min-width: 0;
   flex: 1 1 auto;
+  scrollbar-width: thin;               /* 窄滚动条 */
+  scrollbar-color: color-mix(in srgb, var(--bubble-ink) 40%, transparent) transparent;
+}
+/* WebKit 滚动条：细竖条，鼠标放上去滚轮可滑 */
+.pet-strip #pet-strip-text::-webkit-scrollbar {
+  width: 5px;
+}
+.pet-strip #pet-strip-text::-webkit-scrollbar-track {
+  background: transparent;
+}
+.pet-strip #pet-strip-text::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--bubble-ink) 40%, transparent);
+  border-radius: 3px;
+}
+.pet-strip #pet-strip-text::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--bubble-ink) 60%, transparent);
 }
 
 /* ★ 内联代码药丸（用户 2026-10-17 反馈）：把 `/api/xiaozhi/ws` 这类路径/代码段

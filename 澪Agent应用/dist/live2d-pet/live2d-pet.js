@@ -3815,19 +3815,21 @@
       el.style.maxWidth = 'none'   // 显式宽度优先，避免被 max-width 再夹一次
       el.classList.add('resized')
     }
-    // ★ 行数（个性化，2026-10-17 最终裁决）：N 是**最大显示行数上限**。
-    //   文字**正常换行**、横条高度随内容自然生长，最多显示 N 行、超出裁掉。
-    //   （之前把高度写死 N 行 + rows 默认 1，文字换行第二行就被裁掉，
-    //   看起来像"不会换行"——正是用户报的 BUG 根因。）
+    // ★ 行数（个性化，2026-10-17 最终）：N = **可见窗口的固定行数**。
+    //   文字按限制宽度正常换行、往下一直递增到结束；超出 N 行的部分
+    //   由 textEl 的 overflow-y:auto 承载，右侧竖条滚动条浏览历史，
+    //   新流式消息 append 后自动滚到底（最新在最下）。
     function applyRows(n) {
       if (!el) return
       const r = Math.max(1, Math.min(5, Math.round(Number(n) || 1)))
-      // 横条本体高度自适应内容，只设最大高度（N 行 + padding 余量）
-      el.style.height = 'auto'
-      el.style.maxHeight = `${r * 1.45 + 0.7}em`
+      // 横条本体固定 N 行高（文字容器自己滚动）
+      el.style.height = `${r * 1.45 + 0.7}em`
+      el.style.maxHeight = 'none'
       if (textEl) {
-        textEl.style.height = 'auto'
+        textEl.style.height = `${r * 1.4}em`
         textEl.style.maxHeight = `${r * 1.4}em`
+        textEl.style.overflowY = 'auto'   // 超出可滚动，右侧竖条
+        textEl.style.overflowX = 'hidden'
       }
     }
     // 启动时**不再**从 localStorage 套用旧的手动拉伸值（2026-10-17 终版语义）：
@@ -3951,10 +3953,12 @@
       if (textEl) {
         // 用 innerHTML 才能让 <code> 生效；renderStripText 已整体转义，安全。
         textEl.innerHTML = renderStripText(buffer)
-        // ★ 文字**始终正常换行**（2026-10-17 最终裁决）：用户明确要换行，
-        //   不要滚动字幕。之前"单行溢出就切 nowrap 滚动"会把换行压成单行，
-        //   正是"文字无法正常换行"的根因。这里不再切换 marquee，交给 CSS
-        //   white-space:normal + word-break:break-word 正常断行。
+        // ★ 自动滚到底（2026-10-17）：新流式消息追加到最底部，最新在最下；
+        //   超出可见行数的历史往上滚、由右侧竖条浏览。滚动要在 innerHTML 之后、
+        //   且需要浏览器先排版，故下一帧再滚（否则 scrollHeight 还是旧值）。
+        window.requestAnimationFrame(() => {
+          if (textEl) textEl.scrollTop = textEl.scrollHeight
+        })
       }
       el.hidden = false
       visible = true
