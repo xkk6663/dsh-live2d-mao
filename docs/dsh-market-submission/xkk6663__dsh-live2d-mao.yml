@@ -1,0 +1,19 @@
+# 投稿文件：data/plugins/xkk6663__dsh-live2d-mao.yml
+#
+# 用法（等仓库满 1 天后再做，即 2026-10-18 13:53 之后）：
+#   1. fork https://github.com/awesome-dsh-plugin/awesome-dsh-plugin
+#   2. 在 fork 里新建 data/plugins/xkk6663__dsh-live2d-mao.yml
+#      内容就是下面 "投稿内容" 之后的部分（本注释头不要带过去）
+#   3. 提 PR，标题：Add dsh-live2d-mao (DSH-specialized Live2D desktop pet)
+#
+# 文件名规则：data/plugins/<owner>__<repo>.yml（双下划线）
+# ⚠ 描述含 ": " 必须加单引号（YAML 会当成嵌套键）——已加。
+# ⚠ 不要写 npm: / version: / screenshots: / capabilities: 字段
+#   ——这些由市场自动采集（npm 映射自动建、截图读本仓库 screenshots.json、
+#     能力按代码重算），手写会被校验拒绝。
+url: https://github.com/xkk6663/dsh-live2d-mao
+name: xkk6663/dsh-live2d-mao
+category: fun
+description:
+  en: 'A DSH-specialized Live2D desktop pet: a real skeletal Live2D model (PixiJS + Cubism 4) living in its own Electron window on your desktop, mirroring DeepSeek Harness work state through a 12-phase semantic bus - planning, thinking, executing-tool, streaming, waiting-input, awaiting-approval, complete, error. Ships tool-status bubbles, a token-by-token streaming strip, drag inertia, lock position, Shift-drag, opacity, and 8 built-in models including the DS whale girl. The plugin only pushes events; the pet window itself is a standalone program.'
+  zh: 'DSH 专用 Live2D 桌宠：PixiJS + Cubism 4 真实骨骼动画，住在独立的 Electron 桌宠窗口里，通过 12 态语义总线实时映射 DeepSeek Harness 的工作状态——规划、思考中、执行工具、回复中、聆听中、待确认、完成、出错。带工具状态气泡、逐 token 流式横条、拖拽惯性、锁定位置、Shift 防误拖、不透明度可调，内置 8 款模型（含 DS 鲸鱼娘）。插件只推事件，桌宠窗口是独立程序。'
