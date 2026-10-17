@@ -36,7 +36,7 @@ l2d_downloads/
 l2d_official_models/
 dist_backup_20261009/
 
-# --- 敏感配置（设备身份含 token） ---
+# --- 敏感配置（设备身份含 token，历史遗留，保留兜底防误提交） ---
 xiaozhi_device.json
 
 # --- 临时诊断文件（历史遗留） ---
@@ -44,6 +44,9 @@ _*.txt
 *_out.txt
 *_test.txt
 *_diag*.py
+# ⚠ audio_diag 是被 routes/companion.py 真实 import 的模块（音频设备枚举），
+#   却被 *_diag*.py 误伤导致任何新 clone 缺它 → ImportError。白名单放回 git。
+!私人AI日记系统/backend/app/companion/audio_diag.py
 *_diag*.js
 *_diag*.ps1
 electron_*_diag*
@@ -69,11 +72,6 @@ reset_position.ps1
 diag2.ps1
 diag_phys.ps1
 diag_venv.ps1
-xiaozhi_*_test.py
-xiaozhi_android_style.py
-xiaozhi_render.md
-xiaozhi_downlink_probe.py
-xiaozhi_vision_mp*.py
 electron_orig_check*.js
 electron_orig_click.js
 electron_sound_test.js
@@ -87,10 +85,7 @@ orig_*.png
 orig_*.txt
 
 # 运行数据（保留在磁盘，不参与 git 跟踪）
-xiaozhi_chat_history.json
 status.json
-# 本机 MCP 工具开关状态（用户自己的配置，不进远程仓库）
-xiaozhi_mcp_tools.json
 
 # --- 临时/中间产物（打包、pip、诊断残留，防再堆积） ---
 tmp*
@@ -104,16 +99,13 @@ _env_probe.py
 本地视觉/
 
 \.Bin/
-xiaozhi_memo.json
-# 跨 Agent 总线运行状态 + DSH/Octop 接入配置（含 token，本机私密，不入库）
+# 跨 Agent 总线运行状态 + DSH 接入配置（含 token，本机私密，不入库）
 agent_bus_config.json
 dsh_config.json
-octop_config.json
 
 # --- 桌宠运行时数据 + 上传临时残留（v3.9 整理，保留在磁盘不入库） ---
 pet-data/Live2D桌宠/
 pet-data/pet-instance/
-私人AI日记系统/xiaozhi_observe.json
 私人AI日记系统/backend/uvicorn_v2*.log
 
 # --- pet-data 根目录：并行调试现场（浏览器剖面 / 抓页快照 / 验图脚本产物） ---

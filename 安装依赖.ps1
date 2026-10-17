@@ -78,5 +78,5 @@ if (Test-Path $electronExe) {
 # ---------- 4) 完成 ----------
 Say '[4/4] 依赖安装完成！'
 Say '现在可以运行 start_mio.ps1 启动桌宠。'
-Say '首次启动后：桌宠会自动生成设备码，到小智控制台 https://xiaozhi.me/console/agents 绑定即可。'
+Say 'DSH 专用版：桌宠状态由本机 DSH 插件线驱动（见 docs/DSH专用化阉割计划.md）。'
 Read-Host '按回车退出'

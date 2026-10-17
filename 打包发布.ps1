@@ -30,7 +30,7 @@ New-Item -ItemType Directory -Force $staging | Out-Null
 # ---------- 文件复制（robocopy 排除运行时与敏感数据） ----------
 # 排除运行时/敏感数据；注意不要排除 dist 内的默认 Live2D 模型（models 仅根目录下载缓存不进包）
 $exclDir = @('.venv', 'node_modules', '__pycache__', '.pytest_cache', 'release', 'build', 'Data', 'updates', '预览', '.git', '发布', 'l2d_downloads', 'l2d_official_models', 'dist_backup_20261009')
-$exclFile = @('xiaozhi_device.json', 'status.json', 'xiaozhi_chat_history.json', '*.log', '*.db', '*.sqlite', '*.wav', '*.mp3', '*.flac', '_*.txt', '*_out.txt')
+$exclFile = @('status.json', '*.log', '*.db', '*.sqlite', '*.wav', '*.mp3', '*.flac', '_*.txt', '*_out.txt')
 
 $items = @(
     @{ Src = 'README.md'; Dst = '' },
@@ -41,7 +41,6 @@ $items = @(
     @{ Src = 'start_mio.ps1'; Dst = '' },
     @{ Src = '安装依赖.ps1'; Dst = '' },
     @{ Src = '打包发布.ps1'; Dst = '' },
-    @{ Src = 'xiaozhi_prompts.json'; Dst = '' },
     @{ Src = '私人AI日记系统\backend'; Dst = '私人AI日记系统\backend' },
     @{ Src = '私人AI日记系统\工具'; Dst = '私人AI日记系统\工具' },
     @{ Src = '澪Agent应用\dist'; Dst = '澪Agent应用\dist' },
