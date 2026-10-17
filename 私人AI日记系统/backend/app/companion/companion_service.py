@@ -125,6 +125,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "live2d_pet_locked": False,
     "live2d_pet_shift_drag": False,
     "live2d_pet_inertia": True,
+    # ★ DSH 面板 12 态自定义颜色（存后端：管理窗 localStorage 会被清，不持久）
+    "live2d_phase_colors": {},
     # 音效事件配置（clip 为空 = 用现场合成音；非空 = 播放 sounds/ 里的片段）
     "pet_sound_events": {},
     # 点击序列（first + queue；queue 为空则回退随机语句/图片）

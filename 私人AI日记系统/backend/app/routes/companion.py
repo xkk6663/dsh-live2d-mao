@@ -215,6 +215,9 @@ class CompanionSettingsRequest(BaseModel):
     live2d_pet_locked: bool = False
     live2d_pet_shift_drag: bool = False
     live2d_pet_inertia: bool = True
+    # ★ DSH 面板 12 态自定义颜色（2026-10-17）：{phase: '#rrggbb'}。
+    #   存后端而非 localStorage——管理窗每次创建会 clearStorageData()，localStorage 不持久。
+    live2d_phase_colors: dict = Field(default_factory=dict)
     # 音效事件配置：{press/release/switch/task_end/ask/approval/error:
     #   {enabled: bool, volume: 0-100, clip: '片段文件名或空(合成音)'}}
     pet_sound_events: dict = Field(default_factory=dict)

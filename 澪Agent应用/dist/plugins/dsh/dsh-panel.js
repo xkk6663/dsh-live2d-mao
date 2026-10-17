@@ -74,9 +74,13 @@
 
   // ────────────────────────────────────────────────────────────────────────
   // ★ 12 态颜色自定义（2026-10-17 用户需求）：每个 phase 一个语义默认色，
-  //   用户可在面板里点色块改成任意色，存 localStorage（本机展示偏好，不进后端）。
+  //   用户可在面板里点色块改成任意色。
+  // ⚠ 存储位置（2026-10-17 修复"重开界面颜色丢失"）：**后端 settings**
+  //   （live2d_phase_colors），而不是 localStorage —— 管理窗每次创建都会
+  //   clearStorageData()（main.js:219），localStorage 根本不持久。
+  //   读：refresh() 从 /api/companion/status 的 pet.settings 拉取后缓存到
+  //   phaseColorsState；写：PATCH /api/companion/settings。
   // ────────────────────────────────────────────────────────────────────────
-  var PHASE_COLOR_KEY = 'dsh_phase_colors'
   var PHASE_DEFAULT_COLORS = {
     planning: '#7c5cd6',
     thinking: '#5b7fd6',
@@ -92,15 +96,23 @@
     heartbeat: '#b9c2c7',
   }
 
+  /** 后端下发的自定义色缓存（refresh 时刷新）。null = 还没拉到。 */
+  var phaseColorsState = null
+
   function loadPhaseColors() {
-    try {
-      var raw = JSON.parse(window.localStorage.getItem(PHASE_COLOR_KEY) || '{}')
-      return (raw && typeof raw === 'object') ? raw : {}
-    } catch (e) { return {} }
+    if (phaseColorsState && typeof phaseColorsState === 'object') return phaseColorsState
+    return {}
   }
 
   function savePhaseColors(colors) {
-    try { window.localStorage.setItem(PHASE_COLOR_KEY, JSON.stringify(colors || {})) } catch (e) {}
+    phaseColorsState = colors || {}
+    try {
+      fetch('/api/companion/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ live2d_phase_colors: colors || {} }),
+      }).catch(function () {})
+    } catch (e) {}
   }
 
   function colorOf(phase, colors) {
@@ -313,7 +325,18 @@
       fetch('/api/plugin/dsh/phases', { headers: { 'Cache-Control': 'no-cache' } }).then(function (r) { return r.json() }).catch(function () { return null }),
       fetch('/api/plugin/dsh/diagnostics', { headers: { 'Cache-Control': 'no-cache' } }).then(function (r) { return r.json() }).catch(function () { return null }),
       fetch('/api/plugin/dsh/about', { headers: { 'Cache-Control': 'no-cache' } }).then(function (r) { return r.json() }).catch(function () { return null }),
+      // ★ 12 态自定义色：从 companion settings 拉取（localStorage 在管理窗不持久）
+      fetch('/api/companion/status', { headers: { 'Cache-Control': 'no-cache' } })
+        .then(function (r) { return r.json() })
+        .then(function (j) { return (j && j.pet && j.pet.settings) || {} })
+        .catch(function () { return {} }),
     ]).then(function (res) {
+      // 缓存后端下发的自定义色（仅当用户没在本次会话改过时覆盖，避免回写竞态）
+      var fromBackend = (res[4] && res[4].live2d_phase_colors) || null
+      if (fromBackend && typeof fromBackend === 'object'
+        && (!phaseColorsState || Object.keys(phaseColorsState).length === 0)) {
+        phaseColorsState = fromBackend
+      }
       if (panel && panel.style.display !== 'none') render(res[0], res[1], res[2], res[3])
     })
   }
