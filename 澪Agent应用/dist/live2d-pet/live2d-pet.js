@@ -1668,6 +1668,13 @@
           ? 'live2d_strip_style'
           : (Object.prototype.hasOwnProperty.call(nextSettings, 'pet_strip_style') ? 'pet_strip_style' : null)
         if (key) stripApi.applyStyle(nextSettings[key])
+        // ★ 个性化默认值（2026-10-17 设置页）：默认宽度 / 行数热应用。
+        if (Object.prototype.hasOwnProperty.call(nextSettings, 'live2d_strip_width')) {
+          stripApi.setDefaultWidth(Number(nextSettings.live2d_strip_width) || 0)
+        }
+        if (Object.prototype.hasOwnProperty.call(nextSettings, 'live2d_strip_rows')) {
+          stripApi.setRows(Number(nextSettings.live2d_strip_rows) || 1)
+        }
         // 「重新启用横条」：设置页下发一个一次性 token，渲染端据此清掉"用户已拒绝"的持久记忆。
         // 用 token 变化（而不是布尔值）是为了让"再点一次"也能生效；同时记住已处理过的值，
         // 避免轮询反复拿到同一个 token 时重复复位（那会让用户刚 ✕ 掉的横条又被翻回来）。
@@ -3788,6 +3795,20 @@
       el.style.maxWidth = 'none'   // 显式宽度优先，避免被 max-width 再夹一次
       el.classList.add('resized')
     }
+    // ★ 行数（个性化，2026-10-17）：把横条高度设成 N 行（1-5）。rows=1 → 单行滚动字幕
+    //   （nowrap + 横向滚出）；rows>1 → 换行填满 N 行、超出纵向裁掉。height/white-space
+    //   写 inline 优先于 CSS 默认。
+    function applyRows(n) {
+      if (!el) return
+      const r = Math.max(1, Math.min(5, Math.round(Number(n) || 1)))
+      el.style.height = `${r * 1.45}em`
+      el.style.maxHeight = 'none'
+      if (textEl) {
+        textEl.style.whiteSpace = r === 1 ? 'nowrap' : 'normal'
+        textEl.style.height = `${r * 1.4}em`
+        textEl.style.overflowY = r === 1 ? 'hidden' : 'hidden'
+      }
+    }
     safe(() => {
       const saved = Number(window.localStorage.getItem(KEY_WIDTH))
       if (Number.isFinite(saved) && saved > 0) applyWidth(saved)
@@ -3797,6 +3818,11 @@
     let styleId = 'default'
     let enabled = true
     let visible = false
+    // ★ 个性化默认值（2026-10-17 用户需求）：默认宽度(px，0=自适应) + 默认行数(1-5)。
+    //   来自后端 settings（live2d_strip_width/rows），设置页改、settings_changed 热应用。
+    //   手动拉伸仍是临时覆盖（写 localStorage mio-pet-strip-width），但"默认值"优先。
+    let defaultWidth = 0
+    let rows = 1
     // 关闭态**跨会话持久**（localStorage）：用户 ✕ 掉之后不该下次启动又冒出来。
     // 注意与插件侧的"本会话抑制"是两层：这里是"用户已拒绝这个窗位"的长期记忆。
     let dismissed = false
@@ -3914,6 +3940,12 @@
       }
       el.hidden = false
       visible = true
+      // ★ 个性化默认值（2026-10-17）：显示时应用默认宽度与行数。
+      //   语义：设置页给了默认宽度(>0) 就按它；否则用"上次手动拉伸"的值；都没有则自适应。
+      const manualW = Number(safe(() => window.localStorage.getItem(KEY_WIDTH), 0))
+      if (defaultWidth > 0) applyWidth(defaultWidth)
+      else if (manualW > 0) applyWidth(manualW)
+      if (rows > 0) applyRows(rows)
       // 横条可见 ⇒ 上报命中区（主进程按区域关穿透）。**不要**在这里
       // setInteractive(true)：那是整窗开关，会把屏幕全挡住。
       reportStripBounds()
@@ -4070,13 +4102,32 @@
         })
       },
       applyStyle(id) { return safe(() => applyStyle(id), styleId) },
+      // ★ 个性化默认值（2026-10-17 设置页热应用）：
+      setDefaultWidth(px) {
+        safe(() => {
+          defaultWidth = Math.max(0, Math.round(Number(px) || 0))
+          if (visible) {
+            // 已显示：立即套用（默认宽>0 时覆盖手动值）
+            if (defaultWidth > 0) applyWidth(defaultWidth)
+            reportStripBounds()
+          }
+        })
+      },
+      setRows(n) {
+        safe(() => {
+          rows = Math.max(1, Math.min(5, Math.round(Number(n) || 1)))
+          if (visible) { applyRows(rows); reportStripBounds() }
+        })
+      },
       info() {
         return safe(() => ({
           visible: visible && !el.hidden,
           dismissed,
           enabled,
           styleId,
-        }), { visible: false, dismissed: false, enabled: false, styleId: 'default' })
+          defaultWidth,
+          rows,
+        }), { visible: false, dismissed: false, enabled: false, styleId: 'default', defaultWidth: 0, rows: 1 })
       },
       // 非契约内的主体内部接口：供设置页"重新启用横条"用（清掉"已拒绝"记忆）
       resetDismissed() {

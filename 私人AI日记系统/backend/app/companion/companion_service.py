@@ -115,6 +115,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # 与 live2d_speech_bubble_enabled 是**两层**开关：总开关关掉气泡全没了，
     # 这个只关"流式"（关掉后插件仍可用一次性文本气泡 announce）。
     "live2d_stream_text_enabled": True,
+    # ★ 横条个性化（2026-10-17 用户需求）：默认宽度(px，0=自适应)、默认行数(1-5)、
+    #   皮肤 id（为「横条 UI 可更换」预留）
+    "live2d_strip_width": 0,
+    "live2d_strip_rows": 1,
+    "live2d_strip_style": "default",
     # 音效事件配置（clip 为空 = 用现场合成音；非空 = 播放 sounds/ 里的片段）
     "pet_sound_events": {},
     # 点击序列（first + queue；queue 为空则回退随机语句/图片）

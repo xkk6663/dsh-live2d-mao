@@ -205,6 +205,11 @@ class CompanionSettingsRequest(BaseModel):
     pet_click_talk_enabled: bool = True
     # M1 逐 token 流式：插件正文增量按上游节奏铺进气泡（关掉后仍可用一次性文本气泡）
     live2d_stream_text_enabled: bool = True
+    # ★ 横条个性化（2026-10-17 用户需求）：默认宽度(px，0=内容自适应)、默认行数(1-5)、
+    #   皮肤 id（default/mono/navy/peach/matcha/note/terminal/comic，为「横条 UI 可更换」预留）
+    live2d_strip_width: int = Field(default=0, ge=0, le=4000)
+    live2d_strip_rows: int = Field(default=1, ge=1, le=5)
+    live2d_strip_style: str = Field(default="default", max_length=40)
     # 音效事件配置：{press/release/switch/task_end/ask/approval/error:
     #   {enabled: bool, volume: 0-100, clip: '片段文件名或空(合成音)'}}
     pet_sound_events: dict = Field(default_factory=dict)

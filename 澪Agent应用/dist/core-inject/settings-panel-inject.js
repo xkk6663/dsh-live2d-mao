@@ -118,6 +118,8 @@
     // 小智插件已整体阉割（后端 /api/xiaozhi/* 路由与前端入口都已删除）。
     // 保留它们只会渲染出"永远读不到数据、点保存就报错"的空界面。
     { id: 'bubble', label: '泡泡' },
+    // ★ 横条个性化（2026-10-17 用户需求）：默认宽度 / 行数 / 皮肤（为「横条 UI 可更换」预留）
+    { id: 'strip', label: '横条' },
   ]
 
   function setNavActive(on) {
@@ -136,7 +138,7 @@
       '<div style="flex:none;display:flex;align-items:center;gap:10px;padding:12px 20px;background:var(--sidebar-bg, #f4f7f8);border-bottom:1px solid var(--line, #d9e2e6);">' +
         '<span style="width:9px;height:9px;border-radius:50%;background:var(--accent, #4c8798);flex:none;"></span>' +
         '<strong style="font-size:14px;flex:none;">设置</strong>' +
-        '<span style="flex:1;font-size:11px;color:var(--muted, #687984);overflow:hidden;white-space:nowrap;text-overflow:ellipsis;" id="mioSetStatus">桌宠 · 语音 · 观察 · 提示词 · 小智</span>' +
+        '<span style="flex:1;font-size:11px;color:var(--muted, #687984);overflow:hidden;white-space:nowrap;text-overflow:ellipsis;" id="mioSetStatus">资料 · 桌宠 · 语音 · 泡泡 · 横条</span>' +
         '<button type="button" id="mioSetClose" title="关闭设置" style="border:none;background:transparent;font-size:16px;cursor:pointer;color:var(--muted, #687984);padding:2px 6px;">✕</button>' +
       '</div>' +
       '<div style="flex:none;display:flex;gap:4px;padding:8px 20px;background:var(--surface-soft, #f2f6f7);border-bottom:1px solid var(--line, #d9e2e6);" id="mioSetTabs"></div>' +
@@ -458,6 +460,35 @@
       } else {
         bubbleHost.innerHTML = '<div style="font-size:12px;color:var(--muted,#687984);padding:14px;">泡泡模块未加载，请刷新页面后重试。</div>'
       }
+    } else if (id === 'strip') {
+      // ★ 横条个性化（2026-10-17 用户需求）：默认宽度 / 行数 / 皮肤。
+      //   值走 PATCH /api/companion/settings → settings_changed → 桌宠横条热应用。
+      var sw0 = Number(s.live2d_strip_width) || 0
+      var sr0 = Number(s.live2d_strip_rows) || 1
+      var ss0 = s.live2d_strip_style || 'default'
+
+      body.appendChild(section('横条尺寸'))
+      // 默认宽度：0 = 内容自适应；>0 = 固定像素宽（打开横条即用，不必每次手动拉）
+      var widthSlider = makeSlider(sw0, 0, 1600, 20, 'px')
+      widthSlider.__mioInput.min = '0'
+      body.appendChild(row('默认宽度', '打开横条时的初始宽度；0 = 按内容自适应。设了之后打开横条就不用再手动拉伸。', widthSlider, 'live2d_strip_width'))
+
+      // 行数：横条一次性显示几行文字（1 行 = 滚动字幕，多行 = 换行铺满）
+      var rowsSlider = makeSlider(sr0, 1, 5, 1, ' 行')
+      body.appendChild(row('显示行数', '横条一次显示几行文字；1 行是滚动字幕，多行会换行铺满、超出自动滚出。', rowsSlider, 'live2d_strip_rows'))
+
+      body.appendChild(section('横条皮肤（为 UI 可更换预留）'))
+      var styleSel = makeSelect(ss0, [
+        { v: 'default', t: '默认' },
+        { v: 'mono', t: '黑白' },
+        { v: 'navy', t: '藏蓝' },
+        { v: 'peach', t: '蜜桃' },
+        { v: 'matcha', t: '抹茶' },
+        { v: 'note', t: '便签' },
+        { v: 'terminal', t: '终端' },
+        { v: 'comic', t: '漫画' },
+      ])
+      body.appendChild(row('横条皮肤', '横条的配色主题，与泡泡皮肤同一套 id，后续可扩展更多 UI。', styleSel, 'live2d_strip_style'))
     }
   }
 
@@ -529,6 +560,8 @@
       'live2d_speech_bubble_enabled', 'voice_enabled', 'voice_streaming_enabled',
       'voice_volume', 'pet_speech_language', 'speak_screen_observations',
       'screen_ai_enabled',
+      // ★ 横条个性化（2026-10-17）
+      'live2d_strip_width', 'live2d_strip_rows', 'live2d_strip_style',
     ]
     settingsKeys.forEach(function (k) { if (vals[k] !== undefined) settingsBody[k] = vals[k] })
     // 2) 自动观察 → observe/start or stop

@@ -748,17 +748,17 @@ body,
 
 .pet-strip #pet-strip-text {
   display: block;
-  /* ★ 滚动字幕式（2026-10-17 用户要求）：限高一行，单行不换行；
-     文字从左往右推进，占满横条后旧字被左边界裁掉（视觉上"丢弃"），
-     新字始终在右端出现 —— 像滚动字幕一样。 */
+  /* ★ 横条个性化（2026-10-17 用户需求）：高度/行数由设置页控制，JS 写 inline。
+     rows=1 时单行滚动字幕（nowrap + 横向滚出）；rows>1 时换行填满 N 行、超出的纵向裁掉。
+     默认 1 行，高度由 JS applyRows 写 inline 覆盖。 */
   max-width: none;
   width: 100%;
-  height: 1.4em;           /* 严格一行高 */
+  height: 1.4em;           /* 默认一行高（被 JS inline 覆盖） */
   line-height: 1.4em;
-  overflow-x: hidden;      /* 左边界裁掉滚出的旧字 */
-  overflow-y: hidden;      /* 禁纵向滚动 */
-  white-space: nowrap;     /* 单行，不换行 */
-  word-break: normal;
+  overflow-x: hidden;      /* 横向滚出的旧字由左边界裁掉 */
+  overflow-y: hidden;      /* 纵向超出的行裁掉 */
+  white-space: nowrap;     /* 默认单行（JS 按 rows>1 切 normal） */
+  word-break: break-word;
   min-width: 0;
   flex: 1 1 auto;
 }
