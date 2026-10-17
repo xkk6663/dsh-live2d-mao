@@ -19,6 +19,12 @@
 **/*.wav
 **/*.mp3
 **/*.flac
+# ★ 内置默认音效素材（2026-10-17）：桌宠音效系统的默认音频片段，随 git 分发。
+#   上面三条是防"运行时/上传的音频"入库，但 dist/live2d-pet/sounds/ 是内置素材，
+#   必须入库，否则新 clone 桌宠音效全部回退合成音。
+!澪Agent应用/dist/live2d-pet/sounds/
+!澪Agent应用/dist/live2d-pet/sounds/*.wav
+!澪Agent应用/dist/live2d-pet/sounds/*.mp3
 # Local runtime and publisher credentials never belong in the public source.
 **/Data/
 **/*.dpapi

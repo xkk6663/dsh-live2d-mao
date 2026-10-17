@@ -34,6 +34,18 @@
     error: 'error',
   }
 
+  // ★ 内置默认音频片段（2026-10-17 素材替换：来自 whale 的原始音频贴过来）。
+  //   事件 → 静态音频相对路径（dist/live2d-pet/sounds/ 下，随 git 入库）。
+  //   播放优先级：自定义片段 > 内置默认片段 > 现场合成音（保底）。
+  //   switch/error 无对应素材，保持合成音。
+  var BUILTIN_CLIPS = {
+    press: 'sounds/press.mp3',
+    release: 'sounds/release.mp3',
+    task_end: 'sounds/task-end.wav',
+    ask: 'sounds/ask.wav',
+    approval: 'sounds/approval.wav',
+  }
+
   function ensureCtx() {
     if (ctx) return ctx
     try {
@@ -198,9 +210,58 @@
     if (scale <= 0) return false
     var clip = cfg && typeof cfg.clip === 'string' ? cfg.clip.trim() : ''
     if (clip) return playClip(clip, scale)
+    // ★ 内置默认片段（2026-10-17）：无自定义片段时播内置音频；失败/缺失回退合成音
+    var builtin = BUILTIN_CLIPS[name]
+    if (builtin) {
+      var played = playBuiltinClip(builtin, scale)
+      if (played) return true
+      // 内置片段加载失败 → 回退合成音（保底，绝不静默丢音）
+    }
     var preset = EVENT_PRESET[name] || name
     var fn = PRESETS[preset]
     return fn ? fn(scale) : false
+  }
+
+  /**
+   * 播放内置静态音频片段（dist/live2d-pet/sounds/ 下，随 git 分发）。
+   * 与 playClip 共用解码缓存（键用静态路径区分），失败返回 false 让调用方回退。
+   */
+  function playBuiltinClip(path, gainScale) {
+    var now = Date.now()
+    if (now - lastPlayAt < MIN_GAP_MS) return false
+    lastPlayAt = now
+    var c = ensureCtx()
+    if (!c || !master) return false
+    if (!unlocked) unlock()
+    if (c.state === 'suspended') { try { c.resume() } catch (_) {} }
+    var cacheKey = 'builtin:' + path
+    var cached = clipBuffers[cacheKey]
+    var start = function (buffer) {
+      try {
+        var src = c.createBufferSource()
+        var g = c.createGain()
+        src.buffer = buffer
+        g.gain.value = Math.max(0.0001, (Number(gainScale) || 1))
+        src.connect(g)
+        g.connect(master)
+        src.start(c.currentTime + 0.008)
+        return true
+      } catch (_) { return false }
+    }
+    if (cached) return start(cached)
+    // 首次加载是异步的：立即 fetch，返回 true（本次可能赶不上，下次命中缓存）；
+    // 若 decode 失败则清缓存，让下次重试或回退合成音。
+    fetch(path, { cache: 'default' })
+      .then(function (r) { if (!r.ok) throw new Error('http ' + r.status); return r.arrayBuffer() })
+      .then(function (buf) { return c.decodeAudioData(buf) })
+      .then(function (audioBuf) {
+        clipBuffers[cacheKey] = audioBuf
+        start(audioBuf)
+      })
+      .catch(function () {})
+    // 首次触发返回 false（音频还没解码完），调用方回退合成音这一次；
+    // 之后命中缓存就走 start(cached) 正常播内置音。
+    return false
   }
 
   /** 试听（忽略事件开关；事件音量为 0 时回退基准音量，保证"听得到"）。 */
@@ -211,6 +272,8 @@
     var scale = eventGain(name)
     if (!(scale > 0)) scale = volume
     if (clip) return playClip(clip, scale)
+    var builtin = BUILTIN_CLIPS[name]
+    if (builtin && playBuiltinClip(builtin, scale)) return true
     var preset = EVENT_PRESET[name] || name
     var fn = PRESETS[preset]
     return fn ? fn(scale) : false
@@ -258,4 +321,21 @@
     presets: Object.keys(PRESETS),
     has: function (name) { return Object.prototype.hasOwnProperty.call(PRESETS, String(name)) },
   }
+
+  // ★ 预热内置片段（2026-10-17）：后台预解码，避免首次触发时回退合成音。
+  //   预解码不抢用户手势（fetch/decode 不要求用户已交互），首次播放即命中缓存。
+  ;(function prewarmBuiltin() {
+    var paths = Object.keys(BUILTIN_CLIPS).map(function (k) { return BUILTIN_CLIPS[k] })
+    var c = ensureCtx()
+    if (!c) return
+    paths.forEach(function (path) {
+      var cacheKey = 'builtin:' + path
+      if (clipBuffers[cacheKey]) return
+      fetch(path, { cache: 'default' })
+        .then(function (r) { if (!r.ok) throw new Error('http ' + r.status); return r.arrayBuffer() })
+        .then(function (buf) { return c.decodeAudioData(buf) })
+        .then(function (audioBuf) { clipBuffers[cacheKey] = audioBuf })
+        .catch(function () {})
+    })
+  })()
 })()
