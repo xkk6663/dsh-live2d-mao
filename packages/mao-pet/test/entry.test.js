@@ -12,6 +12,12 @@ import assert from 'node:assert/strict'
 
 import plugin from '../lib/index.js'
 
+// ★ 拦截全局 fetch（2026-10-17）：apply() 里的 stripRemote / pusher 都默认用
+//   globalThis.fetch。若让它真实连 8000，会触发真实网络请求把测试挂死。这里统一
+//   mock 成"后端不可达"，与"桌宠后端没起"的真实场景一致。
+const _realFetch = globalThis.fetch
+globalThis.fetch = async () => ({ ok: false, status: 0, json: async () => null })
+
 /**
  * 真实形态的宿主栅栏判定：只放行回环，其余返回 401。
  *
@@ -154,18 +160,16 @@ test('入口 · apply() 注册了事件监听（含 {global:true}）', () => {
   const h = makeHarness()
   plugin.apply(h.root)
   // session/event 现在有 3 个旁路（主链路 phase + 气泡栈喂入 + turn/end 移除），
-  // 各自独立兜底；streamEvent 1 个、approvalEvent 1 个
+  // 各自独立兜底；streamEvent 1 个；approvalEvent 0 个（审批回传已阉割）
   assert.equal(h.record.sessionEvent.length, 3)
   assert.equal(h.record.streamEvent.length, 1)
-  assert.equal(h.record.approvalEvent.length, 1)
+  assert.equal(h.record.approvalEvent.length, 0)
 
   // ★ 7.4 多 session 必须加 {global:true}
   assert.deepEqual(h.record.sessionEvent[0].o, { global: true })
   assert.deepEqual(h.record.sessionEvent[1].o, { global: true })
   assert.deepEqual(h.record.sessionEvent[2].o, { global: true })
   assert.deepEqual(h.record.streamEvent[0].o, { global: true })
-  // 审批监听：scope 由 waterfall 决定，不加 global
-  assert.equal(h.record.approvalEvent[0].o, undefined)
 })
 
 test('入口 · root.inject 只等 webServer（不拖住注入行）', () => {
@@ -290,11 +294,9 @@ test('入口 · /mao-pet/capabilities 如实暴露 7.1~7.6 状态', async () => 
   const res = { setHeader() {}, end(c) { body = c } }
   await route.handler({ method: 'GET', headers: { host: '127.0.0.1' } }, res)
   const parsed = JSON.parse(body)
-  for (const k of ['7.1_stream', '7.2_approval', '7.3_questions', '7.4_bubble_stack', '7.5_projections', '7.6_strip']) {
+  for (const k of ['7.1_stream', '7.4_bubble_stack', '7.5_projections', '7.6_strip']) {
     assert.ok(parsed.m7[k], `缺少 ${k}`)
   }
-  // ★ 审批的策略陷阱必须写在能力清单里
-  assert.ok(String(parsed.m7['7.2_approval'].caveat).includes('ask'))
   assert.equal(parsed.m7['7.4_bubble_stack'].max, 12)
   assert.equal(parsed.m7['7.6_strip'].style_key, 'live2d_strip_style')
   assert.deepEqual(parsed.m7['7.6_strip'].style_keys, ['live2d_strip_style', 'pet_strip_style'])
@@ -325,16 +327,6 @@ test('入口 · ★ session/event 首参是 session（端到端不抛且不崩�
   assert.doesNotThrow(() => cb({ id: 's1' }, { type: 'step/start', data: { step: 1 } }))
   assert.doesNotThrow(() => cb({ id: 's1' }, { type: 'turn/end', data: { reason: { kind: 'completed' } } }))
   assert.doesNotThrow(() => cb(null, null))
-})
-
-test('入口 · approval 监听返回合法 outcome（且无应答时 fail-closed）', async () => {
-  const h = makeHarness()
-  plugin.apply(h.root)
-  const cb = h.record.approvalEvent[0].cb
-  const outcome = await cb({ toolName: 'pwsh', reason: 'test' })
-  assert.ok(['allowed-once', 'rejected', 'cancelled', 'unavailable'].includes(outcome),
-    `返回值 ${outcome} 必须落在枚举内`)
-  assert.notEqual(outcome, 'allowed-once', '无人应答绝不能放行')
 })
 
 test('入口 · 服务缺失（较老 dsh）时 apply 不崩，能力如实标不可用', () => {

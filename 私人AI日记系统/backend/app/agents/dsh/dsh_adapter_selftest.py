@@ -1047,16 +1047,12 @@ def test_plugin_api() -> None:
     #   `window.__mioPetStrip` 只存在于**桌宠窗口**，而插件跑在宿主进程、
     #   注入行又在 DSH Web GUI 窗口 —— 三者互不相通，故横条内容必须经总线转发：
     #   插件 → /strip → 总线 strip() → WS agent_strip → 桌宠窗口 → __mioPetStrip。
-    # 2026-10-17（M7 2.2/2.3）增交互回路：/interaction 四端点（上报/回传/轮询/pending）。
-    check_eq("暴露 8 个只读端点 + 4 个受控写端点", paths, [
+    # （2026-10-17 曾增 /interaction 四端点，后随用户裁决阉割审批/提问回传，已移除。）
+    check_eq("暴露 8 个只读端点 + 2 个受控写端点", paths, [
         "/api/plugin/dsh/about",
         "/api/plugin/dsh/agent",
         "/api/plugin/dsh/diagnostics",
         "/api/plugin/dsh/ingest",
-        "/api/plugin/dsh/interaction",
-        "/api/plugin/dsh/interaction/pending",
-        "/api/plugin/dsh/interaction/{request_id}",
-        "/api/plugin/dsh/interaction/{request_id}/answer",
         "/api/plugin/dsh/phases",
         "/api/plugin/dsh/status",
         "/api/plugin/dsh/strip",
@@ -1070,11 +1066,9 @@ def test_plugin_api() -> None:
         r.path for r in plugin_routes.router.routes
         if {"POST", "PUT", "PATCH", "DELETE"} & set(r.methods or set())
     })
-    check_eq("写端点仅 ingest + strip + interaction 三个（新增写操作必须显式改这条）",
+    check_eq("写端点仅 ingest + strip（新增写操作必须显式改这条）",
              _write_routes, [
                  "/api/plugin/dsh/ingest",
-                 "/api/plugin/dsh/interaction",
-                 "/api/plugin/dsh/interaction/{request_id}/answer",
                  "/api/plugin/dsh/strip",
              ])
 

@@ -21,11 +21,8 @@ import { isTextOnlyMessage, extractText } from './facts.js'
 import { createPusher, AGENT_ID, AGENT_NAME, AGENT_ACCENT } from './push/pusher.js'
 import { createHttpTransport } from './push/transports/http.js'
 import { createStripRemote } from './push/strip-remote.js'
-import { createInteractionRemote } from './push/interaction-remote.js'
 import { createRejectionGate } from './security/fence.js'
 import { createStreamAssembler, parseStreamFrame } from './stream.js'
-import { createApprovalDecider, describeApproval, GRANT, REJECT, CANCELLED } from './approval.js'
-import { createQuestionAnswerer, pendingQuestions, describeQuestions } from './questions.js'
 import { summarizeAll, readProjection } from './projections.js'
 import { createBubbleStack, isSubSession, sessionIdOf, MAX_SESSION_BUBBLES } from './bubble-stack.js'
 import { createStripController, STRIP_STYLE_KEYS } from './strip.js'
@@ -173,36 +170,6 @@ export default {
             })
           })
         }, { global: true }))
-      })
-
-      // ── 7.2 审批应答：`approval/request` ──
-      // ⚠ 联调前置：本会话策略当前是 `never`，`dsh-user-approval:175` 会在派发 waterfall
-      // **之前**短路返回 "rejected"，插件根本收不到。**要联调必须先把策略切回 `ask`**。
-      // 代码本身已按契约写好（返回值恒落在 OUTCOMES 内）。
-      const interactionRemote = createInteractionRemote({ logger })
-      const approval = createApprovalDecider({
-        // ★ 闭合回路（2026-10-17）：把审批请求上报后端（pending），轮询等桌宠点按钮，
-        //   拿到 outcome 后 resolve decide()。后端不可达/超时 → null → cancelled（fail-closed）。
-        askUser: async (req) => {
-          const desc = describeApproval(req)
-          logger.info?.('[Mao-pet] 收到审批请求：' + JSON.stringify(desc) + '（已上报，等待桌宠作答）')
-          const outcome = await interactionRemote.openApproval(desc)
-          // outcome 是协议枚举（'allowed-once'/'rejected'/'cancelled'）；null → 交给
-          // approval.js 的 normalize 映射成 cancelled。
-          return outcome
-        },
-        logger,
-      })
-      safeCall(() => {
-        disposers.push(ctx.on('approval/request', (req, next) => {
-          return safeCall(() => approval.decide(req, next), CANCELLED)
-        }))
-      })
-
-      // ── 7.3 提问应答：`ctx.userQuestions.answer` ──
-      const questions = createQuestionAnswerer({
-        service: safeCall(() => ctx.get?.('userQuestions') || ctx.userQuestions, null),
-        logger,
       })
 
       // ── 7.4 多 session 气泡栈（上限 12）──
@@ -375,18 +342,6 @@ export default {
               event: 'agent/assistant-stream',
               note: '进程内实时 dispatch，不需要 session/follow（见 lib/stream.js 注释）',
               sessions: assembler.snapshot(),
-            },
-            '7.2_approval': {
-              available: true,
-              event: 'approval/request',
-              stats: approval.diagnostics(),
-              // ★ 这条必须暴露：否则下一个人会以为插件没生效
-              caveat: '本会话审批策略为 never 时，dsh-user-approval:175 会在派发前短路，'
-                + '插件收不到请求。联调需先把策略切回 ask。',
-            },
-            '7.3_questions': {
-              available: safeCall(() => Boolean(projectionService), false),
-              service: 'userQuestions',
             },
             '7.4_bubble_stack': {
               available: true,
