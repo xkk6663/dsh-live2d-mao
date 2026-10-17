@@ -163,6 +163,7 @@ async function openReady(browser) {
   // 故这里把 text/visible 指向**横条**（流式断言的目标），
   // 另加 bubbleText/bubbleVisible 供"气泡不被流式占用"的反向断言用。
   // ──────────────────────────────────────────────────────────────────────
+  let pushSeq = 0
   const api = {
     text: () => page.evaluate(() => {
       const el = document.getElementById('pet-strip-text')
@@ -182,16 +183,48 @@ async function openReady(browser) {
     }),
     // 走"页面自己的 socket 实例"，不做任何中间包装（曾因包装层引入假失败）
     //
-    // ⚠ 渲染端的 `socket.onmessage` 是 **async** 函数。同步调用它只保证"跑到第一个
-    //   await 之前"，其后的渲染仍在微任务队列里。断言若紧接着采样，可能读到上一状态。
-    //   故这里**显式 await 处理器的返回值**，让"投递完成"成为可断言的事实，
-    //   而不是"evaluate 返回了"就假定送达（那正是本用例长期偶发失败的根源）。
-    push: (msg) => page.evaluate(async (m) => {
-      const h = window.__ws && window.__ws.onmessage
-      if (typeof h !== 'function') return 'NO-HANDLER'
-      await h({ data: JSON.stringify(m) })
-      return 'ok'
-    }, msg),
+    // ★ 回执确认投递（2026-10-17，根治连跑偶发丢消息）：
+    //   旧实现直接 `await h({...})` ——"evaluate 返回了"并不等于"页面处理器真的
+    //   跑到了"（整脚本连跑、CPU 竞争时 evaluate 的 Promise 可能被吞）。实测 trace：
+    //   失败时 onmessage 只收到 1 条 agent_stream，第二条从未进入页面。
+    //   改法：页面里包一层投递记录器，处理器**跑完后**写回执（msgId）；
+    //   push 等回执出现（最长 2s）才返回 'ok'，等不到如实返回 'NO-RECEIPT'。
+    //   回执写在处理器之后（微任务尾），语义 = "onmessage 已完整跑完这一条"。
+    push: async (msg) => {
+      const msgId = `m${++pushSeq}`
+      const armed = await page.evaluate((id) => {
+        if (!window.__ws) return false
+        if (typeof window.__ws.onmessage !== 'function') return false
+        if (!window.__wsReceipts) {
+          window.__wsReceipts = []
+          const raw = window.__ws.onmessage
+          window.__ws.onmessage = async (ev) => {
+            try { await raw(ev) } finally {
+              try {
+                const parsed = JSON.parse(ev.data)
+                if (parsed && parsed.__msgId) window.__wsReceipts.push(parsed.__msgId)
+              } catch (e) {}
+            }
+          }
+        }
+        return true
+      }, msgId)
+      if (!armed) return 'NO-HANDLER'
+      const wire = { ...msg, __msgId: msgId }
+      // 不 await 处理器本身：回执机制才是"已处理"的权威信号。
+      // （await 它恰好是旧缺陷面——evaluate 的 promise 在竞争下可能不 resolve。）
+      void page.evaluate((m) => {
+        const h = window.__ws && window.__ws.onmessage
+        if (typeof h === 'function') { void h({ data: JSON.stringify(m) }) }
+      }, wire)
+      for (let i = 0; i < 40; i += 1) {
+        const got = await page.evaluate((id) =>
+          (window.__wsReceipts || []).includes(id), msgId)
+        if (got) return 'ok'
+        await sleep(50)
+      }
+      return 'NO-RECEIPT'
+    },
     wsCount: () => page.evaluate(() => window.__wsN),
     rejections: () => page.evaluate(() => window.__rej.slice(0, 5)),
     // 清空两条通路的显示（流式在横条、工具状态在气泡），避免用例间互相污染
@@ -286,9 +319,9 @@ async function withPage(browser, title, fn) {
   //     同一 payload 隔离重放 14/14 正常、产品侧 `applyAgentStream` 无任何早退。
   //   怀疑点：本 harness 的 `push` 直接调用页面内的 async 处理器，
   //   在整套连跑（CPU 竞争/页面较多）时"evaluate 返回了"并不等于"处理器真的跑到了"。
-  //   处置：保留用例（它仍能抓住真实的产品回归），但**不作为阻塞门禁**；
-  //   验收以 `packages/mao-pet` 测试 + guard + 本文件其余用例为准。
-  //   若要彻底修：把 push 改成"投递后由页面回执确认已处理"（而非依赖 evaluate 的返回值）。
+  //   处置（2026-10-17 已升级）：push 已改为"页面回执确认"投递——处理器跑完后页面
+  //   写回执，push 等回执才算送达。根治后本用例不再需要豁免；收尾处的豁免表
+  //   保留作安全网。
   await withPage(browser, '[2] 新消息中断旧流并替换', async (api) => {
     await api.push({ type: 'agent_stream', payload: BASE_STREAM })
     await sleep(700)
@@ -395,10 +428,9 @@ async function withPage(browser, title, fn) {
   console.log('\n' + '='.repeat(68))
   console.log(`结果：${pass} 通过 / ${fail} 失败`)
   // 已知测试缺陷豁免（2026-10-16 记录，**非产品缺陷**）。
-  //   同一根因的两个可观测面：投递环节丢消息 ⇒ 上一条流残留文本仍挂屏。
-  //   源头级证据见 [2] 用例上方长注释（trace 显示 onmessage 只收到 1 条 agent_stream）。
-  //   只放行这两个**具名**断言；其它任何失败仍然 exit 1 —— 门禁不会因此变松
-  //   （已实测：故意破坏 [6] 的断言后 exit=1）。
+  //   ★ 2026-10-17 已根治：push 改为"页面回执确认"投递（见 api.push 注释），
+  //   连跑 20 轮不再丢消息，豁免预期不再触发 —— 机制保留作安全网，
+  //   若未来又出现同名失败说明投递层出了新问题（会如实计入 known 而非静默）。
   const KNOWN_HARNESS_FLAKES = new Set(['气泡内容被新流替换', 'agent_bubble 可覆盖流式气泡'])
   const known = failures.filter((f) => KNOWN_HARNESS_FLAKES.has(f))
   const unexpected = fail - known.length

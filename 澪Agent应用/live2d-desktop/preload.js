@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('mioDesktop', {
   importModel: () => ipcRenderer.invoke('mio-desktop:import-model'),
   selectModel: (modelId) => ipcRenderer.invoke('mio-desktop:select-model', String(modelId || '')),
   openAgent: () => ipcRenderer.invoke('mio-desktop:open-agent'),
+  // 双击桌宠直达 DSH 面板（主进程打开管理窗并触发 dsh-panel.show()）
+  openDshPanel: () => ipcRenderer.invoke('mio-desktop:open-dsh-panel'),
   getVersion: () => ipcRenderer.invoke('mio-desktop:get-version'),
   close: () => ipcRenderer.send('mio-desktop:close'),
   sendPetEvent: (event) => ipcRenderer.send('mio-desktop:pet-event', event),

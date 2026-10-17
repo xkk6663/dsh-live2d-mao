@@ -3149,12 +3149,16 @@
 
   canvas.addEventListener('dblclick', async (event) => {
     if (clickThroughLocked() || !pointHitsModel(event.clientX, event.clientY)) return
-    // DSH 专用化：原来这里判断"小智插件已挂载"才打开**小智对话窗**；
-    // 小智已阉割，双击改为打开/关闭**桌宠自己的对话窗**（与右键菜单「打开/关闭对话窗口」同一动作，
-    // 走 /api/companion/chat，是 DSH 专用化后唯一保留的对话入口）。
+    // ★ DSH 专用化快捷操作（2026-10-17 用户要求）：双击桌宠直达 **DSH 面板**。
+    //   主进程打开 MIO 管理窗并在其渲染层触发 __mioDshPanel.show()（带就绪重试）。
+    //   Electron 桥缺失时（非宿主环境）回落到原行为（开对话横条）。
     event.preventDefault()
     sendSocket('double_clicked', { x: event.screenX, y: event.screenY })
     try {
+      if (electronRuntime && window.mioDesktop?.openDshPanel) {
+        window.mioDesktop.openDshPanel()
+        return
+      }
       if (electronRuntime && window.mioDesktop?.toggleChatWindow) {
         window.mioDesktop.toggleChatWindow()
       } else {

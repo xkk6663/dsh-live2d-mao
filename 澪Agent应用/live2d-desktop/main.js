@@ -1003,6 +1003,25 @@ function registerIpc() {
     return { ok: true, selectedModelId: available ? id : '' }
   })
   ipcMain.handle('mio-desktop:open-agent', () => openPetAdmin())
+  // ★ 双击桌宠直达 DSH 面板（2026-10-17 用户要求）：打开管理窗后在其渲染层
+  //   触发 dsh-panel 的 show()。面板脚本可能还没 boot 完（窗口首次创建），
+  //   故带重试：每 400ms 试一次，最多 15 次（≈6s）。
+  ipcMain.handle('mio-desktop:open-dsh-panel', async () => {
+    openPetAdmin()
+    const win = petAdminWindow
+    if (!win || win.isDestroyed()) return { ok: false, reason: 'no-admin-window' }
+    for (let i = 0; i < 15; i += 1) {
+      try {
+        const shown = await win.webContents.executeJavaScript(
+          '(function(){ if (window.__mioDshPanel && typeof window.__mioDshPanel.show === "function")'
+          + ' { window.__mioDshPanel.show(); return true } return false })()',
+        )
+        if (shown) return { ok: true, tries: i + 1 }
+      } catch (_) { /* 页面还没就绪，继续等 */ }
+      await new Promise((r) => setTimeout(r, 400))
+    }
+    return { ok: false, reason: 'dsh-panel-not-ready' }
+  })
   // DSH 专用化：`open-xiaozhi` / `open-screen-crop` / `xiaozhi-bubble` 三个 IPC 已移除
   // （小智插件与其视觉通路已阉割）。用 on() 而非 handle()，所以渲染层若仍有残留调用
   // 也只是无人接收，不会抛 "no handler registered"。

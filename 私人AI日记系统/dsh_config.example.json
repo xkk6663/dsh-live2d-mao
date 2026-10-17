@@ -1,0 +1,11 @@
+{
+  "enabled": true,
+  "sessions_root": "C:\\Users\\<你>\\.dsh\\sessions",
+  "workspace": "",
+  "session_id": "",
+  "node_path": "",
+  "poll_ms": 150,
+  "base_url": "",
+  "api_key": "",
+  "ws_url": ""
+}
