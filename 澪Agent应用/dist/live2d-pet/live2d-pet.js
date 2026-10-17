@@ -616,6 +616,32 @@
     populateModelSelect()
   }
 
+  /**
+   * ★ 桌宠不透明度（2026-10-17）。
+   *
+   * ⚠ 真根因（用户实测"不透明度不可用"）：**`model.alpha`（PIXI Container 属性）
+   * 对 Cubism 模型无效** —— pixi-live2d-display 的 Cubism 渲染走 internalModel 的
+   * 自定义 WebGL 路径（打包库里 `\.alpha` 出现 0 次），绘制透明度由 Cubism 的
+   * **ModelColor** 渲染参数控制，不乘 Container.alpha。
+   * 正确 API：`model.internalModel.coreModel.setModelColor(r,g,b,a)`，第 4 参即整体透明度。
+   * （Cubism 4 core 的 setModelColor 会把该颜色乘到所有 Drawable 上。）
+   */
+  function applyPetOpacity(pct) {
+    const alpha = Math.max(0.1, Math.min(1, Number(pct) / 100))
+    if (!model) return
+    try {
+      const core = model.internalModel && model.internalModel.coreModel
+      if (core && typeof core.setModelColor === 'function') {
+        core.setModelColor(1, 1, 1, alpha)
+        return
+      }
+      // 兜底：非 Cubism 渲染路径（如旧版/其它实现）退回 PIXI alpha
+      model.alpha = alpha
+    } catch (_) {
+      try { model.alpha = alpha } catch (_e) {}
+    }
+  }
+
   async function loadModel(modelId) {
     const definition = modelDefinition(modelId)
     const generation = ++modelLoadGeneration
@@ -653,6 +679,12 @@
       // （Electron 侧 windowStable 会再延迟显示，双保险无冲突）
       await applyWatermarkRemoval(definition)
       fitModel()
+      // ★ 不透明度（2026-10-17）：模型加载完成后立即应用持久化的透明度，
+      //   否则重启/切模型后 alpha 回到 1.0（applySettings 是在加载前调用的）。
+      try {
+        const op = Number(settings.live2d_pet_opacity)
+        if (Number.isFinite(op)) applyPetOpacity(op)
+      } catch (_) {}
       nextIdleMotionAt = Date.now() + 3500
       if (windowStable || !electronRuntime) loading.hidden = true
       populateModelSelect()
@@ -1710,10 +1742,7 @@
     //   只作用于 Live2D 模型本体，不影响气泡/徽标/横条的清晰度。
     try {
       const op = Number(settings.live2d_pet_opacity)
-      if (Number.isFinite(op)) {
-        const alpha = Math.max(0.1, Math.min(1, op / 100))
-        if (model) model.alpha = alpha
-      }
+      if (Number.isFinite(op)) applyPetOpacity(op)
     } catch (_) {}
     updateContextMenuLabels()
     // ★「关掉气泡就隐藏」只在**开关真的从开→关发生变化**、或**当前没有活跃流式会话**时才生效
@@ -3593,8 +3622,8 @@
     const pct = Number(opacitySlider.value)
     opacityValue.value = `${pct}%`
     settings.live2d_pet_opacity = pct
-    // 实时生效：只改模型 alpha，气泡/徽标/横条不受影响
-    if (model) model.alpha = Math.max(0.1, Math.min(1, pct / 100))
+    // 实时生效：只改模型透明度，气泡/徽标/横条不受影响
+    applyPetOpacity(pct)
     window.clearTimeout(opacityCommitTimer)
     opacityCommitTimer = window.setTimeout(async () => {
       try { await persistCompanionSetting('live2d_pet_opacity', pct) } catch (_) {}
@@ -4035,11 +4064,10 @@
       if (ms > 0) hideTimer = window.setTimeout(doHide, Math.max(600, ms))
     }
 
-    // ★ 内联代码着色（用户 2026-10-17 反馈）：DSH 下发的正文里像 `/api/xiaozhi/ws`
-    //   这类路径/代码段，在原版 agent 界面会被 `marked` 包成 `<code>` 显示成"框起来"的
-    //   小药丸；而横条此前用 textContent 直出，把 `` ` `` 和路径都当普通字面文本，丢了框。
-    //   这里做一个**极简、安全**的内联代码渲染：先整体 HTML 转义（杜绝注入），再把
-    //   反引号 `` `...` `` 与 ``` 代码围栏 ``` 包成 <code>；不加粗体/标题等其它 Markdown。
+    // ★ 横条 Markdown 渲染（2026-10-17 用户反馈：`#`、`**` 原样显示）：
+    //   极简、安全的一套——先整体 HTML 转义（杜绝注入），再依次处理
+    //   代码围栏 ``` / 行内代码 ` / **粗体** / 行首标题 #。
+    //   刻意不做：斜体 *x*（会误伤 3*4 这类算式）、链接、图片、列表。
     function escapeHtml(s) {
       return String(s).replace(/[&<>"']/g, (c) => ({
         '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -4050,6 +4078,18 @@
       // 先处理围栏代码块 ```...```（跨行），再处理行内 `` `...` ``（单段）
       s = s.replace(/```([\s\S]*?)```/g, (_, code) => `<code>${code.replace(/^\n+|\n+$/g, '')}</code>`)
       s = s.replace(/`([^`\n]+)`/g, (_, code) => `<code>${code}</code>`)
+      // 粗体 **x**（与代码块互斥：代码段内的 ** 已被包进 <code>，
+      // 但 <code> 内部文本仍可能被下面的粗体正则命中 —— 用占位符保护代码段）
+      const codeSlots = []
+      s = s.replace(/<code>[\s\S]*?<\/code>/g, (m) => {
+        codeSlots.push(m)
+        return `\u0000${codeSlots.length - 1}\u0000`
+      })
+      s = s.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+      // 行首标题 # / ## / ### → 粗体（横条里没有标题层级语义）
+      s = s.replace(/(^|\n)#{1,6}\s+([^\n]+)/g, (_, nl, t) => `${nl}<strong>${t}</strong>`)
+      // 还原代码段
+      s = s.replace(/\u0000(\d+)\u0000/g, (_, i) => codeSlots[Number(i)] ?? '')
       return s
     }
 

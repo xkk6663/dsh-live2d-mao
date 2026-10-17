@@ -796,6 +796,12 @@ body,
   white-space: pre-wrap;
   word-break: break-all;
 }
+/* ★ Markdown 粗体/标题（用户 2026-10-17 反馈：`#`/`**` 原样显示）：
+   渲染成 <strong>，加重字重即可（横条空间小，不做标题层级）。 */
+.pet-strip #pet-strip-text strong {
+  font-weight: 700;
+  color: var(--bubble-ink);
+}
 
 .pet-strip-close {
   flex: 0 0 auto;
