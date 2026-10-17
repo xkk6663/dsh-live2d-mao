@@ -274,6 +274,16 @@
     else showPanel()
   }
 
+  // ★ 点击其它导航项（桌宠/设置等）时自动收起本面板（2026-10-17 修复）。
+  //   根因：本面板是 position:absolute 的注入 overlay，不参与 Vue 的 activeView 切换，
+  //   点别的导航项时 Vue 只是换了内容区，本面板仍盖在上面 —— 表现为"点别的界面
+  //   DSH 页不自动收起、要右上角 ✕ 手动关"。与 settings-panel 的同一机制对齐。
+  document.addEventListener('click', function (e) {
+    var b = e.target && e.target.closest ? e.target.closest('nav button.nav-item') : null
+    if (!b || b === navBtn) return
+    if (panel && panel.style.display !== 'none') hidePanel()
+  }, true)
+
   function ensureNav() {
     if (navBtn && navBtn.isConnected) return
     var nav = $q('nav')
