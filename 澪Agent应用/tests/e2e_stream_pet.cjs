@@ -156,12 +156,27 @@ async function openReady(browser) {
   await page.addInitScript(INIT_SCRIPT)
   await page.goto(PAGE, { waitUntil: 'domcontentloaded' })
 
+  // ──────────────────────────────────────────────────────────────────────
+  // api 语义已随【用户裁决 2026-10-17】更新：
+  //   agent_stream（流式正文）→ **横条 #pet-strip**，不再进说话气泡
+  //   agent_bubble（工具状态）→ 说话气泡 #speech-bubble（保持不变）
+  // 故这里把 text/visible 指向**横条**（流式断言的目标），
+  // 另加 bubbleText/bubbleVisible 供"气泡不被流式占用"的反向断言用。
+  // ──────────────────────────────────────────────────────────────────────
   const api = {
     text: () => page.evaluate(() => {
-      const el = document.getElementById('speech-bubble-text')
+      const el = document.getElementById('pet-strip-text')
       return el ? el.textContent : null
     }),
     visible: () => page.evaluate(() => {
+      const el = document.getElementById('pet-strip')
+      return el ? !el.hidden : null
+    }),
+    bubbleText: () => page.evaluate(() => {
+      const el = document.getElementById('speech-bubble-text')
+      return el ? el.textContent : null
+    }),
+    bubbleVisible: () => page.evaluate(() => {
       const el = document.getElementById('speech-bubble')
       return el ? !el.hidden : null
     }),
@@ -179,19 +194,32 @@ async function openReady(browser) {
     }, msg),
     wsCount: () => page.evaluate(() => window.__wsN),
     rejections: () => page.evaluate(() => window.__rej.slice(0, 5)),
-    hide: () => page.evaluate(() => window.__mioPetBubble.hide()),
+    // 清空两条通路的显示（流式在横条、工具状态在气泡），避免用例间互相污染
+    hide: () => page.evaluate(() => {
+      try { window.__mioPetStrip.hide() } catch (e) {}
+      try { window.__mioPetBubble.hide() } catch (e) {}
+    }),
   }
 
   for (let i = 0; i < 40; i += 1) {
     const basic = await page.evaluate(
-      () => Boolean(window.__ws && typeof window.__ws.onmessage === 'function' && window.__mioPetBubble),
+      () => Boolean(window.__ws && typeof window.__ws.onmessage === 'function'
+        && window.__mioPetBubble && window.__mioPetStrip),
     )
     if (basic) {
-      await page.evaluate(() => window.__mioPetBubble.show('warmup', { durationMs: 400 }))
+      // ★ 就绪门闩：流式断言的目标已改为**横条**，故这里必须用横条自身的 API 预热。
+      //   原来用 __mioPetBubble.show 预热 + api.text()（当时读气泡）是自洽的；
+      //   api.text 改读 #pet-strip-text 后若不改门闩，会永远读到空串 ⇒ 全部"页面就绪"失败。
+      await page.evaluate(() => {
+        // 清掉可能存在的"用户已关闭"持久态，否则 show 会被拒
+        try { window.__mioPetStrip.resetDismissed() } catch (e) {}
+        window.__mioPetStrip.setEnabled(true)
+        window.__mioPetStrip.show('warmup', { durationMs: 0 })
+      })
       await sleep(250)
       const warm = await api.text()
       if (typeof warm === 'string' && warm.length > 0) {
-        await api.hide()
+        await page.evaluate(() => window.__mioPetStrip.hide())
         await sleep(150)
         return { page, api, errors }
       }
@@ -297,15 +325,24 @@ async function withPage(browser, title, fn) {
     check('协议层只发 text-chunks；未知 frame 不渲染', !String(t || '').includes('SECRET'), JSON.stringify(t))
   })
 
-  // ---- 5. 其它来源可接管 ----
-  await withPage(browser, '[5] 其它来源可接管气泡（流不霸屏）', async (api) => {
+  // ---- 5. 两条通路互不抢占（流式走横条 / 工具状态走气泡）----
+  // 【用户裁决 2026-10-17】旧断言是"agent_bubble 覆盖流式气泡"——那建立在
+  // **两者共用同一个气泡框**的旧设计上。现在流式正文走横条、工具状态走说话气泡，
+  // 两条通路物理分离，不再存在"谁覆盖谁"，改为断言**同时可见且互不干扰**，
+  // 这才是新契约真正要守的东西。
+  await withPage(browser, '[5] 流式走横条 / 工具状态走气泡（互不抢占）', async (api) => {
     await api.push({ type: 'agent_stream', payload: BASE_STREAM })
     await sleep(400)
     await api.push({ type: 'agent_bubble', payload: { agent_id: 'dsh', text: '一次性通知', accent: '#4F6BED' } })
     // announce 走气泡自带的逐字打字机（约 180ms/字），等够 5 个字再看
     await sleep(1300)
-    const t = await api.text()
-    check('agent_bubble 可覆盖流式气泡', String(t || '').includes('一次性通知'), JSON.stringify(t))
+    const stripText = await api.text()
+    const bubbleText = await api.bubbleText()
+    check('流式仍在横条里（未被工具状态挤掉）',
+          String(stripText || '').includes('你好'), JSON.stringify(stripText))
+    check('工具状态进说话气泡',
+          String(bubbleText || '').includes('一次性通知'), JSON.stringify(bubbleText))
+    check('两条通路同时可见', (await api.visible()) === true && (await api.bubbleVisible()) === true)
   })
 
   // ---- 6. 播完自动消失 ----

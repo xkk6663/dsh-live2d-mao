@@ -2566,13 +2566,16 @@
         ? '显示说话气泡'
         : '隐藏说话气泡'
     }
-    // 流式气泡：独立开关 live2d_stream_text_enabled（**不再**受说话气泡总开关单独决定）
+    // ★ 流式提示开关 —— 现在它控制的是**横条**（用户裁决：流式正文走横条、气泡只放工具状态）。
+    //   判定同时看两个因素：
+    //     - settings.live2d_stream_text_enabled（用户总开关）
+    //     - 主体 localStorage 的 dismissed（用户点过 ✕）
     if (streamBubbleButton) {
-      streamBubbleButton.textContent = settings.live2d_stream_text_enabled === false
-        ? '显示流式气泡'
-        : '隐藏流式气泡'
+      const streamOff = settings.live2d_stream_text_enabled === false
+        || !!(window.__mioPetStrip && window.__mioPetStrip.isDismissed())
+      streamBubbleButton.textContent = streamOff ? '显示流式提示' : '隐藏流式提示'
     }
-    // 横条：独立开关（主体 localStorage 的 dismissed 与 settings 的 enabled 共同决定）
+    // 兼容：旧版菜单若还留着独立的「横条」按钮（data-action="strip"），让它与上面同源
     if (stripButton) {
       const stripOn = !(window.__mioPetStrip && window.__mioPetStrip.isDismissed())
       stripButton.textContent = stripOn ? '隐藏横条' : '显示横条'
@@ -2736,40 +2739,52 @@
   /** 流播完：把权威全文校正上去，并按文本长度停留一会儿再消失。 */
   function finishAgentStream(responseId, finalText, rendered) {
     if (!streamState || streamState.responseId !== responseId) return
+    const strip = window.__mioPetStrip
     const authoritative = String(finalText || '').trim()
-    if (authoritative && authoritative !== String(rendered || '').trim()) {
-      speechBubbleText.textContent = authoritative
-      speechBubbleText.scrollTop = speechBubbleText.scrollHeight
-      updateSpeechBubblePosition(true)
-    }
+    // 权威全文校正：块间拼接可能因上游丢块/重复而与 final_text 不一致。
+    // 横条没有"直接设文本"的契约方法（show 会重开一段），故这里用 show 收尾：
+    // 用权威全文覆盖一次，并给出停留时长 —— 语义等同气泡时代的"收尾校正 + hold"。
     const chars = Array.from(authoritative || String(rendered || '')).length
     const holdMs = Math.max(3500, Math.min(12000, chars * 60))
+    if (strip) {
+      strip.show(authoritative || String(rendered || ''), { durationMs: holdMs })
+    }
     streamState.holdTimer = window.setTimeout(() => {
       if (streamState && streamState.responseId === responseId) {
         cancelAgentStream()
-        hideSpeechBubble()
+        // 到点收起横条内容（不改"用户已关闭"状态）
+        if (strip) strip.hide()
       }
-    }, holdMs)
+    }, holdMs + 200)
   }
 
   function applyAgentStream(payload) {
     if (!payload) return
-    // ★ 流式气泡与"说话气泡"是**两条独立管理**的通路（用户裁决）：
-    //   说话气泡总开关（live2d_speech_bubble_enabled）不再挡流式，
-    //   流式只认它自己的开关（live2d_stream_text_enabled）。
-    //   这是 DSH 插件线专门化：DSH 的正文流走流式，插件喊话走说话气泡，
-    //   两者由不同的菜单按钮独立显示/隐藏，互不牵连。
+    // ★★ 用户裁决（2026-10-17 二次对齐）：**流式正文走横条，不进气泡** ★★
+    //
+    // 三条通路各司其职（别再揉在一起）：
+    //   ┌ 气泡 #speech-bubble   ← agent_bubble：**工具状态**，如「正在用 read 干活…」
+    //   ├ 横条 #pet-strip       ← agent_stream：**DSH 下发的流式正文**（逐 token 铺开）
+    //   └ （气泡与横条互斥使用，不再抢同一个框）
+    //
+    // 为什么这样分：用户原话「把 DSH 下发的流式状态放进横条里，气泡里只显示使用工具情况，
+    //   流式话语用横条显示不在气泡显示」。此前把流式正文塞进气泡，会和工具状态气泡打架
+    //   （一个要逐字铺、一个要整句停 4 秒），体验上互相打断。
     if (settings.live2d_stream_text_enabled === false) return
     const texts = Array.isArray(payload.texts) ? payload.texts.map((t) => String(t == null ? '' : t)) : []
     const finalText = String(payload.final_text || '')
     // 只认正文（text-chunks）。上游将来若新增 reasoning/tool-call 之类的流，
-    // 缺了这道判断就会把**模型推理草稿**直接铺到桌宠气泡里——那是明确的越界。
+    // 缺了这道判断就会把**模型推理草稿**直接铺到横条上——那是明确的越界。
     const frame = String(payload.frame || 'text-chunks')
     if (frame !== 'text-chunks') return
     if (!texts.join('') && !finalText.trim()) return
-    // B4 降级：上游只给了权威全文、没给增量（老日志/丢帧）时把它当成"一整块"直接上屏。
-    // 少一层动画，总好过 texts[0] 取到 undefined 把字面量 "undefined" 写上气泡。
+    // B4 降级：上游只给了权威全文、没给增量（老日志/丢帧）时整块上屏。
     if (!texts.length) texts.push(finalText.trim())
+
+    const strip = window.__mioPetStrip
+    // 主体没有横条（旧版桌宠）→ 静默忽略。**不再回落到气泡** ——
+    // 回落会让"流式又跑回气泡"，正是本次要消除的错位。
+    if (!strip) return
 
     const responseId = [
       'agent-stream',
@@ -2783,19 +2798,10 @@
     if (streamState && streamState.responseId === responseId) return
 
     cancelAgentStream()
-    // 身份色与位置：跟 agent_bubble 完全同一套（气泡尾巴/主题色一致）
-    applyBubbleAgentAccent(String(payload.agent_id || ''), String(payload.accent || ''))
-    speechBubble.classList.remove('image-mode')
-    speechBubbleResponseId = responseId
-    window.clearTimeout(speechBubbleTimer)
-    window.clearTimeout(speechBubbleHideTimer)
-    speechBubbleHideTimer = null
-    speechBubbleCharacterCount = 0
-    speechBubbleVisibleCount = 0
-    speechBubbleText.textContent = ''
-    speechBubble.style.visibility = ''
-    speechBubble.hidden = false
-    updateSpeechBubblePosition(true)
+    streamState = { responseId, index: 0, timer: null, holdTimer: null }
+
+    // 清空横条并以 sticky 模式开流：sticky = 不回自动隐藏计时，由收尾统一排期
+    strip.show('', { sticky: true, sessionId: String(payload.session || '') })
 
     const dt = Array.isArray(payload.dt) ? payload.dt : []
     const steps = []
@@ -2811,21 +2817,21 @@
       total = steps.reduce((a, b) => a + b, 0)
     }
 
-    streamState = { responseId, index: 0, timer: null, holdTimer: null }
+    // ★ 流式正文铺到**横条**（不是气泡）。sticky 已在上面 show 时开启，
+    //   这里只负责按上游 dt 节奏逐块 append。
     let shown = ''
     const step = () => {
       if (!streamState || streamState.responseId !== responseId) return
-      // 只看流式自己的开关：说话气泡总开关不再影响流式（两条通路独立管理）。
+      // 只看流式自己的开关
       if (settings.live2d_stream_text_enabled === false) {
-        // 用户在播放途中关掉流式开关：立即收尾，不留半截文本挂在屏上
+        // 用户在播放途中关掉流式开关：立即收尾，不留半截文本挂在横条上
         cancelAgentStream()
-        hideSpeechBubble()
+        if (strip) strip.hide()
         return
       }
-      shown += texts[streamState.index]
-      speechBubbleText.textContent = shown
-      speechBubbleText.scrollTop = speechBubbleText.scrollHeight
-      updateSpeechBubblePosition(true)
+      const chunk = texts[streamState.index]
+      shown += chunk
+      if (strip) strip.append(chunk, { sessionId: String(payload.session || '') })
       streamState.index += 1
       if (streamState.index < texts.length) {
         // 第 i 块之后等 steps[i-1]（dt 描述的是"块间间隔"）
@@ -3326,15 +3332,29 @@
     // ★ 流式气泡独立开关：只影响"逐 token 流式"这条通路，不碰说话气泡，
     //   也不碰横条（三者各自独立管理 —— 用户裁决）。
     if (action === 'stream-bubble') {
-      const enabled = settings.live2d_stream_text_enabled === false
+      // ★ 用户裁决：流式正文走横条 ⇒ 这个开关**就是横条的开关**。
+      //   开启/关闭需要同时处理两处状态：
+      //     - settings.live2d_stream_text_enabled（总开关，重启后仍生效）
+      //     - 主体 localStorage 的 dismissed（用户点过 ✕ 的持久记忆）
+      //   否则会出现"菜单说开了、横条却不显示"（被 dismissed 挡着）的割裂。
+      const stripApi = window.__mioPetStrip
+      const nowOff = settings.live2d_stream_text_enabled === false
+        || !!(stripApi && stripApi.isDismissed())
+      const enabled = nowOff // 当前是关 → 点击后要开
       try { await persistCompanionSetting('live2d_stream_text_enabled', enabled) } catch (_) {}
-      updateContextMenuLabels()
-      // 关掉时：若正在播流，立即收尾（不留半截文本）
-      if (!enabled) {
-        cancelAgentStream()
-        // 仅当当前气泡属于流式（responseId 为 agent-stream:*）时才清，避免误伤说话气泡
-        if (String(speechBubbleResponseId || '').indexOf('agent-stream:') === 0) hideSpeechBubble()
+      if (stripApi) {
+        if (enabled) {
+          // 重开：清掉"用户已拒绝"记忆，并展示一次让用户看到效果
+          if (typeof stripApi.resetDismissed === 'function') stripApi.resetDismissed()
+          stripApi.show('流式提示已开启', { durationMs: 2000 })
+        } else {
+          // 关闭：立即收尾（不留半截），并写入"已拒绝"持久态（与点 ✕ 同语义）
+          cancelAgentStream()
+          if (typeof stripApi.markDismissed === 'function') stripApi.markDismissed()
+          else stripApi.hide()
+        }
       }
+      updateContextMenuLabels()
     }
     // ★ 横条独立开关：与两种气泡都无关。
     //   横条的"关闭态"持久在主体（localStorage），这里做"显示/隐藏"的双向切换。

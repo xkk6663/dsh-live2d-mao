@@ -32,8 +32,10 @@
         <button type="button" data-action="size">调整大小</button>
         <button type="button" data-action="screenshot-ask">截图提问</button>
         <button type="button" data-action="speech-bubble">隐藏说话气泡</button>
-        <button type="button" data-action="stream-bubble">隐藏流式气泡</button>
-        <button type="button" data-action="strip">隐藏横条</button>
+        <!-- ★ 用户裁决：流式正文放进**横条**显示（气泡只显示工具状态）。
+             故「流式气泡」与「横条」本是同一条通路，菜单合并为一个开关。
+             data-action 仍为 stream-bubble，兼容既有引用与设置键 live2d_stream_text_enabled。 -->
+        <button type="button" data-action="stream-bubble">隐藏流式提示</button>
         <button type="button" data-action="agent-badge">隐藏状态徽标</button>
         <button type="button" data-action="agent">打开 Mio</button>
         <hr />
