@@ -23,8 +23,11 @@
            属**核心 UI**：插件只能经 window.__mioPetStrip 访问，不得直接改这里的 DOM。
            与说话气泡互斥使用（流式走横条、说话走气泡，不再打架）。 -->
       <section id="pet-strip" class="pet-strip" aria-live="polite" hidden>
+        <!-- 左右拉伸手柄：用户要求"流式气泡的左右大小应该可手动拉伸"（2026-10-17） -->
+        <span class="pet-strip-grip grip-left" data-strip-grip="left" aria-hidden="true"></span>
         <span id="pet-strip-text"></span>
         <button id="pet-strip-close" class="pet-strip-close" type="button" title="关闭横条" aria-label="关闭横条">×</button>
+        <span class="pet-strip-grip grip-right" data-strip-grip="right" aria-hidden="true"></span>
       </section>
       <nav id="context-menu" class="context-menu" hidden>
         <button type="button" data-action="chat">打开/关闭对话窗口</button>

@@ -1,8 +1,0 @@
-{
-  "enabled": true,
-  "min_seconds": 1800,
-  "max_seconds": 3600,
-  "quiet_start": "23:00",
-  "quiet_end": "08:00",
-  "prompt": "用调侃吐槽的语气，用60字以内的简洁口语评价我屏幕上正在做的事。"
-}

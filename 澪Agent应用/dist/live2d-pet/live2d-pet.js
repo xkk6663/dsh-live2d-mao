@@ -3766,6 +3766,26 @@
     const el = document.getElementById('pet-strip')
     const textEl = document.getElementById('pet-strip-text')
     const closeBtn = document.getElementById('pet-strip-close')
+    const grips = el ? Array.from(el.querySelectorAll('[data-strip-grip]')) : []
+
+    // ── 宽度持久化：用户拉伸过就记下来（跨会话保留），没拉伸过则按内容自适应 ──
+    const KEY_WIDTH = 'mio-pet-strip-width'
+    const MIN_W = 150
+    const MAX_W = 560
+    function clampWidth(px) {
+      return Math.max(MIN_W, Math.min(MAX_W, Math.round(px)))
+    }
+    function applyWidth(px) {
+      if (!el) return
+      const w = clampWidth(px)
+      el.style.width = `${w}px`
+      el.style.maxWidth = 'none'   // 显式宽度优先，避免被 max-width 再夹一次
+      el.classList.add('resized')
+    }
+    safe(() => {
+      const saved = Number(window.localStorage.getItem(KEY_WIDTH))
+      if (Number.isFinite(saved) && saved > 0) applyWidth(saved)
+    })
 
     // 主题：与泡泡皮肤同一套 id（default/mono/navy/…），类名用 strip-style-*
     let styleId = 'default'
@@ -3824,7 +3844,11 @@
       window.clearTimeout(hideTimer)
       hideTimer = null
       buffer = ''
-      if (textEl) textEl.textContent = ''
+      if (textEl) textEl.innerHTML = ''
+      // 横条收起了 ⇒ 把交互权交还给原有鼠标策略（鼠标在模型上才可交互，其余穿透）。
+      // 交给 updateMousePassThrough 按当前鼠标位置重新判定，而不是硬置 false
+      // （否则鼠标记在模型上时也会变成穿透，反而点不到桌宠本体）。
+      try { updateMousePassThrough(true) } catch (_) { setInteractive(false) }
     }
 
     function scheduleHide(durationMs) {
@@ -3834,13 +3858,39 @@
       if (ms > 0) hideTimer = window.setTimeout(doHide, Math.max(600, ms))
     }
 
+    // ★ 内联代码着色（用户 2026-10-17 反馈）：DSH 下发的正文里像 `/api/xiaozhi/ws`
+    //   这类路径/代码段，在原版 agent 界面会被 `marked` 包成 `<code>` 显示成"框起来"的
+    //   小药丸；而横条此前用 textContent 直出，把 `` ` `` 和路径都当普通字面文本，丢了框。
+    //   这里做一个**极简、安全**的内联代码渲染：先整体 HTML 转义（杜绝注入），再把
+    //   反引号 `` `...` `` 与 ``` 代码围栏 ``` 包成 <code>；不加粗体/标题等其它 Markdown。
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+      })[c])
+    }
+    function renderStripText(raw) {
+      let s = escapeHtml(raw)
+      // 先处理围栏代码块 ```...```（跨行），再处理行内 `` `...` ``（单段）
+      s = s.replace(/```([\s\S]*?)```/g, (_, code) => `<code>${code.replace(/^\n+|\n+$/g, '')}</code>`)
+      s = s.replace(/`([^`\n]+)`/g, (_, code) => `<code>${code}</code>`)
+      return s
+    }
+
     function render() {
       if (textEl) {
-        textEl.textContent = buffer
+        // 用 innerHTML 才能让 <code> 生效；renderStripText 已整体转义，安全。
+        textEl.innerHTML = renderStripText(buffer)
         textEl.scrollTop = textEl.scrollHeight
       }
       el.hidden = false
       visible = true
+      // ★ 横条可见 ⇒ 窗口必须可交互。
+      //   踩过的坑：主进程 applyMainWindowMousePolicy() 只在
+      //     inModel || rendererInteractive || (uiOpen && inWindow)
+      //   时才关掉穿透。横条画在**模型外面**，于是窗口整体处于 setIgnoreMouseEvents(true)，
+      //   横条上的 ✕ / 拖动 / 拉伸全都收不到事件 —— 表现为"点不动，只能右键开菜单才能关"。
+      //   修法：横条显示期间主动置 interactive，隐藏时再交还给原有的鼠标策略。
+      setInteractive(true)
     }
 
     /** 统一的"能不能显示"判定：禁用 / 用户已关 / 气泡总开关关闭 时都拒绝。 */
@@ -3892,6 +3942,53 @@
       }
       el.addEventListener('pointerup', endDrag)
       el.addEventListener('pointercancel', endDrag)
+    })
+
+    // ── 左右拉伸：用户要求"流式气泡的左右大小应该可手动拉伸"（2026-10-17）──
+    //  两个贴边窄手柄各自独立拖：拖左手柄改左边位置+反算宽度，拖右手柄只改宽度。
+    //  用 pointer capture 保证拖出手柄外仍跟手；结束时把宽度落 localStorage 持久化。
+    safe(() => {
+      grips.forEach((grip) => {
+        const side = grip.getAttribute('data-strip-grip')
+        grip.addEventListener('pointerdown', (ev) => {
+          ev.preventDefault()
+          ev.stopPropagation()   // 别触发横条整体拖动
+          const rect = el.getBoundingClientRect()
+          const startX = ev.clientX
+          const startW = rect.width
+          const startLeft = rect.left
+          el.classList.add('resizing')
+          safe(() => grip.setPointerCapture(ev.pointerId))
+
+          function onMove(e2) {
+            const dx = e2.clientX - startX
+            if (side === 'right') {
+              applyWidth(startW + dx)
+            } else {
+              // 左侧：宽度反向变化，同时左边缘跟着移动
+              const w = clampWidth(startW - dx)
+              applyWidth(w)
+              el.style.left = `${startLeft + (startW - w)}px`
+              el.style.right = 'auto'
+            }
+          }
+          function onUp(e2) {
+            el.classList.remove('resizing')
+            safe(() => grip.releasePointerCapture(e2.pointerId))
+            grip.removeEventListener('pointermove', onMove)
+            grip.removeEventListener('pointerup', onUp)
+            grip.removeEventListener('pointercancel', onUp)
+            // 持久化宽度（位置由既有拖动逻辑持久化，这里只存宽）
+            safe(() => {
+              const w = Math.round(el.getBoundingClientRect().width)
+              window.localStorage.setItem(KEY_WIDTH, String(clampWidth(w)))
+            })
+          }
+          grip.addEventListener('pointermove', onMove)
+          grip.addEventListener('pointerup', onUp)
+          grip.addEventListener('pointercancel', onUp)
+        })
+      })
     })
 
     // ✕：用户关闭 → 记住"已拒绝"（跨会话），并立刻隐藏

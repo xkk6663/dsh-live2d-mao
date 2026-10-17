@@ -718,8 +718,12 @@ body,
   display: flex;
   align-items: center;
   gap: 6px;
+  /* 宽度：默认按内容自适应；**用户拉伸过就固定像素宽**（JS 写 style.width）。
+     用户要求"左右大小可手动拉伸"（2026-10-17），故这里 max-width 放宽到 560px，
+     并把 min-width 放开，让 JS 能把宽度撑大。 */
   width: max-content;
-  max-width: min(320px, calc(100vw - 24px));
+  min-width: 150px;
+  max-width: min(560px, calc(100vw - 24px));
   padding: 6px 8px 6px 12px;
   color: var(--bubble-ink);
   background: var(--bubble-bg);
@@ -751,6 +755,21 @@ body,
   overflow-y: auto;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* ★ 内联代码药丸（用户 2026-10-17 反馈）：把 `/api/xiaozhi/ws` 这类路径/代码段
+   还原成原版 agent 界面"框起来"的效果。调色板复用横条自身变量，随皮肤自动换色。 */
+.pet-strip #pet-strip-text code {
+  padding: 1px 5px;
+  margin: 0 1px;
+  border: 1px solid color-mix(in srgb, var(--bubble-ink) 20%, transparent);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--bubble-ink) 8%, transparent);
+  color: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.92em;
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 
 .pet-strip-close {
@@ -817,4 +836,28 @@ body,
 .pet-strip.strip-style-comic {
   --bubble-border: #1d1d1f;
   --bubble-shadow: 3px 3px 0 #1d1d1f;
+}
+
+/* ---- 横条左右拉伸手柄（用户要求：流式气泡左右大小可手动拉伸）----
+   为什么用独立手柄而不是 CSS resize：
+   CSS `resize` 只在 textarea 等少数元素生效，且手柄在右下角；
+   这里是**左右**拉伸，需要两个贴在两侧的窄条，且在穿透窗口里必须 pointer-events:auto。 */
+.pet-strip .pet-strip-grip {
+  flex: 0 0 auto;
+  width: 6px;
+  align-self: stretch;
+  border-radius: 4px;
+  cursor: ew-resize;
+  pointer-events: auto;
+  background: transparent;
+  transition: background 120ms ease;
+}
+.pet-strip .pet-strip-grip:hover,
+.pet-strip.resizing .pet-strip-grip {
+  background: color-mix(in srgb, var(--bubble-ink) 22%, transparent);
+}
+/* 拉伸中禁止选中文字、并锁定光标 */
+.pet-strip.resizing {
+  cursor: ew-resize;
+  user-select: none;
 }
