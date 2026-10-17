@@ -200,7 +200,13 @@
     return true
   }
 
-  /** 事件播放：有绑定片段用片段，否则回退合成音；事件关掉则不响。 */
+  /** 事件播放（2026-10-17 显式选择版）：所见即所得 ——
+   *  cfg.clip 的语义由设置页下拉直接决定，无隐式优先级：
+   *    ''（空）          = 「默认音效」→ 播该事件的默认内置片段（无则合成音）
+   *    '__synth__'       = 「内置合成音」→ 显式合成音
+   *    'builtin:<path>'  = 某个内置命名片段（dist/live2d-pet/sounds/ 下）
+   *    其它字符串         = 用户上传的片段名（/api/companion/sounds/）
+   */
   function play(eventName) {
     if (!enabled) return false
     var name = String(eventName || '')
@@ -209,8 +215,13 @@
     var scale = eventGain(name)
     if (scale <= 0) return false
     var clip = cfg && typeof cfg.clip === 'string' ? cfg.clip.trim() : ''
+    if (clip === '__synth__') {
+      var sfn = PRESETS[EVENT_PRESET[name] || name]
+      return sfn ? sfn(scale) : false
+    }
+    if (clip.indexOf('builtin:') === 0) return playBuiltinClip(clip.slice(8), scale)
     if (clip) return playClip(clip, scale)
-    // ★ 内置默认片段（2026-10-17）：无自定义片段时播内置音频；失败/缺失回退合成音
+    // 「默认音效」：该事件的默认内置片段；无对应素材（switch/error）→ 合成音
     var builtin = BUILTIN_CLIPS[name]
     if (builtin) {
       var played = playBuiltinClip(builtin, scale)
@@ -271,6 +282,11 @@
     var clip = typeof cfg.clip === 'string' ? cfg.clip.trim() : ''
     var scale = eventGain(name)
     if (!(scale > 0)) scale = volume
+    if (clip === '__synth__') {
+      var sfn = PRESETS[EVENT_PRESET[name] || name]
+      return sfn ? sfn(scale) : false
+    }
+    if (clip.indexOf('builtin:') === 0) { playBuiltinClip(clip.slice(8), scale); return true }
     if (clip) return playClip(clip, scale)
     var builtin = BUILTIN_CLIPS[name]
     if (builtin && playBuiltinClip(builtin, scale)) return true
@@ -317,6 +333,17 @@
     setClips: setClips,
     refreshClips: refreshClips,
     getClips: function () { return clips.slice() },
+    // ★ 内置命名片段清单（供设置页下拉直接列出，所见即所得）。
+    //   value 即 cfg.clip 的存储值（'builtin:<path>'），桌宠与管理页试听都能直接播。
+    builtinClips: function () {
+      return [
+        { id: 'builtin:sounds/press.mp3', label: '小黄鸭 · 按压', path: 'sounds/press.mp3' },
+        { id: 'builtin:sounds/release.mp3', label: '小黄鸭 · 松开', path: 'sounds/release.mp3' },
+        { id: 'builtin:sounds/task-end.wav', label: 'Minecraft 经验球', path: 'sounds/task-end.wav' },
+        { id: 'builtin:sounds/ask.wav', label: '提问提示音', path: 'sounds/ask.wav' },
+        { id: 'builtin:sounds/approval.wav', label: '授权提示音', path: 'sounds/approval.wav' },
+      ]
+    },
     events: Object.keys(EVENT_PRESET),
     presets: Object.keys(PRESETS),
     has: function (name) { return Object.prototype.hasOwnProperty.call(PRESETS, String(name)) },

@@ -225,10 +225,35 @@
   // ---------- 音效（事件表 + 片段库） ----------
 
   function clipOptions(selected) {
-    var opts = '<option value=""' + (selected ? '' : ' selected') + '>内置合成音</option>'
-    sounds.forEach(function (s) {
-      opts += '<option value="' + s.name.replace(/"/g, '&quot;') + '"' + (s.name === selected ? ' selected' : '') + '>' + s.name + '</option>'
-    })
+    // ★ 显式选择（2026-10-17 用户裁决）：去掉隐式优先级，下拉直接列出全部可播音频，
+    //   所见即所得 —— 选中什么就播什么，试听也播所选的那条。
+    //   值语义：''=默认（该事件的推荐音效）｜'__synth__'=合成音｜'builtin:…'=内置片段｜其它=我的片段
+    var opts = '<option value=""' + (!selected ? ' selected' : '') + '>默认音效（推荐）</option>'
+    opts += '<option value="__synth__"' + (selected === '__synth__' ? ' selected' : '') + '>内置合成音</option>'
+    // 内置命名片段（来自桌宠音效系统；管理页独立于桌宠窗口，用静态路径清单兜底）
+    var builtins = (window.__mioPetSound && window.__mioPetSound.builtinClips)
+      ? window.__mioPetSound.builtinClips()
+      : [
+        { id: 'builtin:sounds/press.mp3', label: '小黄鸭 · 按压' },
+        { id: 'builtin:sounds/release.mp3', label: '小黄鸭 · 松开' },
+        { id: 'builtin:sounds/task-end.wav', label: 'Minecraft 经验球' },
+        { id: 'builtin:sounds/ask.wav', label: '提问提示音' },
+        { id: 'builtin:sounds/approval.wav', label: '授权提示音' },
+      ]
+    if (builtins.length) {
+      opts += '<optgroup label="内置片段">'
+      builtins.forEach(function (b) {
+        opts += '<option value="' + b.id.replace(/"/g, '&quot;') + '"' + (b.id === selected ? ' selected' : '') + '>' + b.label + '</option>'
+      })
+      opts += '</optgroup>'
+    }
+    if (sounds.length) {
+      opts += '<optgroup label="我的片段">'
+      sounds.forEach(function (s) {
+        opts += '<option value="' + s.name.replace(/"/g, '&quot;') + '"' + (s.name === selected ? ' selected' : '') + '>' + s.name + '</option>'
+      })
+      opts += '</optgroup>'
+    }
     return opts
   }
 
@@ -252,7 +277,7 @@
     return card('音效事件',
       '<div style="display:flex;flex-direction:column;gap:7px;">' + rows + '</div>' +
       '<div style="margin-top:9px;font-size:10px;line-height:1.8;color:var(--muted,#687984);">' +
-        '每行可单独开关 / 换片段 / 调音量；片段选「内置合成音」以外的项即播放自定义音频（点击音就是按压+松开两行）。<br />' +
+        '每行下拉直接选播什么：默认音效（推荐，内置片段）／内置合成音／内置片段（小黄鸭、Minecraft 经验球等）／我的片段。选中即所见，试听播的也是下拉当前选中的那条。<br />' +
         '总开关与基准音量在「设置 → 桌宠 → 音效」；本页音量是各事件相对基准的百分比。</div>')
   }
 
@@ -290,7 +315,7 @@
         '• <b>推荐 WAV / MP3</b>（最稳，任何浏览器都能播）；OGG/Opus/FLAC 也支持。<br />' +
         '• <b>不支持</b> WMA / APE / AMR / AIFF / MIDI / 加密音乐平台下载的受保护格式（后缀对不上会被拒，后缀对得上但编码不支持会在试听/裁剪时报"无法解码"，请先转成 WAV 或 MP3）。<br />' +
         '• 建议做<b>短音效</b>：≤3 秒、单声道、22.05~44.1kHz 即可，体积小、触发延迟低。<br />' +
-        '• 事件音若没绑片段，走内置合成音（不需要任何素材）。' +
+        '• 事件音默认用内置片段（小黄鸭 / Minecraft 经验球等），无需任何素材；下拉里选「内置合成音」可回到纯合成音。' +
       '</div>' +
       '<div style="display:flex;flex-direction:column;gap:6px;">' + rows + empty + '</div>' +
       '<div style="margin-top:9px;font-size:10px;color:var(--muted,#687984);">「裁剪」在波形上拖选区间，保存为新片段（WAV），原片段保留。</div>')
@@ -316,6 +341,9 @@
   }
 
   function clipUrlOf(name) {
+    // ★ 内置静态片段（'sounds/xxx' 相对路径）：指向桌宠 dist 的静态资源。
+    //   管理页与桌宠页同源（都在后端 /agent-app/ 下），直接相对解析即可。
+    if (name.indexOf('sounds/') === 0) return '/agent-app/live2d-pet/' + name
     var found = null
     sounds.forEach(function (s) { if (s.name === name) found = s })
     return found ? found.url : ('/api/companion/sounds/' + encodeURIComponent(name))
@@ -627,7 +655,9 @@
         var id = sel.getAttribute('data-snd-clip')
         var cfg = soundEvents[id] || (soundEvents[id] = {})
         cfg.clip = sel.value
-        saveSettings({ pet_sound_events: soundEvents }, cfg.clip ? '已绑定片段' : '已回到内置合成音')
+        var msg = !cfg.clip ? '已设为默认音效'
+          : (cfg.clip === '__synth__' ? '已设为内置合成音' : '已绑定：' + cfg.clip.replace(/^builtin:/, ''))
+        saveSettings({ pet_sound_events: soundEvents }, msg)
       })
     })
     body.querySelectorAll('[data-snd-vol]').forEach(function (slider) {
@@ -646,8 +676,11 @@
       btn.addEventListener('click', function (e) {
         e.stopPropagation()
         var id = btn.getAttribute('data-snd-play')
-        // 管理页试听：本地合成音/片段都用管理页自己的 AudioContext 播（不依赖桌宠窗口）
-        previewEvent(id)
+        // ★ 所见即所得：试听播**下拉当前选中**的音频（未保存也照播），
+        //   而不是已保存的 cfg——用户切到哪条听到哪条。
+        var sel = $q('[data-snd-clip="' + id + '"]', body)
+        var clip = sel ? String(sel.value || '') : ''
+        previewEvent(id, clip)
       })
     })
 
@@ -796,13 +829,27 @@
     })
   }
 
-  function previewEvent(id) {
+  function previewEvent(id, clipOverride) {
     var ctx = auditContext()
     if (!ctx) return
     var cfg = soundEvents[id] || {}
     var vol = Number.isFinite(Number(cfg.volume)) ? Math.max(0, Math.min(1, Number(cfg.volume) / 100)) : 1
-    var clip = typeof cfg.clip === 'string' ? cfg.clip.trim() : ''
-    if (!clip) { builtinTone(ctx, id); return }
+    // clipOverride = 下拉当前选中值（所见即所得）；未传则回退已保存值
+    var clip = typeof clipOverride === 'string' ? clipOverride.trim()
+      : (typeof cfg.clip === 'string' ? cfg.clip.trim() : '')
+    if (clip === '__synth__') { builtinTone(ctx, id); return }
+    if (clip.indexOf('builtin:') === 0) { previewClip(clip.slice(8), vol); return }
+    if (!clip) {
+      // 「默认音效」= 该事件的推荐内置片段；无对应素材（switch/error）→ 合成音
+      var defaults = {
+        press: 'sounds/press.mp3', release: 'sounds/release.mp3',
+        task_end: 'sounds/task-end.wav', ask: 'sounds/ask.wav', approval: 'sounds/approval.wav',
+      }
+      var def = defaults[id]
+      if (def) { previewClip(def, vol); return }
+      builtinTone(ctx, id)
+      return
+    }
     previewClip(clip, vol)
   }
 
