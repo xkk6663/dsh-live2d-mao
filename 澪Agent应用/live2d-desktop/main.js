@@ -67,8 +67,12 @@ let modelBounds = null
 let uiOpen = false
 let mousePolicyTimer = null
 let lastIgnoreMouseEvents = null
-// 插件化：xiaozhi agent enabled 状态（由渲染层 IPC 同步），未启用时禁用所有小智入口
-let xiaozhiEnabled = false
+// DSH 专用化（用户裁决 2026-10-17）：原 `xiaozhiEnabled` 是"小智插件是否挂载"的开关，
+// 用来门控对话窗/托盘入口。小智插件已整体阉割，对话横条现在是**桌宠自己的**功能
+// （走 /api/companion/chat），不该再被一个不存在的插件开关挡住。
+// 故直接恒定可用；保留变量名是为了让下面十几处守卫不必全改（语义已从"小智开关"
+// 变成"对话功能是否可用"）。
+let xiaozhiEnabled = true
 let topmostWatchdog = null
 let lockControlAnchor = null
 let parentWatchdog = null
@@ -585,7 +589,9 @@ function createChatWindow(anchor) {
   })
   reportWindowAction('pet-chat-input', chatWindow, 'created')
   chatWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
-  chatWindow.loadURL(`${API_BASE}/agent-app/live2d-pet/xiaozhi/xiaozhi-chat.html?v=11`)
+  // DSH 专用化：对话横条页面从中性的 chat-bar/ 加载（原来指向 xiaozhi/xiaozhi-chat.html，
+  // 那是小智专用页；小智插件已阉割，页面已重写为走 /api/companion/chat 的通用对话横条）
+  chatWindow.loadURL(`${API_BASE}/agent-app/live2d-pet/chat-bar/pet-chat-bar.html?v=20261017`)
   chatWindow.once('ready-to-show', () => {
     positionChatWindow(anchor)
     chatWindow.show()
@@ -605,12 +611,8 @@ function createChatWindow(anchor) {
   })
 }
 
-function createXiaozhiWindow() {
-  // 插件化守卫：xiaozhi 未启用时禁止打开小智对话
-  if (!xiaozhiEnabled) return
-  // 打开小智对话（横条输入窗）
-  toggleChatWindow()
-}
+// DSH 专用化：原 createXiaozhiWindow()（打开小智对话）与 closeChatWindowIfOpen()
+// （小智停用时关闭对话窗）已删除 —— 小智插件已阉割，对话横条改为桌宠自有功能。
 
 function showChatWindow(anchor) {
   // 插件化守卫：xiaozhi 未启用时禁止打开小智对话窗
@@ -634,11 +636,6 @@ function toggleChatWindow(anchor) {
 }
 
 // 插件停用小智时关闭已打开的小智对话窗
-function closeChatWindowIfOpen() {
-  if (chatWindow && !chatWindow.isDestroyed() && chatWindow.isVisible()) {
-    hideChatWindow()
-  }
-}
 
 function restoreWindowVisibility() {
   if (!mainWindow || mainWindow.isDestroyed()) return
@@ -742,10 +739,10 @@ function updateTrayMenu() {
     },
     { label: '显示桌宠', click: () => restoreWindowVisibility() },
   ]
-  // 插件化：xiaozhi 未启用时不提供"打开小智对话"入口
-  if (xiaozhiEnabled) {
-    items.push({ label: '打开小智对话', click: () => toggleChatWindow() })
-  }
+  // DSH 专用化：原条件是"xiaozhi 启用才提供打开小智对话"。
+  // 对话横条现在是桌宠自己的功能（走 /api/companion/chat），恒可用；
+  // 文案也从小智改为桌宠，与阉割后的实际语义一致。
+  items.push({ label: '打开对话横条', click: () => toggleChatWindow() })
   items.push(
     { label: '导入 Live2D 模型', click: () => importModel() },
     { label: '桌宠管理', click: () => openPetAdmin() },
@@ -969,15 +966,10 @@ function registerIpc() {
     restoreWindowVisibility()
   })
   ipcMain.on('mio-desktop:set-chat-window-open', (_event, open) => setChatWindowOpen(open))
-  ipcMain.on('mio-desktop:set-agent-plugin', (_event, payload) => {
-    const agentId = String(payload?.agentId || '')
-    if (agentId !== 'xiaozhi') return
-    const enabled = Boolean(payload?.enabled)
-    if (xiaozhiEnabled === enabled) return
-    xiaozhiEnabled = enabled
-    if (!enabled) closeChatWindowIfOpen()
-    updateTrayMenu()
-  })
+  // DSH 专用化：原 `mio-desktop:set-agent-plugin` 只处理 xiaozhi 的启用/停用
+  // （停用时关掉对话窗、刷新托盘）。小智插件已阉割，该 IPC 保留为**空实现**，
+  // 以免渲染层若有残留调用时报 "no handler registered"。
+  ipcMain.on('mio-desktop:set-agent-plugin', () => { /* no-op：小智已移除 */ })
   ipcMain.handle('mio-desktop:toggle-chat-window', (_event, anchor) => toggleChatWindow(anchor))
   ipcMain.handle('mio-desktop:show-chat-window', (_event, anchor) => showChatWindow(anchor))
   ipcMain.on('mio-pet-chat:hide', () => hideChatWindow())
@@ -992,13 +984,9 @@ function registerIpc() {
     return { ok: true, selectedModelId: available ? id : '' }
   })
   ipcMain.handle('mio-desktop:open-agent', () => openPetAdmin())
-  ipcMain.on('mio-desktop:open-xiaozhi', () => createXiaozhiWindow())
-  ipcMain.on('mio-desktop:open-screen-crop', () => openScreenCrop())
-  ipcMain.on('mio-pet-chat:xiaozhi-bubble', (_event, payload) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('mio-xiaozhi:bubble', payload)
-    }
-  })
+  // DSH 专用化：`open-xiaozhi` / `open-screen-crop` / `xiaozhi-bubble` 三个 IPC 已移除
+  // （小智插件与其视觉通路已阉割）。用 on() 而非 handle()，所以渲染层若仍有残留调用
+  // 也只是无人接收，不会抛 "no handler registered"。
   // 小智表情/口型事件转发给桌宠主窗（speaking/motion 等）
   ipcMain.on('mio-desktop:pet-event', (_event, ev) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -1034,7 +1022,8 @@ else {
     log('runtime.ready', `modelServer=${modelServerOrigin}`)
     registerIpc()
     registerDisplayListeners()
-    registerScreenShortcut()
+    // DSH 专用化：原 registerScreenShortcut()（Ctrl+Shift+S 框选提问）已移除，
+    // 它依赖已阉割的小智视觉接口 /api/xiaozhi/vision-bubble。见文件下方说明。
     createWindow()
     createTray()
     startParentWatchdog()
@@ -1045,44 +1034,9 @@ app.on('window-all-closed', (event) => {
   if (!quitting) event.preventDefault()
 })
 
-// ---- 全局快捷键：Ctrl+Shift+S 沉浸式框选屏幕（截图提问） ----
-let cropWindow = null
-let screenShortcutAccelerator = 'CommandOrControl+Shift+S'
-function registerScreenShortcut() {
-  try {
-    globalShortcut.register(screenShortcutAccelerator, () => {
-      openScreenCrop()
-    })
-    log('shortcut.registered', screenShortcutAccelerator)
-  } catch (error) {
-    log('shortcut.error', String(error && error.message || error))
-  }
-}
-function openScreenCrop() {
-  if (cropWindow && !cropWindow.isDestroyed()) {
-    cropWindow.focus()
-    return
-  }
-  cropWindow = new BrowserWindow({
-    transparent: true,
-    frame: false,
-    fullscreen: true,
-    alwaysOnTop: true,
-    skipTaskbar: true,
-    resizable: false,
-    movable: false,
-    focusable: true,
-    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: false },
-  })
-  cropWindow.setAlwaysOnTop(true, 'screen-saver')
-  cropWindow.loadURL(`${API_BASE}/agent-app/live2d-pet/overlay.html?v=1`)
-  cropWindow.on('closed', () => { cropWindow = null })
-  cropWindow.webContents.on('before-input-event', (event, input) => {
-    if (input.type === 'keyDown' && input.key === 'Escape') {
-      if (cropWindow && !cropWindow.isDestroyed()) cropWindow.close()
-    }
-  })
-}
+// DSH 专用化（用户裁决 2026-10-17）：全局快捷键 Ctrl+Shift+S「框选屏幕提问」已移除。
+//   它拉起 live2d-pet/overlay.html，该页调用 /api/xiaozhi/vision-bubble（小智官方云视觉），
+//   随小智插件阉割已删除。将来若做 DSH 侧屏幕问答，应走新的 DSH 视觉通路，不要复活这套。
 
 app.on('before-quit', () => {
   quitting = true

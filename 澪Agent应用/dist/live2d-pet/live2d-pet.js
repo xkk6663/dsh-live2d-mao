@@ -239,7 +239,7 @@
   // 两个不同按钮各自显示/隐藏，互不牵连）。
   const streamBubbleButton = contextMenu.querySelector('[data-action="stream-bubble"]')
   const stripButton = contextMenu.querySelector('[data-action="strip"]')
-  const speechLanguageButton = contextMenu.querySelector('[data-action="screenshot-ask"]')
+  // DSH 专用化：原 `speechLanguageButton`（右键菜单「截图提问」按钮引用）已随该功能移除
   const agentBadgeButton = contextMenu.querySelector('[data-action="agent-badge"]')
   const speechBubble = document.getElementById('speech-bubble')
   const speechBubbleText = document.getElementById('speech-bubble-text')
@@ -2402,8 +2402,9 @@
       let message
       try { message = JSON.parse(event.data) } catch (_) { return }
       const payload = message?.payload || {}
-      // 插件化 gating：小智未启用（插件未挂载）时不响应小智业务消息（气泡/语音/视觉全不触发）
-      const xzPluginOn = !!(window.__mioPluginBus && window.__mioPluginBus.isMounted('xiaozhi'))
+      // DSH 专用化（用户裁决 2026-10-17）：原有的 `xzPluginOn` gating 已删除 ——
+      // 它只用于判断小智插件是否挂载，用来门控 speak / speech_interrupt /
+      // visual_event / speech-bubble 这 4 个小智专用消息分支；这些分支已整体移除。
       if (message.type === 'ready') {
         await applySettings(payload.settings || {})
         applyActivity(payload.activity || {})
@@ -2443,40 +2444,10 @@
         // 与 agent_stream / agent_bubble 互不影响：横条被关掉时这里返回 false，
         // 气泡照常工作；反之亦然（用户裁决：三条通路独立管理）。
         applyAgentStrip(payload)
-      } else if (message.type === 'speak') {
-        if (!xzPluginOn) return
-        const text = String(payload.text || payload.content || '').trim()
-        applySpeakEmotionAndMotion(text, payload.emotion || 'neutral')
-        showSpeechBubble(text, 0, messageResponseId(payload))
-        if (payload.should_speak) {
-          const speakingMotion = semanticMotion('speaking')
-          const idleMotion = semanticMotion('idle')
-          if (speakingMotion && speakingMotion !== idleMotion) playMotion(speakingMotion)
-          await dispatchSpeech(payload)
-        }
-      } else if (message.type === 'speech_interrupt') {
-        if (!xzPluginOn) return
-        const reason = String(payload.reason || 'interrupted')
-        const targetResponseId = String(payload.response_id || '')
-        if (!targetResponseId || !activeResponseId || targetResponseId === activeResponseId) {
-          stopSpeech(['user_started_speaking', 'call_ended'].includes(reason) ? 'interrupted' : reason)
-        }
-      } else if (message.type === 'visual_event') {
-        if (!xzPluginOn) return
-        handleVisualEvent(payload)
-      } else if (message.type === 'speech-bubble') {
-        if (!xzPluginOn) return
-        // 视觉分析文本气泡（观察/立即观察）：显示并自动消失，不播语音
-        const bubbleText = String(payload.text || '').trim()
-        if (bubbleText) {
-          applyEmotion(payload.emotion || 'gentle', Math.max(6000, bubbleText.length * 180))
-          const bubbleDuration = Number(payload.duration_ms || 6000)
-          showSpeechBubble(bubbleText, bubbleDuration)
-          const hint = String(payload.motion_hint || 'observe')
-          const group = semanticMotion(hint)
-          if (group) playMotion(group)
-          else startProceduralMotion(hint, 0.7)
-        }
+      // DSH 专用化（用户裁决 2026-10-17）：小智专用的 4 个消息分支已整体删除 ——
+      //   'speak' / 'speech_interrupt' / 'visual_event' / 'speech-bubble'。
+      //   它们全部由小智插件（xiaozhi-plugin.js / pet-xz-audio.js）驱动，
+      //   而该插件与其后端 /api/xiaozhi/* 路由已阉割。将来做 DSH 语音请走新的 DSH 通路。
       } else if (message.type === 'foreground_changed') {
         handleForegroundChanged(payload)
       } else if (message.type === 'chat_window_state') {
@@ -2580,9 +2551,7 @@
       const stripOn = !(window.__mioPetStrip && window.__mioPetStrip.isDismissed())
       stripButton.textContent = stripOn ? '隐藏横条' : '显示横条'
     }
-    if (speechLanguageButton) {
-      speechLanguageButton.textContent = '截图提问'
-    }
+    // DSH 专用化：原「截图提问」按钮文案更新已随该功能移除
     if (agentBadgeButton) {
       agentBadgeButton.textContent = agentBadgeEnabled() ? '隐藏状态徽标' : '显示状态徽标'
     }
@@ -3180,12 +3149,19 @@
 
   canvas.addEventListener('dblclick', async (event) => {
     if (clickThroughLocked() || !pointHitsModel(event.clientX, event.clientY)) return
-    // 小智未启用（插件未挂载）时双击不打开对话窗
-    if (!(window.__mioPluginBus && window.__mioPluginBus.isMounted('xiaozhi'))) return
+    // DSH 专用化：原来这里判断"小智插件已挂载"才打开**小智对话窗**；
+    // 小智已阉割，双击改为打开/关闭**桌宠自己的对话窗**（与右键菜单「打开/关闭对话窗口」同一动作，
+    // 走 /api/companion/chat，是 DSH 专用化后唯一保留的对话入口）。
     event.preventDefault()
     sendSocket('double_clicked', { x: event.screenX, y: event.screenY })
-    const bridge = await waitForBridge()
-    await bridge.open_chat()
+    try {
+      if (electronRuntime && window.mioDesktop?.toggleChatWindow) {
+        window.mioDesktop.toggleChatWindow()
+      } else {
+        const bridge = await waitForBridge()
+        await bridge.open_chat()
+      }
+    } catch (_) { /* 打开失败不影响桌宠本体 */ }
   })
 
   document.addEventListener('contextmenu', (event) => {
@@ -3302,26 +3278,9 @@
         })
       }
     }
-    if (action === 'screenshot-ask') {
-      // 截图提问：截全屏 → 小智视觉分析 → 直接显示气泡（后端已写 pet 历史+syslog）
-      // 禁止复述注入：vision 返回文本不再调 /say 当成用户消息重发
-      showSpeechBubble('让我看看你的屏幕…', 3000)
-      try {
-        const shot = await request('/api/companion/screen-shot', { method: 'POST', body: '{}' })
-        if (!shot.ok) throw new Error('截图失败')
-        const vision = await request('/api/xiaozhi/vision', {
-          method: 'POST',
-          body: JSON.stringify({
-            image_base64: shot.image_base64,
-            question: '',  // 留空 → 后端使用可配置的"图片识别前置提示词"
-          }),
-        })
-        if (!vision.ok) throw new Error(vision.detail || '小智视觉失败')
-        showSpeechBubble(vision.text || '（分析完成）', 6000)
-      } catch (err) {
-        showSpeechBubble(`截图提问失败：${err.message}`, 5000)
-      }
-    }
+    // DSH 专用化（用户裁决 2026-10-17）：「截图提问」已移除。
+    //   它调用 /api/xiaozhi/vision（小智官方云视觉），该路由随小智插件阉割已删除。
+    //   菜单项同时从 index.html 移除；将来若要做 DSH 侧屏幕问答，应走新的 DSH 视觉通路。
     if (action === 'speech-bubble') {
       const enabled = settings.live2d_speech_bubble_enabled === false
       try { await persistCompanionSetting('live2d_speech_bubble_enabled', enabled) } catch (_) {}
@@ -3493,7 +3452,13 @@
   })
 
   window.addEventListener('resize', fitModel)
-  // 小智语音口型（pet-xz-audio.js 驱动）：说话期间驱动 ParamMouthOpenY
+  // 口型驱动事件：说话期间驱动 ParamMouthOpenY + speaking 动作。
+  //
+  // ⚠ DSH 专用化说明（2026-10-17）：这个事件的**原驱动方 pet-xz-audio.js 已删除**
+  //   （它连 /api/xiaozhi/ws，该路由随小智插件阉割）。事件名保留 `mio-xz-speaking`
+  //   是为了**向后兼容**，但现在没有任何代码会派发它 —— 属"休眠插座"：
+  //   将来做 DSH 语音时，只要新通路 dispatch 同名事件即可直接复用这套口型逻辑，
+  //   无需改动渲染端。若届时改成新名字，记得同步这里。
   window.addEventListener('mio-xz-speaking', (e) => {
     const detail = (e && e.detail) || {}
     if (detail.active) {
