@@ -617,25 +617,33 @@
   }
 
   /**
-   * ★ 桌宠不透明度（2026-10-17）。
+   * ★ 桌宠不透明度（2026-10-17，第二次修：用户实测仍无效后的源码级再取证）。
    *
-   * ⚠ 真根因（用户实测"不透明度不可用"）：**`model.alpha`（PIXI Container 属性）
-   * 对 Cubism 模型无效** —— pixi-live2d-display 的 Cubism 渲染走 internalModel 的
-   * 自定义 WebGL 路径（打包库里 `\.alpha` 出现 0 次），绘制透明度由 Cubism 的
-   * **ModelColor** 渲染参数控制，不乘 Container.alpha。
-   * 正确 API：`model.internalModel.coreModel.setModelColor(r,g,b,a)`，第 4 参即整体透明度。
-   * （Cubism 4 core 的 setModelColor 会把该颜色乘到所有 Drawable 上。）
+   * 两层真根因：
+   * 1. **`model.alpha`（PIXI Container 属性）对 Cubism 模型无效** —— 打包库里
+   *    `\.alpha` 出现 0 次；Cubism 走 internalModel 的自定义 WebGL 路径，不乘 Container.alpha。
+   * 2. **`setModelColor` 在 renderer 上，不在 coreModel 上**（上一版调错了对象）：
+   *    源码取证 —— `setModelColor(t,e,i,s)` 定义在 Cubism 的 **Renderer 基类**（类 `_`），
+   *    `coreModel`（CubismModel，数据层）没有这个方法 ⇒ `typeof coreModel.setModelColor
+   *    === 'function'` 为 false ⇒ 走了 `model.alpha` 兜底 ⇒ 双重失效。
+   *
+   * 正确 API（源码级确证）：`model.internalModel.renderer.setModelColor(r,g,b,a)`
+   * —— renderer 在 InternalModel 构造时创建（`this.renderer = new Wt`），绘制时
+   * `const h = this.getModelColor()` 读取并参与 premultiplied alpha 计算，
+   * 且不被每帧重置。第 4 参 `a` 即整体透明度。
    */
   function applyPetOpacity(pct) {
     const alpha = Math.max(0.1, Math.min(1, Number(pct) / 100))
     if (!model) return
     try {
-      const core = model.internalModel && model.internalModel.coreModel
-      if (core && typeof core.setModelColor === 'function') {
-        core.setModelColor(1, 1, 1, alpha)
+      const im = model.internalModel
+      const renderer = im && im.renderer
+      if (renderer && typeof renderer.setModelColor === 'function') {
+        // R/G/B 保持 1（不染色），只调 A（整体透明度）
+        renderer.setModelColor(1, 1, 1, alpha)
         return
       }
-      // 兜底：非 Cubism 渲染路径（如旧版/其它实现）退回 PIXI alpha
+      // 兜底：非 Cubism 渲染路径（如其它实现）退回 PIXI alpha
       model.alpha = alpha
     } catch (_) {
       try { model.alpha = alpha } catch (_e) {}
