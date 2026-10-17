@@ -113,9 +113,10 @@
     { id: 'profile', label: '资料' },
     { id: 'pet', label: '桌宠' },
     { id: 'voice', label: '语音' },
-    { id: 'observe', label: '屏幕观察' },
-    { id: 'prompts', label: '提示词' },
-    { id: 'xz', label: '小智' },
+    // DSH 专用化：原「屏幕观察」「提示词」「小智」三个 tab 已移除。
+    // 它们全部服务于小智插件（自动截屏让小智点评 / 图片识别提示词 / 小智设备绑定），
+    // 小智插件已整体阉割（后端 /api/xiaozhi/* 路由与前端入口都已删除）。
+    // 保留它们只会渲染出"永远读不到数据、点保存就报错"的空界面。
     { id: 'bubble', label: '泡泡' },
   ]
 
@@ -445,82 +446,7 @@
       body.appendChild(row('回复语言', '小智语音与文字语言', makeSelect(s.pet_speech_language || 'zh', [{ v: 'zh', t: '中文' }, { v: 'ja', t: '日语' }]), 'pet_speech_language'))
       body.appendChild(section('屏幕观察播报'))
       body.appendChild(row('观察时语音播报', '屏幕观察分析后语音播报', makeSwitch(!!s.speak_screen_observations, '观察语音播报'), 'speak_screen_observations'))
-    } else if (id === 'observe') {
-      body.appendChild(section('自动屏幕观察'))
-      body.appendChild(row('启用自动观察', '随机间隔截屏让小智点评', makeSwitch(!!(state.observe && state.observe.enabled), '自动观察'), 'observe_enabled'))
-      body.appendChild(row('随机间隔（秒）', '两次自动观察的最小/最大间隔', (function () {
-        var w = document.createElement('div')
-        w.style.cssText = 'display:flex;align-items:center;gap:6px;flex:none;'
-        var mn = document.createElement('input')
-        mn.type = 'number'
-        mn.min = '60'
-        mn.step = '30'
-        mn.value = String((state.observe && state.observe.min_seconds) || 300)
-        mn.style.cssText = 'width:64px;border:1px solid var(--line, #d9e2e6);border-radius:8px;font-size:12px;padding:4px;background:var(--surface-soft, #f2f6f7);color:var(--ink, #20303a);'
-        var mx = document.createElement('input')
-        mx.type = 'number'
-        mx.min = '120'
-        mx.step = '30'
-        mx.value = String((state.observe && state.observe.max_seconds) || 900)
-        mx.style.cssText = 'width:64px;border:1px solid var(--line, #d9e2e6);border-radius:8px;font-size:12px;padding:4px;background:var(--surface-soft, #f2f6f7);color:var(--ink, #20303a);'
-        var lbl = document.createElement('span')
-        lbl.style.cssText = 'font-size:11px;color:var(--muted, #687984);'
-        lbl.textContent = '～'
-        w.appendChild(mn)
-        w.appendChild(lbl)
-        w.appendChild(mx)
-        w.setAttribute('__mioKey', 'observe_interval')
-        w.__mioMin = mn
-        w.__mioMax = mx
-        return w
-      })(), 'observe_interval'))
-      body.appendChild(row('免打扰时段', '此时间段暂停自动观察', (function () {
-        var w = document.createElement('div')
-        w.style.cssText = 'display:flex;align-items:center;gap:6px;flex:none;'
-        var st = document.createElement('input')
-        st.type = 'time'
-        st.value = (state.observe && state.observe.quiet_start) || '23:00'
-        st.style.cssText = 'border:1px solid var(--line, #d9e2e6);border-radius:8px;font-size:12px;padding:3px;background:var(--surface-soft, #f2f6f7);color:var(--ink, #20303a);'
-        var en = document.createElement('input')
-        en.type = 'time'
-        en.value = (state.observe && state.observe.quiet_end) || '08:00'
-        en.style.cssText = 'border:1px solid var(--line, #d9e2e6);border-radius:8px;font-size:12px;padding:3px;background:var(--surface-soft, #f2f6f7);color:var(--ink, #20303a);'
-        var lbl = document.createElement('span')
-        lbl.textContent = '至'
-        lbl.style.cssText = 'font-size:11px;color:var(--muted, #687984);'
-        w.appendChild(st)
-        w.appendChild(lbl)
-        w.appendChild(en)
-        w.setAttribute('__mioKey', 'observe_quiet')
-        w.__mioStart = st
-        w.__mioEnd = en
-        return w
-      })(), 'observe_quiet'))
-      body.appendChild(section('立即观察语音'))
-      body.appendChild(row('立即观察播报语音', '手动触发观察时小智语音回答', makeSwitch(s.screen_ai_enabled !== false, '立即观察语音'), 'screen_ai_enabled'))
-    } else if (id === 'prompts') {
-      body.appendChild(section('图片识别提示词'))
-      body.appendChild(row('图片识别前置提示词', '发图给小智时附加的要求', makeText(state.prompts && state.prompts.image_prompt), 'image_prompt'))
-      body.appendChild(row('60字以内约束', '强制回答不超过60字', makeSwitch(state.prompts ? state.prompts.force_60 !== false : true, '60字约束'), 'force_60'))
-      body.appendChild(section('屏幕观察提示词'))
-      body.appendChild(row('观察提示词', '自动/手动观察时附加的要求', makeText(state.prompts && state.prompts.observe_prompt), 'observe_prompt'))
-    } else if (id === 'xz') {
-      var xz = state.xz || {}
-      body.appendChild(section('小智连接'))
-      var info = document.createElement('div')
-      info.style.cssText = 'background:var(--surface-soft, #f2f6f7);border:1px solid var(--line, #d9e2e6);border-radius:10px;padding:12px 14px;font-size:12px;line-height:2;color:var(--ink, #20303a);'
-      info.innerHTML =
-        '<div>绑定状态：<b style="color:var(--accent, #4c8798);">' + (xz.bound ? '已绑定' : '未绑定') + '</b></div>' +
-        '<div>设备码：<span style="font-family:Consolas,Menlo,monospace;">' + (xz.machine_code || '-') + '</span></div>' +
-        '<div>MAC：<span style="font-family:Consolas,Menlo,monospace;">' + (xz.mac || '-') + '</span></div>' +
-        '<div>云端：<span style="font-family:Consolas,Menlo,monospace;word-break:break-all;">' + (xz.upstream || '-') + '</span></div>' +
-        '<div>连接：' + (xz.connected ? '已连接' : '未连接') + ' · 会话 ' + (xz.session_id || '-') + '</div>'
-      body.appendChild(info)
-      body.appendChild(section('说明'))
-      var note = document.createElement('div')
-      note.style.cssText = 'font-size:11px;color:var(--muted, #687984);line-height:1.8;padding:0 4px;'
-      note.textContent = '小智官方云免费接入（绑定设备后使用官方音色）。如需更换设备绑定，请到小智控制台处理。'
-      body.appendChild(note)
+    // DSH 专用化：原 'observe' / 'prompts' / 'xz' 三个 tab 的渲染分支已随小智插件删除
     } else if (id === 'bubble') {
       // 泡泡工坊：皮肤 / 点击互动 / 图片素材库 —— UI 由 bubble-panel-inject.js 渲染模块提供
       var bubbleHost = document.createElement('div')
@@ -543,10 +469,10 @@
       apiGet('/api/companion/status').then(function (j) {
         state.settings = (j && j.pet && j.pet.settings) || {}
       }).catch(function () { state.settings = {} }),
-      apiGet('/api/xiaozhi/observe/status').then(function (j) { state.observe = j || {} }).catch(function () { state.observe = {} }),
-      apiGet('/api/xiaozhi/prompts').then(function (j) { state.prompts = j || {} }).catch(function () { state.prompts = {} }),
+      // DSH 专用化：原三行 apiGet('/api/xiaozhi/{observe/status,prompts,status}') 已移除。
+      // 这三个接口随小智插件一并删除；保留调用只会在 console 里刷 404。
+      // state.observe / state.prompts / state.xz 保持空对象，避免残留代码读到 undefined。
       apiGet('/api/companion/live2d/schedule').then(function (j) { state.schedule = (j && j.schedule) ? j.schedule : (j || {}) }).catch(function () { state.schedule = {} }),
-      apiGet('/api/xiaozhi/status').then(function (j) { state.xz = j || {} }).catch(function () { state.xz = {} }),
       apiGet('/api/settings/profile').then(function (j) {
         state.profile = {
           name: (j && j.profile && j.profile.identity && j.profile.identity.name) || '',
@@ -632,12 +558,9 @@
 
     var proms = []
     if (Object.keys(settingsBody).length) proms.push(apiSend('/api/companion/settings', 'PATCH', settingsBody))
-    if (vals.observe_enabled !== undefined) {
-      proms.push(apiSend(vals.observe_enabled ? '/api/xiaozhi/observe/start' : '/api/xiaozhi/observe/stop', 'POST', observeBody))
-    } else if (Object.keys(observeBody).length) {
-      proms.push(apiSend('/api/xiaozhi/observe/start', 'POST', observeBody))
-    }
-    if (Object.keys(promptsBody).length) proms.push(apiSend('/api/xiaozhi/prompts', 'PUT', promptsBody))
+    // DSH 专用化：原三处 apiSend('/api/xiaozhi/{observe/*,prompts}') 已移除
+    //（自动屏幕观察开关/间隔/免打扰、图片与观察提示词 —— 全部属小智插件，
+    //  对应 tab 已删，值也不会再被收集；保留只会让"保存"整体失败）。
     if (Object.keys(schedBody).length) proms.push(apiSend('/api/companion/live2d/schedule', 'PATCH', schedBody))
     if (Object.keys(profileBody).length) proms.push(apiSend('/api/settings/profile', 'PATCH', profileBody))
     if (pf.avatarDataUrl) proms.push(apiSend('/api/settings/avatar', 'POST', { data_url: pf.avatarDataUrl }))

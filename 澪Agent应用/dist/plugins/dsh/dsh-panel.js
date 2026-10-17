@@ -300,6 +300,46 @@
   else document.addEventListener('DOMContentLoaded', boot)
   window.addEventListener('load', function () { if (!navBtn || !navBtn.isConnected) boot() })
 
+  // ────────────────────────────────────────────────────────────────────────
+  // ★ 自愈：Vue 重渲染会**删掉**我们手动 append 的导航按钮（既有缺陷，非本次引入）
+  // ────────────────────────────────────────────────────────────────────────
+  // 原因：`<nav>` 由 Vue 用 v-for 渲染 `navGroups[0].items`（桌宠/设置）。
+  // 任何触发该列表重渲染的操作（切视图、窗口尺寸变化、settings 刷新等）都会把 nav
+  // 的 children 整体重建，于是外部 append 的 `dsh-nav` 节点**永久消失** ——
+  // 表现为「DSH 面板代码明明加载了（__mioDshPanel 存在），但左侧就是没有 DSH 入口」。
+  //
+  // 实测证据：加载后 window.__mioDshPanelLoaded=true、window.__mioDshPanel 是 object，
+  // 但 document.querySelector('.dsh-nav') === null；与 Mao 主仓的 dsh-panel.js
+  // 逐字节一致（同一缺陷），属**既有问题**。
+  //
+  // 修法：监听 body 的 childList 变化，发现 nav 里没有 .dsh-nav 就补回。
+  // 用微任务去抖 + 重入保护，避免自己的 append 又触发 observer 造成死循环。
+  var repairScheduled = false
+  function scheduleRepair() {
+    if (repairScheduled) return
+    repairScheduled = true
+    Promise.resolve().then(function () {
+      repairScheduled = false
+      try {
+        var nav = $q('nav')
+        if (!nav) return
+        // 已有就什么都不做（防抖的核心：append 自己也会触发 mutation）
+        if (nav.querySelector('.dsh-nav')) return
+        ensureNav()
+      } catch (e) { /* 忽略：自愈失败不应影响页面 */ }
+    })
+  }
+  if (typeof MutationObserver === 'function') {
+    try {
+      new MutationObserver(scheduleRepair).observe(document.body, { childList: true, subtree: true })
+    } catch (e) { /* 忽略 */ }
+  }
+  // 兜底轮询：极少数情况下 MutationObserver 观察不到（或 body 被整体替换）
+  window.setInterval(function () {
+    var nav = $q('nav')
+    if (nav && !nav.querySelector('.dsh-nav')) scheduleRepair()
+  }, 2500)
+
   // 供其它脚本（如桌宠气泡）查询本插件强调色，保证配色口径一致
-  window.__mioDshPanel = { accent: ACCENT, show: showPanel, hide: hidePanel, refresh: refresh }
+  window.__mioDshPanel = { accent: ACCENT, show: showPanel, hide: hidePanel, refresh: refresh, ensureNav: ensureNav }
 })()
