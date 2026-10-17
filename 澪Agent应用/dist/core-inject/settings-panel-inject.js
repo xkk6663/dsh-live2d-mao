@@ -542,6 +542,10 @@
       if (el.classList && el.classList.contains('mio-set-switch')) v = readSwitch(el)
       else if (el.tagName === 'SELECT') v = readSelect(el)
       else if (el.tagName === 'TEXTAREA') v = readText(el)
+      // ★ 滑条（2026-10-17 修复）：makeSlider 返回的 wrap 是 DIV，__mioKey 设在
+      //   wrap 上而非 input 上 —— 之前只判 INPUT 永远不命中，滑条值从未被收集
+      //   （"修改后点保存自动恢复默认值"的根因）。wrap.__mioInput 指向真实 input。
+      else if (el.__mioInput && el.__mioInput.type === 'range') v = Number(el.__mioInput.value)
       else if (el.tagName === 'INPUT' && el.type === 'range') v = Number(el.value)
       else if (el.__mioMin) v = { min: Number(el.__mioMin.value), max: Number(el.__mioMax.value) }
       else if (el.__mioStart) v = { start: el.__mioStart.value, end: el.__mioEnd.value }

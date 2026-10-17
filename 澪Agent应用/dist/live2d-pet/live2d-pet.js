@@ -3958,9 +3958,10 @@
       }
       el.hidden = false
       visible = true
-      // ★ 宽度语义（终版）：设置页默认宽 >0 → 固定它；否则 CSS 默认 420px
-      //   （文字在框内换行，横条不随内容疯长）。
+      // ★ 宽度语义（终版）：设置页默认宽 >0 → 固定它；=0 → 清掉 inline 宽度，
+      //   回 CSS 默认 420px（否则之前拉伸残留的 style.width 会一直占着）。
       if (defaultWidth > 0) applyWidth(defaultWidth)
+      else safe(() => { el.style.width = ''; el.style.maxWidth = '' })
       if (rows > 0) applyRows(rows)
       // 横条可见 ⇒ 上报命中区（主进程按区域关穿透）。
       reportStripBounds()
