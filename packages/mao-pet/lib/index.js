@@ -18,7 +18,7 @@
 import { createConnector } from './events.js'
 import { PHASES, WORK_PHASES, FACT_PHASES } from './phases.js'
 import { isTextOnlyMessage, extractText } from './facts.js'
-import { createPusher, AGENT_ID, AGENT_NAME, AGENT_ACCENT } from './push/pusher.js'
+import { createPusher, AGENT_ID, AGENT_NAME, AGENT_ACCENT, PLUGIN_ID, PLUGIN_NAME } from './push/pusher.js'
 import { createHttpTransport } from './push/transports/http.js'
 import { createStripRemote } from './push/strip-remote.js'
 import { createRejectionGate } from './security/fence.js'
@@ -305,7 +305,9 @@ export default {
         path: '/mao-pet/status',
         handler: async (req, res) => json(res, 200, {
           ok: true,
-          plugin: { id: AGENT_ID, name: AGENT_NAME, accent: AGENT_ACCENT },
+          // plugin = 插件自身身份（mao-pet）；bus_agent_id = 它在桌宠总线上代表谁（dsh）
+          plugin: { id: PLUGIN_ID, name: PLUGIN_NAME, accent: AGENT_ACCENT },
+          bus_agent_id: AGENT_ID,
           connector: connector.snapshot(),
           push: pusher.diagnostics(),
           fence: gate.snapshot(),

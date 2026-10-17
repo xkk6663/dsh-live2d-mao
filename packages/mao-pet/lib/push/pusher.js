@@ -17,11 +17,40 @@
 import { isKnownPhase } from '../phases.js'
 import { jsonClone, safeCall } from '../util.js'
 
-/** 本插件在总线上的身份（D5：id 全小写 mao-pet，显示名 Mao-pet）。 */
-export const AGENT_ID = 'mao-pet'
-export const AGENT_NAME = 'Mao-pet'
-/** 身份色：与后端 dsh 插件的 accent 同族的靛蓝，便于桌宠区分来源。 */
+/**
+ * 本插件在**总线上的身份**。
+ *
+ * ★ 2026-10-17 用户裁决（合并为单一 DSH 身份）：
+ *   产品定位是「DSH 专用桌宠」，不应该在桌宠上看到 `Mao-pet` 和 `DSH` 两个 agent
+ *   互相抢镜头。故插件推送时**复用日志边车的 agent_id `dsh`** —— 总线上只有
+ *   一个 agent，徽标只显示 `DSH · xxx`。
+ *
+ * ⚠ 注意区分两个"名字"，别混：
+ *   - **npm 包名 / cordis 插件 id** = `mao-pet`（D5 裁决，装插件用，**不变**）；
+ *   - **总线 agent_id** = `dsh`（这是"桌宠看到谁"，与边车共用）。
+ *   本文件只影响后者。`AGENT_NAME` 用 DSH 的显示名，`AGENT_ACCENT` 用 DSH 的靛蓝，
+ *   与 `dsh_adapter.py` 的 `AGENT_ID="dsh"` / `DSH_ACCENT` 保持一致。
+ */
+export const AGENT_ID = 'dsh'
+export const AGENT_NAME = 'DeepSeek Harness'
+/** 身份色：与后端 dsh 插件 / 前端 manifest 同值（靛蓝）。 */
 export const AGENT_ACCENT = '#4F6BED'
+
+/**
+ * 「我来自插件」标记：随 state 透传给后端，供边车判断"插件正在驱动，我让位"。
+ * 后端 `ingest._sanitize_state` 会放行这个布尔字段（见该处注释）。
+ */
+export const SOURCE_FLAG = 'plugin_owned'
+
+/**
+ * ★ 插件**自身**的身份（与"总线身份"区分，别混用）：
+ *   - 本常量 = 插件是谁（npm 包名 / cordis id / 自己的 HTTP 路由前缀都用它，D5 裁决 → `mao-pet`）；
+ *   - `AGENT_ID` = 插件在**桌宠总线上**代表谁（与日志边车共用 → `dsh`）。
+ * 踩过的坑：合并身份时把两处都改成 dsh，导致插件 `/mao-pet/status` 自报 id 变成 dsh，
+ * 前端 `parsed.plugin.id` 断言失败 —— 故显式拆成两个常量。
+ */
+export const PLUGIN_ID = 'mao-pet'
+export const PLUGIN_NAME = 'Mao-pet'
 
 /**
  * 网络层失败退避：连续失败时按指数拉长重试间隔，上限 30s。
@@ -148,7 +177,10 @@ export function createPusher(opts = {}) {
         accent: AGENT_ACCENT,
         kind: 'phase',
         phase,
-        state: jsonClone(state) || {},
+        // ★ 复用 dsh 身份后，边车与插件会同时驱动同一个 agent。
+        //   带上 plugin_owned 让后端/边车知道"这一条来自插件（实时源）"，
+        //   边车据此让位，避免两边 phase 互相覆盖造成抖动。
+        state: { ...(jsonClone(state) || {}), plugin_owned: true },
         seq: opts2.seq,
         // 变化即强发；同 phase 补发时也强发（我们在上层已按 REEMIT 节流）
         force: Boolean(opts2.force ?? changed),

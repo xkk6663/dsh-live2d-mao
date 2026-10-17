@@ -29,19 +29,25 @@ const flush = () => new Promise((r) => setImmediate(r))
 // 身份：D5 命名裁决
 // ─────────────────────────────────────────────────────────────────────────────
 
-test('6.1 · D5 命名：agent id 全小写 mao-pet，显示名 Mao-pet', () => {
-  assert.equal(AGENT_ID, 'mao-pet')
-  assert.equal(AGENT_NAME, 'Mao-pet')
-  assert.equal(AGENT_ID, AGENT_ID.toLowerCase(), 'npm 包名/cordis id 必须全小写')
+test('6.1 · 身份：总线 agent_id = dsh（与日志边车共用），名字/色值对齐 DSH', () => {
+  // ★ 2026-10-17 用户裁决（合并身份）：产品是「DSH 专用桌宠」，桌宠上不该出现
+  //   `Mao-pet` 和 `DSH` 两个 agent 抢镜头 ⇒ 插件推送复用边车的 `dsh`。
+  //   ⚠ 注意：D5 约束的是 **npm 包名 / cordis 插件 id** = `mao-pet`（装插件用），
+  //     由 architecture.test.js 的 R3 守卫；本文件断言的是**总线身份**，两者不同。
+  assert.equal(AGENT_ID, 'dsh')
+  assert.equal(AGENT_NAME, 'DeepSeek Harness')
+  assert.equal(AGENT_ID, AGENT_ID.toLowerCase(), '总线 agent_id 必须全小写')
 })
 
 test('6.5 · 信封带齐身份三件套（后端据此 register 与上色）', async () => {
   const { transport, pusher } = makePusher()
   await pusher.pushPhase('thinking', {})
-  assert.equal(transport.last.agent_id, 'mao-pet')
-  assert.equal(transport.last.name, 'Mao-pet')
+  assert.equal(transport.last.agent_id, 'dsh')
+  assert.equal(transport.last.name, 'DeepSeek Harness')
   assert.equal(transport.last.accent, '#4F6BED')
   assert.equal(transport.last.kind, 'phase')
+  // 合并身份的来源标记：边车据此让位（见 dsh_adapter._plugin_owns_bus）
+  assert.equal(transport.last.state.plugin_owned, true, '必须带 plugin_owned 标记')
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -53,7 +59,8 @@ test('6.5 · 合法 phase 正常推送，force=true（phase 变化时强发，�
   const r = await pusher.pushPhase('executing_tool', { tool: 'pwsh' })
   assert.equal(r.ok, true)
   assert.equal(transport.last.phase, 'executing_tool')
-  assert.deepEqual(transport.last.state, { tool: 'pwsh' })
+  // state 会额外带 plugin_owned 标记（边车据此让位，见 pusher.js 注释）
+  assert.deepEqual(transport.last.state, { tool: 'pwsh', plugin_owned: true })
   assert.equal(transport.last.force, true)
 })
 
@@ -219,10 +226,10 @@ test('6.5 · HTTP 端点路径为 Lead 定稿的 /api/plugin/dsh/ingest', () => 
 test('6.5 · HTTP body：phase 信封带 phase/state/agent_id/name/accent', () => {
   const t = createHttpTransport({ baseUrl: 'http://127.0.0.1:8000', fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({}) }) })
   const body = t.buildBody({
-    agent_id: 'mao-pet', name: 'Mao-pet', accent: '#4F6BED',
+    agent_id: 'dsh', name: 'DeepSeek Harness', accent: '#4F6BED',
     kind: 'phase', phase: 'thinking', state: { tool: 'pwsh' }, seq: 7, force: true,
   })
-  assert.equal(body.agent_id, 'mao-pet')
+  assert.equal(body.agent_id, 'dsh')
   assert.equal(body.phase, 'thinking')
   assert.deepEqual(body.state, { tool: 'pwsh' })
   assert.equal(body.seq, 7)
@@ -232,15 +239,15 @@ test('6.5 · HTTP body：phase 信封带 phase/state/agent_id/name/accent', () =
 test('6.5 · HTTP body：缺省补全 agent_id/name（端点不因缺字段 422）', () => {
   const t = createHttpTransport({ fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({}) }) })
   const body = t.buildBody({ kind: 'phase', phase: 'idle' })
-  assert.equal(body.agent_id, 'mao-pet')
-  assert.equal(body.name, 'Mao-pet')
+  assert.equal(body.agent_id, 'dsh')
+  assert.equal(body.name, 'DeepSeek Harness')
 })
 
 test('6.5 · HTTP body：stream/bubble/heartbeat 三种 kind 各按其形', () => {
   const t = createHttpTransport({ fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({}) }) })
   assert.deepEqual(
     t.buildBody({ kind: 'stream', payload: { final_text: 'x' } }),
-    { agent_id: 'mao-pet', name: 'Mao-pet', accent: '', kind: 'stream', payload: { final_text: 'x' } },
+    { agent_id: 'dsh', name: 'DeepSeek Harness', accent: '', kind: 'stream', payload: { final_text: 'x' } },
   )
   assert.equal(t.buildBody({ kind: 'bubble', text: 'hi', duration_ms: 100 }).text, 'hi')
   assert.equal(t.buildBody({ kind: 'heartbeat' }).kind, 'heartbeat')
@@ -255,7 +262,7 @@ test('6.5 · HTTP 真的 POST 到正确 URL 且带 json content-type', async () 
       return { ok: true, status: 200, json: async () => ({ ok: true }) }
     },
   })
-  await t.send({ kind: 'phase', phase: 'complete', agent_id: 'mao-pet' })
+  await t.send({ kind: 'phase', phase: 'complete', agent_id: 'dsh' })
   assert.equal(calls.length, 1)
   assert.equal(calls[0].url, 'http://127.0.0.1:8000/api/plugin/dsh/ingest')
   assert.equal(calls[0].init.method, 'POST')
@@ -422,6 +429,7 @@ test('6.4 · startTimers 返回可释放的 disposer（热重载不泄漏定时�
 test('6.5 · snapshot 只读且含 12 态词汇', () => {
   const { connector } = makeConnector()
   const snap = connector.snapshot()
-  assert.equal(snap.agent_id, 'mao-pet')
+  assert.equal(snap.agent_id, 'dsh')
   assert.equal(snap.known_phases.length, 12)
 })
+

@@ -34,13 +34,13 @@ from typing import Any
 
 from ...kernel import agent_bus_service
 
-# 缺省身份（与 packages/mao-pet 的声明一致；D5：全小写 mao-pet，显示名 Mao-pet）
-DEFAULT_AGENT_ID = "mao-pet"
-DEFAULT_AGENT_NAME = "Mao-pet"
-# 插件身份色：沿用 DSH 的靛蓝（与 dsh_adapter.DSH_ACCENT / 前端 manifest 同值），
-# 桌宠气泡/徽标据此把"Mao-pet 说的话"与其它来源区分开。
+# 缺省身份（★ 2026-10-17 合并身份：插件与日志边车共用 `dsh`，
+# 桌宠上只显示一个 DSH agent；npm 包名/cordis id 仍是 mao-pet，那是"装插件"的名字）
+DEFAULT_AGENT_ID = "dsh"
+DEFAULT_AGENT_NAME = "DeepSeek Harness"
+# 插件身份色：与 dsh_adapter.DSH_ACCENT / 前端 manifest 同值（靛蓝）
 DEFAULT_ACCENT = "#4F6BED"
-# 适配器标识：总线快照里区分"事件从哪条链路来"（日志边车 = dsh_adapter，插件 = mao-pet_adapter）
+# 适配器标识：区分"谁在驱动 dsh"（日志边车 = dsh_adapter，插件 = mao-pet_adapter）
 ADAPTER = "mao-pet_adapter"
 
 # 插件自声明的能力。voice 如实报 False：
@@ -103,15 +103,32 @@ def _sanitize_state(raw: Any) -> dict[str, Any]:
         elif isinstance(value, float) and value.is_integer():
             out[key] = int(value)
 
+    # ★ 来源标记（2026-10-17 合并身份）：插件推送时带 plugin_owned=true。
+    #   本字段是**布尔豁免**——上面那个循环刻意跳过 bool（防 bool 当数字用），
+    #   但这里是一个明确的语义标记，需要单独放行。
+    if raw.get("plugin_owned") is True:
+        out["plugin_owned"] = True
+
     return out
 
 
 def ensure_registered(agent_id: str, name: str, accent: str) -> None:
-    """首见即注册（幂等）；已存在时只补身份信息，不重置运行态。
+    """首见即注册（幂等）；**已存在则什么都不改**。
 
-    为什么每次请求都调：``register`` 对已存在的 agent 是**更新语义**（``agent_bus_service.py:206-217``），
-    幂等且很便宜；这样即便进程重启、总线被重建，插件下一条事件也能自动把身份补回来。
+    ★ 2026-10-17 合并身份后这里必须改成「已存在就不动」：
+      插件与日志边车共用 `agent_id="dsh"`，而 `register()` 对已存在 agent 会
+      **无条件覆盖 adapter**（agent_bus_service.py:223）——两边各自 register 就会
+      把 adapter 在 `dsh_adapter` / `mao-pet_adapter` 之间来回改写，排障时会误判
+      "谁在驱动"，也会顺手覆盖 capabilities/accent。
+
+    现在的语义：边车先注册就用边车的身份；插件先注册就用插件的；后来者只补事件，
+    不改身份。「谁在驱动」由 state.plugin_owned 标记表达（见 _sanitize_state）。
     """
+    try:
+        if agent_bus_service.get(agent_id) is not None:
+            return
+    except Exception:  # noqa: BLE001
+        return
     agent_bus_service.register(
         agent_id,
         name or DEFAULT_AGENT_NAME,

@@ -115,6 +115,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -206,6 +207,10 @@ DSH_PROCESS_NAMES = ("DeepSeek Harness.exe", "dsh.exe")
 # 若只在事件到达时上报，桌宠会在工具还在跑时就变回待机——看着像 DSH 停工了。
 # 故把补发间隔压到桌宠活动窗口以内（2s < 2.6s），让"一直在干活"持续可见。
 REEMIT_MS = 2000
+# ★ 插件让位窗口（2026-10-17 合并身份）：插件推送带 plugin_owned 标记，
+#   标记在最近这么多秒内 ⇒ 边车让位（插件是实时源）。超过则视为插件已停/崩，
+#   边车自动恢复驱动 —— 不装插件、插件崩溃都不会让桌宠失去状态。
+PLUGIN_OWN_TTL_SEC = 15.0
 # 边车静默超过该时长视为异常，重启边车
 SIDECAR_STALE_MS = 20_000
 # 读取超时（等待边车首行）
@@ -803,9 +808,38 @@ class DshAdapter:
             return True
         return bool(state.enabled)
 
+    def _plugin_owns_bus(self) -> bool:
+        """插件（packages/mao-pet）是否正在驱动总线上的 `dsh` 身份。
+
+        ★ 2026-10-17 合并身份（用户裁决）：插件推送时复用 `agent_id="dsh"`，
+          桌宠上只显示一个 DSH agent（不再有 Mao-pet / DSH 两个徽标抢镜头）。
+          但两条链路（本边车 + 插件）都会 emit 同一个 agent，若同时推会互相覆盖
+          造成 phase 抖动。故规则：**插件在线时边车让位**（插件是实时源、更新的更准）。
+
+        判据：总线快照里 `dsh` 的最近状态带 `plugin_owned` 标记，且该标记在
+        `PLUGIN_OWN_TTL_SEC` 内（插件崩溃/卸载后自动回落到边车驱动，不会永久让位）。
+        """
+        try:
+            agent = agent_bus_service.get(AGENT_ID)
+            if agent is None:
+                return False
+            state = getattr(agent, "state", None) or {}
+            if not (isinstance(state, dict) and state.get("plugin_owned")):
+                return False
+            last_at = float(getattr(agent, "last_phase_at", 0) or 0)
+            # last_phase_at 是 monotonic 秒（emit 内部用 time.monotonic() 写）
+            age = time.monotonic() - last_at if last_at > 0 else 1e9
+            return age <= PLUGIN_OWN_TTL_SEC
+        except Exception:  # noqa: BLE001
+            return False
+
     def _emit_phase(self, phase: str, state: dict[str, Any], *, force: bool = False) -> None:
         if not self._bus_enabled():
             # 已停用：不发任何 phase（避免停用后仍抢桌宠身体）
+            self.last_phase = ""
+            return
+        # ★ 插件在线 → 边车让位（插件复用 dsh 身份且是实时源，见 _plugin_owns_bus）
+        if self._plugin_owns_bus():
             self.last_phase = ""
             return
         now = asyncio.get_running_loop().time()
@@ -841,8 +875,10 @@ class DshAdapter:
         self._emit_phase(phase, state, force=force)
         # DSH 独有信号 → 桌宠气泡：审批/提问挂起时主动播报一句
         # （phase 已表达"在等"，气泡负责"主动叫你"，二者不重叠）
+        # ★ 插件在线时同样让位（否则插件与边车会各冒一句，重复打扰）。
         try:
-            dsh_signals.maybe_announce_waiting(AGENT_ID, self.facts)
+            if not self._plugin_owns_bus():
+                dsh_signals.maybe_announce_waiting(AGENT_ID, self.facts)
         except Exception:  # noqa: BLE001
             logger.debug("DSH 等待播报失败（不影响主链路）", exc_info=True)
 

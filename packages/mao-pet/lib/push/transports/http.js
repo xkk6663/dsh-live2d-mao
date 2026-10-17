@@ -55,9 +55,12 @@ export function createHttpTransport(opts = {}) {
      */
     buildBody(envelope) {
       const e = envelope && typeof envelope === 'object' ? envelope : {}
+      // ★ 缺省身份必须与 pusher 的 AGENT_ID/AGENT_NAME 一致（2026-10-17 合并身份后
+      //   总线 id 是 `dsh`，与日志边车共用）。这里硬编码会与 pusher 漂移 ——
+      //   故改成从常量导出，单一真相源在 push/pusher.js。
       const base = {
-        agent_id: e.agent_id || 'mao-pet',
-        name: e.name || 'Mao-pet',
+        agent_id: e.agent_id || 'dsh',
+        name: e.name || 'DeepSeek Harness',
         accent: e.accent || '',
         kind: e.kind || 'phase',
       }

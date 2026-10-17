@@ -92,7 +92,7 @@ def test_autoregister() -> None:
     check("首条事件后已注册", agent is not None)
     if agent is None:
         return
-    check("显示名缺省 Mao-pet", agent.name == "Mao-pet", agent.name)
+    check("显示名缺省 DeepSeek Harness", agent.name == "DeepSeek Harness", agent.name)
     check("适配器标识 mao-pet_adapter", agent.adapter == "mao-pet_adapter", agent.adapter)
     check("身份色缺省 #4F6BED", agent.accent == "#4F6BED", agent.accent)
     check("能力如实报 voice=False", agent.capabilities.get("voice") is False, agent.capabilities)
@@ -106,10 +106,10 @@ def test_autoregister() -> None:
     check("自定义 name 生效", b is not None and b.name == "自定义名", b.name if b else None)
     check("自定义 accent 生效", b is not None and b.accent == "#123456", b.accent if b else None)
 
-    # 缺省 agent_id
+    # 缺省 agent_id（★ 2026-10-17 起 = dsh，与日志边车共用同一身份）
     res = ingest.ingest(phase="idle", force=True)
-    check("agent_id 缺省为 mao-pet", res.get("agent_id") == "mao-pet", res.get("agent_id"))
-    check("缺省 agent 也已注册", agent_bus_service.get("mao-pet") is not None)
+    check("agent_id 缺省为 dsh", res.get("agent_id") == "dsh", res.get("agent_id"))
+    check("缺省 agent 也已注册", agent_bus_service.get("dsh") is not None)
 
 
 def test_state_sanitize() -> None:
@@ -217,7 +217,7 @@ def test_active_focus() -> None:
 
 
 def test_isolation() -> None:
-    section("[6] 不污染既有链路：dsh 与 mao-pet 各自独立")
+    section("[6] 事件按 agent_id 隔离（同名才合并）")
     ingest.ingest(phase="thinking", agent_id=T_A, force=True)
     ingest.ingest(phase="executing_tool", agent_id=T_B, force=True)
     a = agent_bus_service.get(T_A)
@@ -226,8 +226,10 @@ def test_isolation() -> None:
     check("A 的 phase 不被 B 覆盖", a is not None and a.phase == "thinking", a.phase if a else None)
     check("B 的 phase 独立", b is not None and b.phase == "executing_tool", b.phase if b else None)
     check("dsh 适配器常量未被本模块改动", True)
-    # 生产 agent_id 与自检 id 不冲突
-    check("缺省 agent_id 不是 dsh", ingest.DEFAULT_AGENT_ID != "dsh", ingest.DEFAULT_AGENT_ID)
+    # ★ 2026-10-17 合并身份（用户裁决）：插件与日志边车**共用 `dsh`**，
+    #   桌宠上只显示一个 DSH agent（不再有 Mao-pet / DSH 两个徽标抢镜头）。
+    #   注意区分：npm 包名 / cordis id 仍是 `mao-pet`（D5），只有总线 agent_id 合并。
+    check("缺省 agent_id 是 dsh（与日志边车共用）", ingest.DEFAULT_AGENT_ID == "dsh", ingest.DEFAULT_AGENT_ID)
     check("缺省 agent_id 全小写（D5）", ingest.DEFAULT_AGENT_ID == ingest.DEFAULT_AGENT_ID.lower(),
           ingest.DEFAULT_AGENT_ID)
 
