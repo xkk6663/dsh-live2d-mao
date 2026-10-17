@@ -117,9 +117,9 @@
     // 它们全部服务于小智插件（自动截屏让小智点评 / 图片识别提示词 / 小智设备绑定），
     // 小智插件已整体阉割（后端 /api/xiaozhi/* 路由与前端入口都已删除）。
     // 保留它们只会渲染出"永远读不到数据、点保存就报错"的空界面。
-    { id: 'bubble', label: '泡泡' },
-    // ★ 横条个性化（2026-10-17 用户需求）：默认宽度 / 行数 / 皮肤（为「横条 UI 可更换」预留）
-    { id: 'strip', label: '横条' },
+    // ★ 2026-10-17 用户裁决：原「泡泡」「横条」两个 tab 合并为「主题」
+    //    （气泡皮肤/点击互动/音效 + 横条尺寸/皮肤，都是外观主题范畴）。
+    { id: 'theme', label: '主题' },
   ]
 
   function setNavActive(on) {
@@ -138,7 +138,7 @@
       '<div style="flex:none;display:flex;align-items:center;gap:10px;padding:12px 20px;background:var(--sidebar-bg, #f4f7f8);border-bottom:1px solid var(--line, #d9e2e6);">' +
         '<span style="width:9px;height:9px;border-radius:50%;background:var(--accent, #4c8798);flex:none;"></span>' +
         '<strong style="font-size:14px;flex:none;">设置</strong>' +
-        '<span style="flex:1;font-size:11px;color:var(--muted, #687984);overflow:hidden;white-space:nowrap;text-overflow:ellipsis;" id="mioSetStatus">资料 · 桌宠 · 语音 · 泡泡 · 横条</span>' +
+        '<span style="flex:1;font-size:11px;color:var(--muted, #687984);overflow:hidden;white-space:nowrap;text-overflow:ellipsis;" id="mioSetStatus">资料 · 桌宠 · 语音 · 主题</span>' +
         '<button type="button" id="mioSetClose" title="关闭设置" style="border:none;background:transparent;font-size:16px;cursor:pointer;color:var(--muted, #687984);padding:2px 6px;">✕</button>' +
       '</div>' +
       '<div style="flex:none;display:flex;gap:4px;padding:8px 20px;background:var(--surface-soft, #f2f6f7);border-bottom:1px solid var(--line, #d9e2e6);" id="mioSetTabs"></div>' +
@@ -453,22 +453,12 @@
       body.appendChild(section('屏幕观察播报'))
       body.appendChild(row('观察时语音播报', '屏幕观察分析后语音播报', makeSwitch(!!s.speak_screen_observations, '观察语音播报'), 'speak_screen_observations'))
     // DSH 专用化：原 'observe' / 'prompts' / 'xz' 三个 tab 的渲染分支已随小智插件删除
-    } else if (id === 'bubble') {
-      // 泡泡工坊：皮肤 / 点击互动 / 图片素材库 —— UI 由 bubble-panel-inject.js 渲染模块提供
-      var bubbleHost = document.createElement('div')
-      bubbleHost.id = 'mio-bubble-host'
-      bubbleHost.style.cssText = 'display:flex;flex-direction:column;gap:12px;'
-      body.appendChild(bubbleHost)
-      if (window.__mioBubblePanel && window.__mioBubblePanel.renderInto) {
-        window.__mioBubblePanel.renderInto(bubbleHost)
-      } else {
-        bubbleHost.innerHTML = '<div style="font-size:12px;color:var(--muted,#687984);padding:14px;">泡泡模块未加载，请刷新页面后重试。</div>'
-      }
-    } else if (id === 'strip') {
-      // ★ 横条个性化（2026-10-17）：默认宽度 / 行数 / 皮肤。
-      //   值走 PATCH /api/companion/settings → settings_changed → 桌宠横条热应用；
-      //   反向（桌宠手动拉伸 → persistCompanionSetting 回写）也已打通 ——
-      //   所以这里的初始值 = 横条**实时状态**（拉伸过就显示拉伸后的宽度）。
+    } else if (id === 'theme') {
+      // ★ 主题页（2026-10-17 用户裁决）：原「泡泡」「横条」两 tab 合并。
+      //  ── 上半：横条设置（尺寸 / 行数 / 皮肤）──
+      //    值走 PATCH /api/companion/settings → settings_changed → 桌宠横条热应用；
+      //    反向（桌宠手动拉伸 → persistCompanionSetting 回写）也已打通 ——
+      //    所以这里的初始值 = 横条**实时状态**（拉伸过就显示拉伸后的宽度）。
       var sw0 = Number(s.live2d_strip_width) || 0
       var sr0 = Number(s.live2d_strip_rows) || 1
       var ss0 = s.live2d_strip_style || 'default'
@@ -480,9 +470,9 @@
       widthSlider.__mioInput.min = '0'
       body.appendChild(row('默认宽度', '横条的固定宽度；0 = 默认 420px。在桌宠上手动拉伸横条会同步更新这里，保存后立即生效。', widthSlider, 'live2d_strip_width'))
 
-      // 行数：最大显示行数上限；文字始终正常换行、超出 N 行裁掉
+      // 行数：文字按宽度换行往下递增，超出可见行数由右侧竖条滚动浏览
       var rowsSlider = makeSlider(sr0, 1, 5, 1, ' 行')
-      body.appendChild(row('显示行数', '最多显示几行文字；文字始终自动换行，超过设定行数的部分不显示。', rowsSlider, 'live2d_strip_rows'))
+      body.appendChild(row('显示行数', '横条可见窗口的行数；文字按宽度换行往下递增，超出的历史由右侧竖条滚动浏览（最新在最底）。', rowsSlider, 'live2d_strip_rows'))
 
       body.appendChild(section('横条皮肤（为 UI 可更换预留）'))
       var styleSel = makeSelect(ss0, [
@@ -495,7 +485,20 @@
         { v: 'terminal', t: '终端' },
         { v: 'comic', t: '漫画' },
       ])
-      body.appendChild(row('横条皮肤', '横条的配色主题，与泡泡皮肤同一套 id，后续可扩展更多 UI。', styleSel, 'live2d_strip_style'))
+      body.appendChild(row('横条皮肤', '横条的配色主题，与气泡皮肤同一套 id，后续可扩展更多 UI。', styleSel, 'live2d_strip_style'))
+
+      //  ── 下半：泡泡工坊（气泡皮肤 / 点击互动 / 图片素材库 / 音效）──
+      //    UI 由 bubble-panel-inject.js 渲染模块提供。
+      body.appendChild(section('气泡与互动（泡泡工坊）'))
+      var bubbleHost = document.createElement('div')
+      bubbleHost.id = 'mio-bubble-host'
+      bubbleHost.style.cssText = 'display:flex;flex-direction:column;gap:12px;'
+      body.appendChild(bubbleHost)
+      if (window.__mioBubblePanel && window.__mioBubblePanel.renderInto) {
+        window.__mioBubblePanel.renderInto(bubbleHost)
+      } else {
+        bubbleHost.innerHTML = '<div style="font-size:12px;color:var(--muted,#687984);padding:14px;">泡泡模块未加载，请刷新页面后重试。</div>'
+      }
     }
   }
 
