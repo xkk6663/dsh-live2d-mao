@@ -35,6 +35,12 @@ const INSTANCE_DIR = process.env.MIO_PET_ALLOW_PARALLEL === '1'
 
 app.setName('MioLive2D桌宠')
 app.setAppUserModelId('local.mio.live2d.desktop')
+// ★ 关键（2026-10-17 真根因）：INSTANCE_DIR 是 electron 的 userData（单实例锁所在）。
+//   Mao 主仓库有 pet-data/pet-instance，但本仓库 clone 出来没有该目录 ⇒
+//   electron 启动时"单实例锁文件创建失败(Error code 3)"→ 主进程秒退、桌宠起不来。
+//   必须在 setPath 前先建好 INSTANCE_DIR。Chromium/sessionData 由 electron 自建，
+//   不要手动 mkdir（会 EPERM，且与 electron 内部管理冲突）。
+fs.mkdirSync(INSTANCE_DIR, { recursive: true })
 app.setPath('userData', INSTANCE_DIR)
 app.setPath('sessionData', path.join(STATE_DIR, 'Chromium'))
 fs.mkdirSync(MODELS_DIR, { recursive: true })

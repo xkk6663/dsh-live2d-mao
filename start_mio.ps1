@@ -8,6 +8,12 @@
 # ============================================================
 $ErrorActionPreference = 'Stop'
 
+# ★ 关键（2026-10-17 真根因）：DSH 宿主进程以 ELECTRON_RUN_AS_NODE=1 运行，
+#   该环境变量会继承给 electron.exe 使其退化成 node 模式（桌宠秒崩）。
+#   拉起 electron 前必须清掉（只影响本脚本进程树）。
+Remove-Item env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
+$env:ELECTRON_RUN_AS_NODE = $null
+
 # 发布版相对路径：脚本所在目录为项目根，可在任意位置解压运行
 $root = $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($root)) { $root = Split-Path -Parent $MyInvocation.MyCommand.Path }
@@ -60,6 +66,16 @@ function Start-Detached($exe, $argList, $workdir, $stdoutLog, $stderrLog) {
 # 关闭/杀掉启动终端、父脚本均不影响该进程存活
 function Start-Wmi($exe, $argList, $workdir) {
     $cmdline = '"' + $exe + '" ' + $argList
+    # ★ 环境变量透传（2026-10-17）：WMI Create 不继承 $env: 修改，故经
+    #   cmd /c "set ... && " 前缀显式注入 MIO_PET_INSTANCE_DIR / MIO_PET_STATE_DIR。
+    $envPrefix = ''
+    foreach ($k in @('MIO_PET_INSTANCE_DIR', 'MIO_PET_STATE_DIR', 'MIO_PET_API_BASE')) {
+        $v = [Environment]::GetEnvironmentVariable($k, 'Process')
+        if ($v) { $envPrefix += "set $k=$v&& " }
+    }
+    if ($envPrefix) {
+        $cmdline = 'cmd.exe /c "' + $envPrefix + $cmdline + '"'
+    }
     try {
         $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
             CommandLine = $cmdline
@@ -131,6 +147,24 @@ if ($electronRunning) {
     Write-Step '[2/2] 桌宠已在运行，跳过'
 } else {
     Write-Step '[2/2] 桌宠未运行，正在启动...'
+    # ★ electron.exe 回退：本仓库 node_modules 被 gitignore（clone 出来没有），
+    #   优先本仓库、缺失回落到 Mao 主仓库的 electron.exe 二进制（外壳代码仍用本仓库）。
+    if (-not (Test-Path $electronExe)) {
+        $maoElectron = Join-Path (Split-Path -Parent $root) 'Mao\澪Agent应用\live2d-desktop\node_modules\electron\dist\electron.exe'
+        if (Test-Path $maoElectron) { $electronExe = $maoElectron }
+    }
+    # ★★ userData 锁目录（2026-10-17 真根因）：chromium 单实例锁在本仓库 clone 的
+    #   pet-data\pet-instance 报 Error 5，复用 Mao 主仓库的 pet-instance 可稳定创建。
+    #   pet-instance 只是缓存/锁，不含源码，共享无害；状态数据仍走本仓库。
+    $maoInstanceDir = Join-Path (Split-Path -Parent $root) 'Mao\pet-data\pet-instance'
+    if (Test-Path $maoInstanceDir) {
+        $env:MIO_PET_INSTANCE_DIR = $maoInstanceDir
+    } else {
+        $localInstance = Join-Path $root 'pet-data\pet-instance'
+        if (-not (Test-Path $localInstance)) { New-Item -ItemType Directory -Force -Path $localInstance | Out-Null }
+        $env:MIO_PET_INSTANCE_DIR = $localInstance
+    }
+    $env:MIO_PET_STATE_DIR = $petStateDir
     # --no-sandbox: 当前系统（Win11 预览版 + 近期更新）Chromium 沙箱初始化崩溃，
     # 必须禁用沙箱才能启动；数据目录默认已迁至项目根 pet-data（避开受控目录）
     $petPid = Start-Wmi $electronExe '--no-sandbox .' $electronDir

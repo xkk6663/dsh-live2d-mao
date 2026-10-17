@@ -30,6 +30,14 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# ★ 关键（2026-10-17 真根因）：DSH 宿主进程以 ELECTRON_RUN_AS_NODE=1 运行，
+#   这个环境变量会**继承**给本脚本再传给 electron.exe，导致 electron 退化成
+#   node 模式 —— 表现为 `bad option: --no-sandbox`、`require('electron')` 为空、
+#   `app.setName` 报 undefined，桌宠窗口秒崩起不来。
+#   必须在拉起 electron 前清掉它（只影响本脚本进程树，不动宿主）。
+Remove-Item env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
+$env:ELECTRON_RUN_AS_NODE = $null
+
 $root = $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($root)) { $root = Split-Path -Parent $MyInvocation.MyCommand.Path }
 
@@ -82,6 +90,27 @@ if (-not (Test-Path (Join-Path $electronWorkDir 'main.js'))) {
         $electronWorkDir = Split-Path -Parent $d
     }
 }
+
+# ★★ electron userData 锁目录（2026-10-17 真根因）：chromium 在 Windows 上创建
+#   单实例锁（SingletonLock）时，本仓库 clone 出来的 pet-data\pet-instance 会报
+#   Error 5（access denied）—— 具体是 Mao 目录上一条 AppContainer capability SID 的
+#   显式 Allow 规则在本仓库缺失所致，纯 ACL 复制（icacls/Set-Acl）无法稳定修复。
+#   已实测唯一可靠解：**复用 Mao 主仓库的 pet-instance** 作为 electron userData。
+#   pet-instance 只是 electron 的缓存/锁/localStorage，不含源码，两仓库共享无害。
+#   状态数据（Live2D桌宠）仍用本仓库，保证页面与模型走本仓库。
+$stateDir = Join-Path $root 'pet-data\Live2D桌宠'
+$instanceDir = Join-Path $root 'pet-data\pet-instance'
+$maoInstanceDir = Join-Path (Split-Path -Parent $root) 'Mao\pet-data\pet-instance'
+if (Test-Path $maoInstanceDir) {
+    # Mao 的 pet-instance 存在 → 用它（唯一验证能创建 SingletonLock 的路径）
+    $env:MIO_PET_INSTANCE_DIR = $maoInstanceDir
+} elseif (Test-Path $instanceDir) {
+    $env:MIO_PET_INSTANCE_DIR = $instanceDir
+} else {
+    New-Item -ItemType Directory -Force -Path $instanceDir | Out-Null
+    $env:MIO_PET_INSTANCE_DIR = $instanceDir
+}
+$env:MIO_PET_STATE_DIR = $stateDir
 
 # 就绪探测用 /api/companion/agents（纯读总线，稳定）；
 # 不用 /api/companion/status —— 它依赖 Live2D 资源与磁盘写入，
@@ -140,6 +169,17 @@ function Stop-Tree($processId) {
 # 关闭/杀掉启动终端、父脚本均不影响该进程存活
 function Start-Wmi($exe, $argList, $workdir) {
     $cmdline = '"' + $exe + '" ' + $argList
+    # ★ 环境变量透传（2026-10-17）：WMI Create 不继承调用 shell 的 $env: 修改，
+    #   故把关键环境变量经 cmd /c "set ... && " 前缀显式注入，确保 electron
+    #   子进程拿到 MIO_PET_INSTANCE_DIR / MIO_PET_STATE_DIR（否则锁目录回落默认）。
+    $envPrefix = ''
+    foreach ($k in @('MIO_PET_INSTANCE_DIR', 'MIO_PET_STATE_DIR', 'MIO_PET_API_BASE')) {
+        $v = [Environment]::GetEnvironmentVariable($k, 'Process')
+        if ($v) { $envPrefix += "set $k=$v&& " }
+    }
+    if ($envPrefix) {
+        $cmdline = 'cmd.exe /c "' + $envPrefix + $cmdline + '"'
+    }
     try {
         $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
             CommandLine      = $cmdline
