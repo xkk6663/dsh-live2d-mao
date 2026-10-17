@@ -92,7 +92,9 @@ def about_payload() -> dict[str, Any]:
     return {
         "ok": True,
         "about": {
-            "product": "Mio 私人AI日记系统 · 桌宠",
+            # ★ 2026-10-17：产品更名 —— 本仓库已从「Mio 私人AI日记系统」阉割为
+            #   DSH 专用 Live2D 桌宠，产品名与版本语义都应以桌宠为准。
+            "product": "Mao-pet · DSH 专用 Live2D 桌宠",
             "version": read_mio_version(),
             "python": platform.python_version(),
             "platform": f"{platform.system()} {platform.release()}",

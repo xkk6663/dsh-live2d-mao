@@ -30,7 +30,7 @@ router = APIRouter(prefix="/api/plugin/dsh", tags=["plugin:dsh"])
 
 
 class IngestPayload(BaseModel):
-    """插件推送的 phase 事件（``packages/mao-pet`` → 桌宠总线）。
+    """插件推送的 phase 事件（``packages/dsh-live2d-mao`` → 桌宠总线）。
 
     字段全部可选（除 ``phase``），缺省走 ``ingest`` 里的默认身份，
     这样插件可以只发 `{"phase":"thinking"}` 这种最小体。
@@ -203,7 +203,7 @@ async def plugin_update_check() -> dict[str, Any]:
 
 @router.post("/ingest")
 async def plugin_ingest(payload: IngestPayload) -> dict[str, Any]:
-    """插件（``packages/mao-pet``）把 phase 推进桌宠总线——本插件包**唯一的写入口**。
+    """插件（``packages/dsh-live2d-mao``）把 phase 推进桌宠总线——本插件包**唯一的写入口**。
 
     链路::
 

@@ -181,7 +181,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File restart_mio.ps1 -ForcePet
 装上插件后，走**实时事件流**（即时、更细的功能状态）。
 
 ```powershell
-dsh plugin --profile desktop add link:C:\Users\xiao1\Mao-dsh-pet\packages\mao-pet
+dsh plugin --profile desktop add link:C:\Users\xiao1\Mao-dsh-pet\packages/dsh-live2d-mao
 ```
 
 > 插件跑在 DSH 进程内，推送时**复用 DSH 的身份**——桌宠上只会看到一个 `DSH`，不会多出第二个名字。

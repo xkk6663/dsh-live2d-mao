@@ -809,7 +809,7 @@ class DshAdapter:
         return bool(state.enabled)
 
     def _plugin_owns_bus(self) -> bool:
-        """插件（packages/mao-pet）是否正在驱动总线上的 `dsh` 身份。
+        """插件（packages/dsh-live2d-mao）是否正在驱动总线上的 `dsh` 身份。
 
         ★ 2026-10-17 合并身份（用户裁决）：插件推送时复用 `agent_id="dsh"`，
           桌宠上只显示一个 DSH agent（不再有 Mao-pet / DSH 两个徽标抢镜头）。

@@ -105,8 +105,8 @@ function silenceConsole(fn) {
   return logs
 }
 
-test('入口 · D5 命名：插件 name 全小写 mao-pet', () => {
-  assert.equal(plugin.name, 'mao-pet')
+test('入口 · D5 命名：插件 name 全小写 dsh-live2d-mao', () => {
+  assert.equal(plugin.name, 'dsh-live2d-mao')
 })
 
 test('入口 · ★ 踩坑结论①：apply() 同步段内就注册了注入行（不依赖任何服务）', () => {
@@ -125,7 +125,7 @@ test('入口 · 注入行是 kind:script 内联，不是 script-src（踩坑结�
   assert.equal(table.length, 1)
   assert.equal(table[0].kind, 'script', '必须是内联 script，script-src 失败会 reject 整个 boot')
   assert.equal(typeof table[0].text, 'string')
-  assert.ok(table[0].text.includes('/mao-pet/bridge.js'))
+  assert.ok(table[0].text.includes('/dsh-live2d-mao/bridge.js'))
   assert.equal(table[0].text.includes('s.onerror=function(){}'), true, '必须吞掉 onerror')
 })
 
@@ -151,7 +151,7 @@ test('入口 · 注入行对非数组 table 不崩', () => {
 test('入口 · 注入行不覆盖旧的 script-src 行（向后兼容）', () => {
   const h = makeHarness({ skipRun: true })
   plugin.apply(h.root)
-  const table = [{ kind: 'script-src', src: '/mao-pet/bridge.js' }]
+  const table = [{ kind: 'script-src', src: '/dsh-live2d-mao/bridge.js' }]
   h.record.indexInject[0].cb(table)
   assert.equal(table.length, 1, '已存在旧行时不该再插内联行')
 })
@@ -185,14 +185,14 @@ test('入口 · 注册了 4 条只读路由', () => {
   // bridge.js：注入行加载的自证探针（**不参与业务投递**，见 lib/index.js 顶部长注释）。
   // 提供它而不是让它 404，是为了"注入行到底进没进页面"可被验证。
   assert.deepEqual(paths, [
-    '/mao-pet/bridge.js', '/mao-pet/capabilities', '/mao-pet/phases', '/mao-pet/status',
+    '/dsh-live2d-mao/bridge.js', '/dsh-live2d-mao/capabilities', '/dsh-live2d-mao/phases', '/dsh-live2d-mao/status',
   ])
 })
 
 test('入口 · bridge.js 只做自证：不碰 DOM、不依赖核心 API', async () => {
   const h = makeHarness()
   plugin.apply(h.root)
-  const route = h.record.routes.find((r) => r.path === '/mao-pet/bridge.js')
+  const route = h.record.routes.find((r) => r.path === '/dsh-live2d-mao/bridge.js')
   assert.ok(route, '应注册 bridge.js 路由')
   assert.equal(route.method, 'GET')
   let body = ''
@@ -223,7 +223,7 @@ test('入口 · 所有路由都是 GET（只读，无写面）', () => {
 test('入口 · 路由套上了安全栅栏（伪造 Host 被宿主栅栏拒）', async () => {
   const h = makeHarness()
   plugin.apply(h.root)
-  const route = h.record.routes.find((r) => r.path === '/mao-pet/status')
+  const route = h.record.routes.find((r) => r.path === '/dsh-live2d-mao/status')
 
   // 伪造非回环 Host → 交给宿主栅栏判（它返回 401）
   const res = { statusCode: null, ended: false, setHeader() {}, end() { this.ended = true } }
@@ -240,7 +240,7 @@ test('入口 · 路由套上了安全栅栏（伪造 Host 被宿主栅栏拒）'
 test('入口 · ★ 无宿主栅栏时插件自校验兜底（fail-closed，403）', async () => {
   const h = makeHarness({ connection: null })
   plugin.apply(h.root)
-  const route = h.record.routes.find((r) => r.path === '/mao-pet/status')
+  const route = h.record.routes.find((r) => r.path === '/dsh-live2d-mao/status')
   const res = { statusCode: null, ended: false, setHeader() {}, end() { this.ended = true } }
   await route.handler({ method: 'GET', headers: { host: 'evil.example.com' } }, res)
   assert.equal(res.statusCode, 403, '没有宿主栅栏时插件必须自己拒')
@@ -254,7 +254,7 @@ test('入口 · ★ 无宿主栅栏时插件自校验兜底（fail-closed，403�
 test('入口 · 回环请求正常返回 200 + JSON', async () => {
   const h = makeHarness()
   plugin.apply(h.root)
-  const route = h.record.routes.find((r) => r.path === '/mao-pet/status')
+  const route = h.record.routes.find((r) => r.path === '/dsh-live2d-mao/status')
 
   let body = ''
   const res = {
@@ -267,14 +267,14 @@ test('入口 · 回环请求正常返回 200 + JSON', async () => {
   assert.equal(res.statusCode, 200)
   const parsed = JSON.parse(body)
   assert.equal(parsed.ok, true)
-  assert.equal(parsed.plugin.id, 'mao-pet')
-  assert.equal(parsed.plugin.name, 'Mao-pet')
+  assert.equal(parsed.plugin.id, 'dsh-live2d-mao')
+  assert.equal(parsed.plugin.name, 'dsh-live2d-mao')
 })
 
-test('入口 · /mao-pet/phases 返回 12 态', async () => {
+test('入口 · /dsh-live2d-mao/phases 返回 12 态', async () => {
   const h = makeHarness()
   plugin.apply(h.root)
-  const route = h.record.routes.find((r) => r.path === '/mao-pet/phases')
+  const route = h.record.routes.find((r) => r.path === '/dsh-live2d-mao/phases')
   let body = ''
   const res = { setHeader() {}, end(c) { body = c } }
   await route.handler({ method: 'GET', headers: { host: '127.0.0.1' } }, res)
@@ -286,10 +286,10 @@ test('入口 · /mao-pet/phases 返回 12 态', async () => {
   ])
 })
 
-test('入口 · /mao-pet/capabilities 如实暴露 7.1~7.6 状态', async () => {
+test('入口 · /dsh-live2d-mao/capabilities 如实暴露 7.1~7.6 状态', async () => {
   const h = makeHarness()
   plugin.apply(h.root)
-  const route = h.record.routes.find((r) => r.path === '/mao-pet/capabilities')
+  const route = h.record.routes.find((r) => r.path === '/dsh-live2d-mao/capabilities')
   let body = ''
   const res = { setHeader() {}, end(c) { body = c } }
   await route.handler({ method: 'GET', headers: { host: '127.0.0.1' } }, res)
@@ -332,7 +332,7 @@ test('入口 · ★ session/event 首参是 session（端到端不抛且不崩�
 test('入口 · 服务缺失（较老 dsh）时 apply 不崩，能力如实标不可用', () => {
   const h = makeHarness({ connection: null, sessionProjections: null, userQuestions: null })
   assert.doesNotThrow(() => plugin.apply(h.root))
-  const route = h.record.routes.find((r) => r.path === '/mao-pet/capabilities')
+  const route = h.record.routes.find((r) => r.path === '/dsh-live2d-mao/capabilities')
   let body = ''
   route.handler({ method: 'GET', headers: { host: '127.0.0.1' } }, { setHeader() {}, end(c) { body = c } })
   // 异步 handler：这里只确保没抛
@@ -342,7 +342,7 @@ test('入口 · 服务缺失（较老 dsh）时 apply 不崩，能力如实标�
 test('入口 · 宿主栅栏缺失时仍走自校验（写路由不存在，读路由仍受保护）', async () => {
   const h = makeHarness({ connection: null })
   plugin.apply(h.root)
-  const route = h.record.routes.find((r) => r.path === '/mao-pet/status')
+  const route = h.record.routes.find((r) => r.path === '/dsh-live2d-mao/status')
   const res = { statusCode: null, ended: false, setHeader() {}, end() { this.ended = true } }
   await route.handler({ method: 'GET', headers: { host: 'evil.com' } }, res)
   assert.equal(res.statusCode, 403, '无宿主栅栏时插件自校验必须 fail-closed')

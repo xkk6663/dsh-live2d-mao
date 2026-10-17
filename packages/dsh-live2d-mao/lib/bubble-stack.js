@@ -109,7 +109,7 @@ export function createBubbleStack(opts = {}) {
         if (worst) {
           entries.delete(worst.sessionId)
           evicted = worst.sessionId
-          logger.debug?.('[Mao-pet] 气泡栈已满，淘汰 ' + worst.sessionId)
+          logger.debug?.('[dsh-live2d-mao] 气泡栈已满，淘汰 ' + worst.sessionId)
         }
       }
 

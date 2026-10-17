@@ -7,7 +7,7 @@
 > | 本文原计划 | 现状 |
 > |---|---|
 > | Phase 0.1 spike「宿主侧起 BrowserWindow」 | ❌ **已否决**（`ELECTRON_RUN_AS_NODE=1` 下 `require('electron')` 无 BrowserWindow，见 `M5-Phase0.1-spike-结论.md`）⇒ 改为「独立 Electron 壳 + 插件只推事件」，即裁决 **D4** |
-> | Phase 1 `dsh-connector` 最小可跑 | ✅ 已落地，实际包名 `packages/mao-pet` |
+> | Phase 1 `dsh-connector` 最小可跑 | ✅ 已落地，实际包名 `packages/dsh-live2d-mao` |
 > | Phase 2.1 逐 token 流式 | ✅ 已落地（走 `agent/assistant-stream` → 横条） |
 > | Phase 2.2/2.3 审批/提问应答 | ⛔ **已阉割**（用户裁决 2026-10-17：DSH 审批策略为 `never` 时用不上；需要审批直接开 DSH 界面，从桌宠点按钮属绕远路） |
 > | Phase 2.4 多 session 气泡栈 | ✅ 已接线（`bubble-stack.js` 驱动工具状态气泡） |

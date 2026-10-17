@@ -31,8 +31,8 @@ const flush = () => new Promise((r) => setImmediate(r))
 
 test('6.1 · 身份：总线 agent_id = dsh（与日志边车共用），名字/色值对齐 DSH', () => {
   // ★ 2026-10-17 用户裁决（合并身份）：产品是「DSH 专用桌宠」，桌宠上不该出现
-  //   `Mao-pet` 和 `DSH` 两个 agent 抢镜头 ⇒ 插件推送复用边车的 `dsh`。
-  //   ⚠ 注意：D5 约束的是 **npm 包名 / cordis 插件 id** = `mao-pet`（装插件用），
+  //   `dsh-live2d-mao` 和 `DSH` 两个 agent 抢镜头 ⇒ 插件推送复用边车的 `dsh`。
+  //   ⚠ 注意：D5 约束的是 **npm 包名 / cordis 插件 id** = `dsh-live2d-mao`（装插件用），
   //     由 architecture.test.js 的 R3 守卫；本文件断言的是**总线身份**，两者不同。
   assert.equal(AGENT_ID, 'dsh')
   assert.equal(AGENT_NAME, 'DeepSeek Harness')

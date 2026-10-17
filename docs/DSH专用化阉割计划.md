@@ -171,7 +171,7 @@ if (onboarding?.completed === false) {
 
 1. **D4**：桌宠主体（独立 Electron 壳）不动；插件只推事件
 2. **12 态总线不删**（`voice` 保留为预留态）
-3. **`packages/mao-pet` 不动**（那是 DSH 插件本体，是保留项）
+3. **`packages/dsh-live2d-mao` 不动**（那是 DSH 插件本体，是保留项）
 4. **Mao 主仓库不动**（本计划只在 `Mao-dsh-pet` 执行）
 5. **不用 `git add -A`**，只用显式文件清单
 6. **破坏性操作前备份并告知路径**（纪律⑥）

@@ -1,7 +1,19 @@
-# CHANGELOG · Mao 桌宠
+# CHANGELOG · DSH-Live2D-Mao 桌宠
 
-> 项目从 Mio（ochiru520/Mio）深度改造而来，发布版命名 **Mao**。
-> 所有改动均有本地 git 提交记录（`git log` 可追溯每次提交的根因与方案）。
+> 本仓库从「Mao 桌宠（跨 Agent 平台）」fork 后，专用化为 **DSH 专用 Live2D 桌宠**。
+> 插件名 `dsh-live2d-mao`，本文件顶部版本号是 DSH 面板「关于」页的**唯一版本源**（`about_service.read_mio_version()` 读这里）。
+
+---
+
+## v1.0.0（2026-10-17）· **DSH 专用化正式版**：插件改名 + 合并身份 + 发布就绪
+
+- **插件更名**：`mao-pet` → `dsh-live2d-mao`（npm 包名 + cordis id + 目录名），显示名 DSH-Live2D-Mao
+- **合并身份**：插件推送复用日志边车的 `agent_id="dsh"`，桌宠上只显示一个 DSH（不再有 Mao-pet / DSH 两个徽标抢镜头）
+- **发布就绪**：去 `private:true`、补 icon.png / README / PROVENANCE、`files` 精确清单（排除测试 mock transport）
+- **交互打磨**：不透明度（Cubism renderer.setModelColor，两轮源码级取证）、锁定位置、SHIFT 拖动、拖拽惯性
+- **12 态颜色可自定义**（存后端 settings，管理窗 localStorage 不持久）
+- **主题页合并**：原「泡泡」「横条」合并为「主题」
+- **审批/提问回传阉割**（用户裁决：DSH 策略 never 用不上，需要审批直接开 DSH 界面）
 
 ---
 

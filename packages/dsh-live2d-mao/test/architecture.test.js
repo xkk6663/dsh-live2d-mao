@@ -74,17 +74,17 @@ test('R2 · 12 态词汇不删不改（含 voice 预留态）', async () => {
     '12 态词汇是总线契约，不得增删；voice 是 D1 预留态必须保留')
 })
 
-test('R3 · D5 命名：npm 名与 cordis id 全小写 mao-pet', () => {
+test('R3 · D5 命名：npm 名与 cordis id 全小写 dsh-live2d-mao', () => {
   const pkg = JSON.parse(readFileSync(join(rootDir, 'package.json'), 'utf8'))
-  assert.equal(pkg.name, 'mao-pet', 'npm 包名必须全小写 mao-pet')
+  assert.equal(pkg.name, 'dsh-live2d-mao', 'npm 包名必须全小写 dsh-live2d-mao')
 
   const patch = readFileSync(join(rootDir, 'cordis.patch.yml'), 'utf8')
-  assert.ok(patch.includes('id: mao-pet'), 'cordis.patch.yml 的 id 必须为 mao-pet')
-  // id 必须是全小写；name 字段与注释里的显示名 Mao-pet 是允许的
-  assert.ok(/id:\s*mao-pet\b/.test(patch), 'cordis id 必须全小写 mao-pet（不含大写）')
+  assert.ok(patch.includes('id: dsh-live2d-mao'), 'cordis.patch.yml 的 id 必须为 dsh-live2d-mao')
+  // id 必须是全小写；name 字段与注释里的显示名 dsh-live2d-mao 是允许的
+  assert.ok(/id:\s*dsh-live2d-mao\b/.test(patch), 'cordis id 必须全小写 dsh-live2d-mao（不含大写）')
 
-  // 显示名是 Mao-pet（允许大写），但只出现在 description，不进入 id
-  assert.ok(pkg.description.includes('Mao-pet') || pkg.description.includes('桌宠'),
+  // 显示名是 dsh-live2d-mao（允许大写），但只出现在 description，不进入 id
+  assert.ok(pkg.description.includes('dsh-live2d-mao') || pkg.description.includes('桌宠'),
     'description 应有显示名/用途说明')
 })
 

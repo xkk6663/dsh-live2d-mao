@@ -7,7 +7,7 @@
 
 ## 1. 项目定位（一句话）
 
-把开源桌宠 Mao（原 Mio）从「跨 Agent 平台」改造为 **DSH 专用形态**：桌宠本体只认统一状态总线上的 12 个标准 phase，DSH 插件线（`packages/mao-pet` + 后端 `app/agents/dsh`）把 DSH 会话的实时状态映射成桌宠动画/徽标/气泡/横条。小智、Octop 已整体阉割。
+把开源桌宠 Mao（原 Mio）从「跨 Agent 平台」改造为 **DSH 专用形态**：桌宠本体只认统一状态总线上的 12 个标准 phase，DSH 插件线（`packages/dsh-live2d-mao` + 后端 `app/agents/dsh`）把 DSH 会话的实时状态映射成桌宠动画/徽标/气泡/横条。小智、Octop 已整体阉割。
 
 ---
 
@@ -111,7 +111,7 @@
 
 ---
 
-## 4. 插件本体（packages/mao-pet）
+## 4. 插件本体（packages/dsh-live2d-mao）
 
 > ★ **DSH 插件本体**：Cordis 插件，npm 名与 cordis id 均为小写 `mao-pet`（D5 裁决），显示名 `Mao-pet`。
 

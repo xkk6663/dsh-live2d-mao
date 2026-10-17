@@ -181,7 +181,7 @@ export function createStripController(opts = {}) {
   function noteDegrade(reason) {
     if (degradeWarned) return
     degradeWarned = true
-    logger.info?.('[Mao-pet] 横条通道不可用（' + reason + '），已降级到说话气泡；'
+    logger.info?.('[dsh-live2d-mao] 横条通道不可用（' + reason + '），已降级到说话气泡；'
       + '功能不受影响，但流式提示会占用气泡窗位。')
     safeCall(() => onDegrade(reason))
   }

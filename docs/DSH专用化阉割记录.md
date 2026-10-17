@@ -96,7 +96,7 @@ DSH 专用化的**代码阉割**（阶段 1~3）已在此前提交完成；本�
 | 文档 | 改动 |
 |---|---|
 | `README.md` | 全量重写：从「跨 Agent 平台（小智/DSH/Octop）」改为「DSH 专用」；更新架构图、目录结构、三条独立通路、门禁、文档索引 |
-| `SRC-MAP-源码地图.md` | 全量重写：删除小智/Octop/overlay/质检导航，补 DSH 插件包与 `packages/mao-pet` 结构，记录本次清理与修复 |
+| `SRC-MAP-源码地图.md` | 全量重写：删除小智/Octop/overlay/质检导航，补 DSH 插件包与 `packages/dsh-live2d-mao` 结构，记录本次清理与修复 |
 | `docs/DSH专用化阉割记录.md`（本文件） | 阶段 4 收口记录 |
 
 ---

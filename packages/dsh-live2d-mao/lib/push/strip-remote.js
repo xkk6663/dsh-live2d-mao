@@ -69,7 +69,7 @@ export function createStripRemote(opts = {}) {
       if (!res.ok) {
         // 400/403/422 都属"后端明确拒绝"——记一条 debug 即可，不刷 warn：
         // 旧后端没有这个路由（404）是**部署态**而非插件 bug，重试也没用。
-        logger.debug?.('[Mao-pet] strip 被后端拒绝 status=' + res.status)
+        logger.debug?.('[dsh-live2d-mao] strip 被后端拒绝 status=' + res.status)
         return { ok: false, status: res.status, error: 'http-' + res.status }
       }
       return {
@@ -78,7 +78,7 @@ export function createStripRemote(opts = {}) {
         delivered: parsed && typeof parsed.delivered === 'boolean' ? parsed.delivered : true,
       }
     } catch (err) {
-      logger.debug?.('[Mao-pet] strip 请求失败：' + String((err && err.message) || err))
+      logger.debug?.('[dsh-live2d-mao] strip 请求失败：' + String((err && err.message) || err))
       return { ok: false, error: String((err && err.name) || 'error') }
     } finally {
       if (timer) clearTimeout(timer)
@@ -90,7 +90,7 @@ export function createStripRemote(opts = {}) {
   //   故这里采用**乐观返回**：请求已发出即返回 true，真实结果走日志/诊断。
   //   这是刻意的取舍——编排层需要同步判定"是否占用窗位"来做气泡互斥，
   //   若返回 Promise 会让互斥状态机变成异步，复杂度陡增且容易出竞态。
-  //   "后端真的收到了吗"由 webServer 侧的 /mao-pet/status 诊断暴露。
+  //   "后端真的收到了吗"由 webServer 侧的 /dsh-live2d-mao/status 诊断暴露。
   return {
     url,
     send,

@@ -151,7 +151,7 @@ export function createRejectionGate(opts = {}) {
 
   // 宿主栅栏不可用 → **在插件加载时**就打一条醒目 warn（不是等第一次请求才打）
   if (!getConn()) {
-    warn('[mao-pet] 宿主信任栅栏不可用（connection.requestRejection 缺失）：已启用插件自带的'
+    warn('[dsh-live2d-mao] 宿主信任栅栏不可用（connection.requestRejection 缺失）：已启用插件自带的'
       + ' 回环/同源校验，所有路由（含写接口）仍受它保护；若本机 dsh 部署在非回环地址'
       + '（反代/局域网），请用环境变量 MAO_PET_TRUSTED_HOSTS 声明允许的 Host（逗号分隔，可带端口）。')
   }
@@ -185,7 +185,7 @@ export function createRejectionGate(opts = {}) {
         warned.writeDenied = true
         const host = String(((req && req.headers) || {}).host || '')
         lastDeniedHost = host
-        warn('[mao-pet] 已拒绝一个来自非本机的**写请求**（Host=' + host + '）。'
+        warn('[dsh-live2d-mao] 已拒绝一个来自非本机的**写请求**（Host=' + host + '）。'
           + '配置与凭据的改动只能在**本机**（回环地址）打开界面进行。'
           + '确需远端管理，请用环境变量 MAO_PET_ADMIN_HOSTS 声明允许的管理主机。')
       }
@@ -201,7 +201,7 @@ export function createRejectionGate(opts = {}) {
       // 旧实现这里是 `return false`：栅栏自己抛异常被当成"没被拒"而静默放行（#136 第二条路径）
       if (!warned.fenceThrew) {
         warned.fenceThrew = true
-        warn('[mao-pet] 信任栅栏抛异常，已按拒绝处理：' + String((err && err.message) || err))
+        warn('[dsh-live2d-mao] 信任栅栏抛异常，已按拒绝处理：' + String((err && err.message) || err))
       }
       return deny(403)
     }

@@ -1,16 +1,16 @@
 # ============================================================================
-# mao-pet —— DSH bundle patch
+# dsh-live2d-mao —— DSH bundle patch
 # ============================================================================
 # 插件的"挂载声明"。DSH 启动时按 bundle 层栈叠加各插件 patch，
-# 本文件把 Mao-pet 桌宠连接器插入 Web profile 的配置树。
+# 本文件把 dsh-live2d-mao 桌宠连接器插入 Web profile 的配置树。
 #
 # 安装方式：
 #   dsh plugin --profile web add link:<本目录绝对路径>
 #
-# ⚠ D5：cordis id 与 npm 包名必须**全小写** `mao-pet`（npm 禁大写包名）；
-#      显示名才是 `Mao-pet`（在 package.json description / 前端呈现层表达）。
+# ⚠ D5：cordis id 与 npm 包名必须**全小写** `dsh-live2d-mao`（npm 禁大写包名）；
+#      显示名 `DSH-Live2D-Mao` 只在 package.json description / 前端呈现层表达。
 # ============================================================================
 
 - insert:
-    - id: mao-pet
-      name: mao-pet
+    - id: dsh-live2d-mao
+      name: dsh-live2d-mao

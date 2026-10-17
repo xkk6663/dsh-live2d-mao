@@ -142,7 +142,7 @@ export function createConnector(opts = {}) {
     if (phase !== lastLoggedPhase) {
       lastLoggedPhase = phase
       safeCall(() => logger.info(
-        '[Mao-pet] phase → ' + phase + workBadge(isWork) + ' ' + JSON.stringify(state),
+        '[dsh-live2d-mao] phase → ' + phase + workBadge(isWork) + ' ' + JSON.stringify(state),
       ))
       for (const fn of phaseListeners) safeCall(() => fn({ phase, state, sessionId: bucket.sid, seq: seqAtSend }))
     }
@@ -151,7 +151,7 @@ export function createConnector(opts = {}) {
     // pusher 内部已保证不抛（退避 + 静默降级）。
     Promise.resolve()
       .then(() => pusher.pushPhase(phase, state, { seq: seqAtSend, force: changed }))
-      .catch((err) => safeCall(() => logger.debug?.('[mao-pet] 推送失败（已吞）：' + String(err && err.message || err))))
+      .catch((err) => safeCall(() => logger.debug?.('[dsh-live2d-mao] 推送失败（已吞）：' + String(err && err.message || err))))
 
     return { phase, state, pushed: true, seq: seqAtSend }
   }
@@ -178,7 +178,7 @@ export function createConnector(opts = {}) {
    * "heartbeat" 污染 Agent 页显示（`dsh_adapter.py:162-164`）。
    */
   async function emitHeartbeat() {
-    safeCall(() => logger.debug?.('[mao-pet] heartbeat'))
+    safeCall(() => logger.debug?.('[dsh-live2d-mao] heartbeat'))
     return pusher.pushHeartbeat()
   }
 

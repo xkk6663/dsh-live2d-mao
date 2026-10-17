@@ -3,7 +3,7 @@
 为什么需要这个模块
 ------------------
 ``agents/dsh/routes.py`` 原本**只有 5 个只读 GET**（status/phases/diagnostics/about/update-check），
-即"DshAdapter 读日志边车 → 总线 → 桌宠"这条**单向**链路。而插件形态（``packages/mao-pet``）
+即"DshAdapter 读日志边车 → 总线 → 桌宠"这条**单向**链路。而插件形态（``packages/dsh-live2d-mao``）
 是**反向**的：插件跑在 DSH 宿主进程内，直接拿到了实时事件，需要把 phase **推进**桌宠总线。
 两条链路互不冲突、可并存：
 

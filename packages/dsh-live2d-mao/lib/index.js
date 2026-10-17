@@ -1,5 +1,5 @@
 /**
- * Mao-pet —— DSH 桌宠连接器（Cordis 插件宿主侧入口）
+ * DSH-Live2D-Mao —— DSH 专用 Live2D 桌宠连接器（Cordis 插件宿主侧入口）
  *
  * 形态（裁决 D4，且经 M5 spike 源码级确证）：**插件只推事件，不持有窗口**。
  * 插件宿主跑在 `ELECTRON_RUN_AS_NODE=1` 的子进程里，`require('electron')`
@@ -32,7 +32,7 @@ import { safeCall } from './util.js'
  *
  * 为什么是"我们自己建 <script> 并**吞掉** onerror"，而不是让宿主去 load：
  * 宿主把这张表在**宿主启动时收集一次**后缓存，**没有任何刷新路径**。
- * 插件在运行期被关掉时表里仍留着这一行，而我们注册的 `/mao-pet/*` 路由
+ * 插件在运行期被关掉时表里仍留着这一行，而我们注册的 `/dsh-live2d-mao/*` 路由
  * 已注销 → 加载 404。内联行 + 吞掉 onerror 让我们**永远不会因为自己的
  * 前端资源缺失而把宿主拖挂**（whale #154 的原始致命错误就是这条）。
  *
@@ -51,18 +51,18 @@ import { safeCall } from './util.js'
  *      （后者失败会 reject 整个 boot，应用起不来）。
  * 这两条是「插件形态能不能用」的地基，值得留一条**真实生效**的注入行来守住它。
  *
- * 因此 `/mao-pet/bridge.js` 现在由本插件**真的提供**（见下方 registerRoute），
+ * 因此 `/dsh-live2d-mao/bridge.js` 现在由本插件**真的提供**（见下方 registerRoute），
  * 内容是一个极小的探针：挂 `window.__maoPetBridge` 并回传一次握手。
  * 这样"注入行是否真的进了页面"**可被验证**，而不是靠一个 404 猜。
  * 它**只做自证**，不参与任何业务投递 —— 桌宠连接完全不依赖它。
  */
 const DESKTOP_BRIDGE_ROW_TEXT =
   '(function(){try{var d=document.body||document.head||document.documentElement;if(!d)return;'
-  + 'var s=document.createElement("script");s.src="/mao-pet/bridge.js";'
+  + 'var s=document.createElement("script");s.src="/dsh-live2d-mao/bridge.js";'
   + 's.onerror=function(){};d.appendChild(s)}catch(e){}})()'
 
 /** 注入行去重标记。 */
-const BRIDGE_SRC_MARK = '/mao-pet/bridge.js'
+const BRIDGE_SRC_MARK = '/dsh-live2d-mao/bridge.js'
 
 /**
  * `bridge.js` 的响应体：一个**只做自证**的极小探针。
@@ -71,11 +71,11 @@ const BRIDGE_SRC_MARK = '/mao-pet/bridge.js'
  * "注入行到底有没有进到 DSH GUI 页面里"。
  * 排障时在 DSH GUI 的 devtools 里看 `window.__maoPetBridge` 即可。
  */
-const BRIDGE_JS_BODY = `/* Mao-pet bridge (self-check beacon only) */
+const BRIDGE_JS_BODY = `/* dsh-live2d-mao bridge (self-check beacon only) */
 (function () {
   try {
     window.__maoPetBridge = {
-      plugin: 'mao-pet',
+      plugin: 'dsh-live2d-mao',
       at: Date.now(),
       // 供排障：确认注入行确实进了本窗口
       note: 'injection row OK; pet delivery is host-side (HTTP -> bus -> WS)',
@@ -85,7 +85,7 @@ const BRIDGE_JS_BODY = `/* Mao-pet bridge (self-check beacon only) */
 `
 
 export default {
-  name: 'mao-pet',
+  name: 'dsh-live2d-mao',
 
   /**
    * ⚠ 有意**不用对象级 `inject: [...]`**（whale v758 的教训）：
@@ -288,7 +288,7 @@ export default {
       // 而且 404 会在 DSH GUI devtools 里刷红，看着像插件坏了。
       safeCall(() => registerRoute({
         method: 'GET',
-        path: '/mao-pet/bridge.js',
+        path: '/dsh-live2d-mao/bridge.js',
         handler: async (req, res) => {
           try {
             res.statusCode = 200
@@ -302,10 +302,10 @@ export default {
       // 只读诊断：桌宠连接器当前状态（排障主入口）
       safeCall(() => registerRoute({
         method: 'GET',
-        path: '/mao-pet/status',
+        path: '/dsh-live2d-mao/status',
         handler: async (req, res) => json(res, 200, {
           ok: true,
-          // plugin = 插件自身身份（mao-pet）；bus_agent_id = 它在桌宠总线上代表谁（dsh）
+          // plugin = 插件自身身份（dsh-live2d-mao）；bus_agent_id = 它在桌宠总线上代表谁（dsh）
           plugin: { id: PLUGIN_ID, name: PLUGIN_NAME, accent: AGENT_ACCENT },
           bus_agent_id: AGENT_ID,
           connector: connector.snapshot(),
@@ -317,7 +317,7 @@ export default {
       // 只读：本插件声明的 12 态词汇
       safeCall(() => registerRoute({
         method: 'GET',
-        path: '/mao-pet/phases',
+        path: '/dsh-live2d-mao/phases',
         handler: async (req, res) => json(res, 200, {
           ok: true,
           phases: PHASES,
@@ -328,14 +328,14 @@ export default {
       }))
 
       safeCall(() => logger.info(
-        '[Mao-pet] 连接器已就绪：' + AGENT_NAME + ' (' + AGENT_ID + ') → 桌宠总线'
-        + ' ｜ 12 态词汇已加载 ｜ 路由 /mao-pet/status /mao-pet/phases /mao-pet/capabilities',
+        '[dsh-live2d-mao] 连接器已就绪：' + AGENT_NAME + ' (' + AGENT_ID + ') → 桌宠总线'
+        + ' ｜ 12 态词汇已加载 ｜ 路由 /dsh-live2d-mao/status /dsh-live2d-mao/phases /dsh-live2d-mao/capabilities',
       ))
 
       // 只读：M7 B 档能力清单与运行时状态（如实标注可用性，便于排障）
       safeCall(() => registerRoute({
         method: 'GET',
-        path: '/mao-pet/capabilities',
+        path: '/dsh-live2d-mao/capabilities',
         handler: async (req, res) => json(res, 200, {
           ok: true,
           agent: { id: AGENT_ID, name: AGENT_NAME, accent: AGENT_ACCENT },

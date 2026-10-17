@@ -21,12 +21,12 @@ import { jsonClone, safeCall } from '../util.js'
  * 本插件在**总线上的身份**。
  *
  * ★ 2026-10-17 用户裁决（合并为单一 DSH 身份）：
- *   产品定位是「DSH 专用桌宠」，不应该在桌宠上看到 `Mao-pet` 和 `DSH` 两个 agent
+ *   产品定位是「DSH 专用桌宠」，不应该在桌宠上看到 `DSH-Live2D-Mao` 和 `DSH` 两个 agent
  *   互相抢镜头。故插件推送时**复用日志边车的 agent_id `dsh`** —— 总线上只有
  *   一个 agent，徽标只显示 `DSH · xxx`。
  *
  * ⚠ 注意区分两个"名字"，别混：
- *   - **npm 包名 / cordis 插件 id** = `mao-pet`（D5 裁决，装插件用，**不变**）；
+ *   - **npm 包名 / cordis 插件 id** = `dsh-live2d-mao`（D5 裁决，装插件用，**不变**）；
  *   - **总线 agent_id** = `dsh`（这是"桌宠看到谁"，与边车共用）。
  *   本文件只影响后者。`AGENT_NAME` 用 DSH 的显示名，`AGENT_ACCENT` 用 DSH 的靛蓝，
  *   与 `dsh_adapter.py` 的 `AGENT_ID="dsh"` / `DSH_ACCENT` 保持一致。
@@ -44,13 +44,13 @@ export const SOURCE_FLAG = 'plugin_owned'
 
 /**
  * ★ 插件**自身**的身份（与"总线身份"区分，别混用）：
- *   - 本常量 = 插件是谁（npm 包名 / cordis id / 自己的 HTTP 路由前缀都用它，D5 裁决 → `mao-pet`）；
+ *   - 本常量 = 插件是谁（npm 包名 / cordis id / 自己的 HTTP 路由前缀都用它，D5 裁决 → `dsh-live2d-mao`）；
  *   - `AGENT_ID` = 插件在**桌宠总线上**代表谁（与日志边车共用 → `dsh`）。
- * 踩过的坑：合并身份时把两处都改成 dsh，导致插件 `/mao-pet/status` 自报 id 变成 dsh，
+ * 踩过的坑：合并身份时把两处都改成 dsh，导致插件 `/dsh-live2d-mao/status` 自报 id 变成 dsh，
  * 前端 `parsed.plugin.id` 断言失败 —— 故显式拆成两个常量。
  */
-export const PLUGIN_ID = 'mao-pet'
-export const PLUGIN_NAME = 'Mao-pet'
+export const PLUGIN_ID = 'dsh-live2d-mao'
+export const PLUGIN_NAME = 'dsh-live2d-mao'
 
 /**
  * 网络层失败退避：连续失败时按指数拉长重试间隔，上限 30s。
@@ -105,7 +105,7 @@ export function createPusher(opts = {}) {
   async function dispatch(envelope, { bypassBackoff = false } = {}) {
     if (!bypassBackoff && failures > 0 && now() < nextAttemptAt) {
       stats.coalesced += 1
-      logger.debug?.('[mao-pet] 退避中，跳过本次推送（下次可试 ' + new Date(nextAttemptAt).toISOString() + '）')
+      logger.debug?.('[dsh-live2d-mao] 退避中，跳过本次推送（下次可试 ' + new Date(nextAttemptAt).toISOString() + '）')
       return { ok: false, throttled: true, reason: 'backoff' }
     }
 
@@ -116,13 +116,13 @@ export function createPusher(opts = {}) {
       failures += 1
       nextAttemptAt = now() + backoffDelay()
       stats.failed += 1
-      logger.debug?.('[mao-pet] 推送异常（已退避 ' + backoffDelay() + 'ms）：' + String(err && err.message || err))
+      logger.debug?.('[dsh-live2d-mao] 推送异常（已退避 ' + backoffDelay() + 'ms）：' + String(err && err.message || err))
       return { ok: false, error: String(err && err.message || err) }
     }
 
     if (result && result.ok) {
       if (failures > 0) {
-        logger.info?.('[mao-pet] 桌宠后端恢复连接（连续失败 ' + failures + ' 次后成功）')
+        logger.info?.('[dsh-live2d-mao] 桌宠后端恢复连接（连续失败 ' + failures + ' 次后成功）')
       }
       failures = 0
       nextAttemptAt = 0
@@ -135,7 +135,7 @@ export function createPusher(opts = {}) {
     stats.failed += 1
     // 只在**首次失败**与**恢复后再次失败**时打日志，避免刷屏
     if (failures === 1) {
-      logger.info?.('[mao-pet] 桌宠后端暂不可达（' + (result && result.status ? 'HTTP ' + result.status : '无响应')
+      logger.info?.('[dsh-live2d-mao] 桌宠后端暂不可达（' + (result && result.status ? 'HTTP ' + result.status : '无响应')
         + '）。已进入退避，连接恢复后自动继续。提示：桌宠需手动 `start_mio.ps1` 启动。')
     }
     return { ok: false, status: result && result.status, body: result && result.body }
@@ -159,7 +159,7 @@ export function createPusher(opts = {}) {
     async pushPhase(phase, state = {}, opts2 = {}) {
       if (!isKnownPhase(phase)) {
         stats.skipped += 1
-        logger.warn?.('[mao-pet] 丢弃未知 phase：' + String(phase))
+        logger.warn?.('[dsh-live2d-mao] 丢弃未知 phase：' + String(phase))
         return { ok: false, reason: 'unknown-phase' }
       }
 
