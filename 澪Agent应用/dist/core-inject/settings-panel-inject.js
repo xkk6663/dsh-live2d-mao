@@ -461,21 +461,24 @@
         bubbleHost.innerHTML = '<div style="font-size:12px;color:var(--muted,#687984);padding:14px;">泡泡模块未加载，请刷新页面后重试。</div>'
       }
     } else if (id === 'strip') {
-      // ★ 横条个性化（2026-10-17 用户需求）：默认宽度 / 行数 / 皮肤。
-      //   值走 PATCH /api/companion/settings → settings_changed → 桌宠横条热应用。
+      // ★ 横条个性化（2026-10-17）：默认宽度 / 行数 / 皮肤。
+      //   值走 PATCH /api/companion/settings → settings_changed → 桌宠横条热应用；
+      //   反向（桌宠手动拉伸 → persistCompanionSetting 回写）也已打通 ——
+      //   所以这里的初始值 = 横条**实时状态**（拉伸过就显示拉伸后的宽度）。
       var sw0 = Number(s.live2d_strip_width) || 0
       var sr0 = Number(s.live2d_strip_rows) || 1
       var ss0 = s.live2d_strip_style || 'default'
 
       body.appendChild(section('横条尺寸'))
-      // 默认宽度：0 = 内容自适应；>0 = 固定像素宽（打开横条即用，不必每次手动拉）
+      // 默认宽度：0 = CSS 默认（420px，文字换行）；>0 = 固定像素宽。
+      //   在桌宠上手动拉伸横条也会更新这个值（双向同步）。
       var widthSlider = makeSlider(sw0, 0, 1600, 20, 'px')
       widthSlider.__mioInput.min = '0'
-      body.appendChild(row('默认宽度', '打开横条时的初始宽度；0 = 按内容自适应。设了之后打开横条就不用再手动拉伸。', widthSlider, 'live2d_strip_width'))
+      body.appendChild(row('默认宽度', '横条的固定宽度；0 = 默认 420px。在桌宠上手动拉伸横条会同步更新这里，保存后立即生效。', widthSlider, 'live2d_strip_width'))
 
-      // 行数：横条一次性显示几行文字（1 行 = 滚动字幕，多行 = 换行铺满）
+      // 行数：最大显示行数上限；文字始终正常换行、超出 N 行裁掉
       var rowsSlider = makeSlider(sr0, 1, 5, 1, ' 行')
-      body.appendChild(row('显示行数', '横条一次显示几行文字；1 行是滚动字幕，多行会换行铺满、超出自动滚出。', rowsSlider, 'live2d_strip_rows'))
+      body.appendChild(row('显示行数', '最多显示几行文字；文字始终自动换行，超过设定行数的部分不显示。', rowsSlider, 'live2d_strip_rows'))
 
       body.appendChild(section('横条皮肤（为 UI 可更换预留）'))
       var styleSel = makeSelect(ss0, [

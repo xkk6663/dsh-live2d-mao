@@ -4039,6 +4039,17 @@
             grip.removeEventListener('pointermove', onMove)
             grip.removeEventListener('pointerup', onUp)
             grip.removeEventListener('pointercancel', onUp)
+            // ★ 双向同步（2026-10-17 用户要求）：手动拉伸的宽度**回写后端 settings**
+            //   （live2d_strip_width = 默认宽度）。这样设置页「横条」tab 读到的
+            //   永远是横条的实时宽度；反向（设置页改 → settings_changed →
+            //   setDefaultWidth → 横条立即变宽）也已打通。回写走
+            //   persistCompanionSetting（外层函数，函数声明提升可用）。
+            //   注意：settings_changed 回来时值与本地已一致（幂等），不会回环。
+            safe(() => {
+              const w = Math.round(el.getBoundingClientRect().width)
+              const px = clampWidth(w)
+              void persistCompanionSetting('live2d_strip_width', px)
+            })
           }
           grip.addEventListener('pointermove', onMove)
           grip.addEventListener('pointerup', onUp)
