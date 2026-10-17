@@ -289,6 +289,70 @@ async def plugin_agent_snapshot(agent_id: str = "") -> dict[str, Any]:
     return {"ok": True, "agent": ingest.snapshot_for(agent_id or ingest.DEFAULT_AGENT_ID)}
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# 审批 / 提问交互回路（M7 2.2 / 2.3 回传通道）
+# ══════════════════════════════════════════════════════════════════════════
+# 链路见 ingest.py 底部的长注释。三端点：
+#   ① POST /interaction          插件上报待审批/提问请求（挂起）
+#   ② POST /interaction/{id}/answer  桌宠回传结果（outcome / answers）
+#   ③ GET  /interaction/{id}     插件轮询结果（resolve decide()）
+
+
+class InteractionOpenPayload(BaseModel):
+    """插件上报待处理交互（审批 / 提问）。"""
+
+    kind: str = Field(..., description="approval / question")
+    request_id: str = Field("", description="插件侧生成的可选 id；留空由后端生成")
+    payload: dict[str, Any] = Field(default_factory=dict, description="描述字段（短文本）")
+
+
+@router.post("/interaction")
+async def plugin_interaction_open(payload: InteractionOpenPayload) -> dict[str, Any]:
+    """插件把待审批/提问请求挂到后端（阻塞 decide() 期间）。"""
+    try:
+        rid = ingest.open_interaction(kind=payload.kind, payload=payload.payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "request_id": rid}
+
+
+class InteractionAnswerPayload(BaseModel):
+    """桌宠回传结果。outcome 用于审批（allowed-once/rejected/cancelled），
+    answers 用于提问（[{id, selected, custom?}]）。"""
+
+    outcome: str = Field("", description="审批 outcome")
+    answers: list[Any] = Field(default_factory=list, description="提问答案列表")
+
+
+@router.post("/interaction/{request_id}/answer")
+async def plugin_interaction_answer(request_id: str, payload: InteractionAnswerPayload) -> dict[str, Any]:
+    """桌宠把用户点击结果回传给后端（唤醒插件的轮询）。"""
+    result: Any
+    if payload.outcome:
+        result = payload.outcome
+    elif payload.answers:
+        result = payload.answers
+    else:
+        raise HTTPException(status_code=400, detail="需要 outcome 或 answers")
+    ok = ingest.answer_interaction(request_id, result)
+    if not ok:
+        raise HTTPException(status_code=404, detail="请求不存在或已答复")
+    return {"ok": True, "request_id": request_id}
+
+
+# ⚠ 必须在 /interaction/{request_id} 之前注册，否则 "pending" 会被 {request_id} 捕获
+@router.get("/interaction/pending")
+async def plugin_interaction_pending() -> dict[str, Any]:
+    """只读：当前所有未答复的交互（桌宠 WS 广播源 / 自检）。"""
+    return {"ok": True, "pending": ingest.pending_interactions()}
+
+
+@router.get("/interaction/{request_id}")
+async def plugin_interaction_poll(request_id: str) -> dict[str, Any]:
+    """插件轮询结果（未答复时 result=None）。"""
+    return ingest.poll_interaction(request_id)
+
+
 def _bus_status(info: dict[str, Any]) -> str:
     """从 inspect 快照推导对外状态词（online/offline/connecting/error/disabled）。"""
     if not info.get("enabled"):

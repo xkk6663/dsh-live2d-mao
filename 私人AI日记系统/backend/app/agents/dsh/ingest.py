@@ -30,8 +30,12 @@
 """
 from __future__ import annotations
 
+import threading
+import time
+import uuid
 from typing import Any
 
+from ...companion import pet_event_service
 from ...kernel import agent_bus_service
 
 # 缺省身份（与 packages/mao-pet 的声明一致；D5：全小写 mao-pet，显示名 Mao-pet）
@@ -274,3 +278,121 @@ def snapshot_for(agent_id: str) -> dict[str, Any]:
     data = agent.to_dict()
     data["registered"] = True
     return data
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 审批 / 提问交互回路（M7 2.2 / 2.3 的"最后一公里"回传）
+# ══════════════════════════════════════════════════════════════════════════
+# 背景：DSH 的 `approval/request` 是 waterfall，插件 `decide()` 的**返回值就是最终
+# 结果**，必须"阻塞"等用户点击；但用户点击发生在**桌宠窗口**（另一个进程），点完要
+# 跨进程传回插件再 resolve。
+#
+# 回传通道（后端轮询方案，简单可靠、延迟 0.5~1s 对审批场景可接受）::
+#
+#   插件 decide() 挂起 ──POST /interaction──▶ 后端 pending 表 + 广播桌宠
+#   桌宠弹按钮 → 用户点 ──POST /interaction/{id}/answer──▶ 后端更新 pending
+#   插件轮询 ──GET /interaction/{id}──▶ 拿到 outcome/answers → resolve decide()
+#
+# pending 表是**进程内**的（后端单进程 uvicorn），带 TTL 回收防泄漏。
+# 安全：全站 LocalControlMiddleware 兜底（回环 + 同源 + 拒 cross-site），这里不重复。
+
+# {request_id: {"kind", "created_at", "expires_at", "payload", "result"}}
+_interactions: dict[str, dict[str, Any]] = {}
+_interactions_lock = threading.Lock()
+_INTERACTION_TTL_SEC = 300  # 5 分钟超时回收（审批通常几十秒内点完）
+
+
+def _prune_interactions(now: float) -> None:
+    with _interactions_lock:
+        for rid in [k for k, v in _interactions.items() if v["expires_at"] <= now]:
+            del _interactions[rid]
+
+
+def open_interaction(
+    *,
+    kind: str,
+    payload: dict[str, Any],
+    ttl_sec: float = _INTERACTION_TTL_SEC,
+) -> str:
+    """插件上报一个待处理的审批/提问请求，返回 request_id。
+
+    :raises ValueError: kind 非法。
+    """
+    k = _as_text(kind, 20).lower()
+    if k not in {"approval", "question"}:
+        raise ValueError(f"未知交互类型: {k!r}（可用：approval, question）")
+    rid = uuid.uuid4().hex[:16]
+    now = time.time()
+    _prune_interactions(now)
+    with _interactions_lock:
+        _interactions[rid] = {
+            "kind": k,
+            "request_id": rid,
+            "created_at": now,
+            "expires_at": now + max(1.0, float(ttl_sec)),
+            "payload": payload if isinstance(payload, dict) else {},
+            "result": None,  # None = 未答复
+        }
+    # ★ 广播给桌宠：让它弹审批/提问按钮。桌宠 WS 收到 agent_interaction 后
+    #   在横条里渲染按钮，用户点击再回传 /interaction/{id}/answer。
+    try:
+        pet_event_service.publish(
+            "agent_interaction",
+            {
+                "request_id": rid,
+                "kind": k,
+                "payload": payload if isinstance(payload, dict) else {},
+                "agent_id": DEFAULT_AGENT_ID,
+                "agent_name": DEFAULT_AGENT_NAME,
+                "accent": DEFAULT_ACCENT,
+                "ts": time.time(),
+            },
+        )
+    except Exception:  # noqa: BLE001
+        # 广播失败不影响 pending 已挂起的事实（插件轮询仍能拿到答案）
+        pass
+    return rid
+
+
+def answer_interaction(request_id: str, result: Any) -> bool:
+    """桌宠回传结果（outcome 字符串 或 answers 列表）。返回是否命中。"""
+    rid = _as_text(request_id, 40)
+    with _interactions_lock:
+        item = _interactions.get(rid)
+        if item is None or item["result"] is not None:
+            return False  # 不存在或已答复（幂等：重复答复忽略）
+        item["result"] = result
+        item["answered_at"] = time.time()
+        return True
+
+
+def poll_interaction(request_id: str) -> dict[str, Any]:
+    """插件轮询结果。返回 `{ok, kind, result, answered}`；未答复时 result=None。"""
+    rid = _as_text(request_id, 40)
+    _prune_interactions(time.time())
+    with _interactions_lock:
+        item = _interactions.get(rid)
+    if item is None:
+        return {"ok": False, "request_id": rid, "reason": "not-found-or-expired"}
+    return {
+        "ok": True,
+        "request_id": rid,
+        "kind": item["kind"],
+        "answered": item["result"] is not None,
+        "result": item["result"],
+    }
+
+
+def pending_interactions() -> list[dict[str, Any]]:
+    """只读：当前未答复的交互列表（桌宠侧 WS 广播/自检用）。"""
+    _prune_interactions(time.time())
+    with _interactions_lock:
+        return [
+            {
+                "request_id": v["request_id"],
+                "kind": v["kind"],
+                "payload": v["payload"],
+            }
+            for v in _interactions.values()
+            if v["result"] is None
+        ]

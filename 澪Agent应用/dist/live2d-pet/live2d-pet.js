@@ -2451,6 +2451,11 @@
         // 与 agent_stream / agent_bubble 互不影响：横条被关掉时这里返回 false，
         // 气泡照常工作；反之亦然（用户裁决：三条通路独立管理）。
         applyAgentStrip(payload)
+      } else if (message.type === 'agent_interaction') {
+        // ★ M7 2.2/2.3 审批/提问回传：DSH 需要用户点"允许/拒绝"或选选项。
+        //   后端在 open_interaction 时广播这条，桌宠在横条里渲染按钮，
+        //   用户点击后 showInteraction 内部 POST 回传 /interaction/{id}/answer。
+        applyAgentInteraction(payload)
       // DSH 专用化（用户裁决 2026-10-17）：小智专用的 4 个消息分支已整体删除 ——
       //   'speak' / 'speech_interrupt' / 'visual_event' / 'speech-bubble'。
       //   它们全部由小智插件（xiaozhi-plugin.js / pet-xz-audio.js）驱动，
@@ -2881,6 +2886,20 @@
       method: 'PATCH',
       body: JSON.stringify({ [key]: value }),
     })
+  }
+
+  // ★ M7 2.2/2.3 审批/提问交互（回传通道的桌宠侧落点）。
+  //   收到 agent_interaction → 调 __mioPetStrip.showInteraction 渲染按钮；
+  //   用户点击后 showInteraction 内部 POST 回传后端。
+  function applyAgentInteraction(payload) {
+    if (!payload) return false
+    const api = window.__mioPetStrip
+    if (!api || typeof api.showInteraction !== 'function') return false
+    return api.showInteraction({
+      request_id: String(payload.request_id || ''),
+      kind: String(payload.kind || ''),
+      payload: payload.payload && typeof payload.payload === 'object' ? payload.payload : {},
+    }) === true
   }
 
   // A组 点击互动：点桌宠 → 随机语句 / 随机图片，都显示在**说话气泡框**里
@@ -3777,6 +3796,7 @@
     const el = document.getElementById('pet-strip')
     const textEl = document.getElementById('pet-strip-text')
     const closeBtn = document.getElementById('pet-strip-close')
+    const actionsEl = document.getElementById('pet-strip-actions')
     const grips = el ? Array.from(el.querySelectorAll('[data-strip-grip]')) : []
 
     // ── 宽度持久化：用户拉伸过就记下来（跨会话保留），没拉伸过则按内容自适应 ──
@@ -4145,6 +4165,90 @@
       // 复用 dismiss()（与点 ✕ 同一处实现），保证菜单与 ✕ 语义**完全一致**。
       markDismissed() {
         safe(dismiss)
+      },
+      // ★ 审批/提问交互（M7 2.2/2.3 回传）：在横条里渲染按钮/选项，
+      //   用户点击后 POST 回传后端（/api/plugin/dsh/interaction/{id}/answer）。
+      //   这是"最后一公里"回传通道的桌宠侧落点。
+      showInteraction(desc) {
+        return safe(() => {
+          if (!actionsEl) return false
+          const d = desc && typeof desc === 'object' ? desc : {}
+          const requestId = String(d.request_id || '')
+          const kind = String(d.kind || '').toLowerCase()
+          if (!requestId || (kind !== 'approval' && kind !== 'question')) return false
+          const payload = d.payload && typeof d.payload === 'object' ? d.payload : {}
+
+          // 清空旧按钮
+          actionsEl.innerHTML = ''
+          actionsEl.hidden = false
+
+          const answerUrl = `/api/plugin/dsh/interaction/${encodeURIComponent(requestId)}/answer`
+          const postAnswer = (body) => {
+            safe(() => {
+              fetch(answerUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+              }).catch(() => {})
+            })
+            actionsEl.innerHTML = ''
+            actionsEl.hidden = true
+          }
+
+          if (kind === 'approval') {
+            const tool = String(payload.tool || '')
+            const reason = String(payload.reason || '')
+            // 显示文本（短字段，已由后端/插件截断）
+            if (tool || reason) {
+              buffer = (tool ? `待审批：${tool}` : '') + (reason ? `（${reason}）` : '')
+              render()
+            }
+            const allow = document.createElement('button')
+            allow.type = 'button'
+            allow.className = 'pet-strip-action allow'
+            allow.textContent = '允许'
+            allow.addEventListener('click', () => postAnswer({ outcome: 'allowed-once' }))
+            const deny = document.createElement('button')
+            deny.type = 'button'
+            deny.className = 'pet-strip-action deny'
+            deny.textContent = '拒绝'
+            deny.addEventListener('click', () => postAnswer({ outcome: 'rejected' }))
+            actionsEl.appendChild(allow)
+            actionsEl.appendChild(deny)
+          } else {
+            // question：渲染选项（单选/多选简化成"点选项即提交"）
+            const items = Array.isArray(payload.items) ? payload.items : []
+            for (const it of items) {
+              const q = it && typeof it === 'object' ? it : {}
+              const qid = String(q.id || '')
+              const opts = Array.isArray(q.options) ? q.options : []
+              // 每个选项一个按钮：点击 = 选中该项（单问题简化；多问题留待后续）
+              for (const opt of opts) {
+                const ov = opt && typeof opt === 'object' ? (opt.value || opt.label || '') : String(opt || '')
+                const btn = document.createElement('button')
+                btn.type = 'button'
+                btn.className = 'pet-strip-action option'
+                btn.textContent = String(ov).slice(0, 40)
+                btn.addEventListener('click', () => {
+                  postAnswer({ answers: [{ id: qid, selected: [String(ov)] }] })
+                })
+                actionsEl.appendChild(btn)
+              }
+            }
+            if (!items.length) {
+              // 没有可选项：显示一条"无法作答"的占位（用户点 ✕ 关闭）
+              const span = document.createElement('span')
+              span.className = 'pet-strip-action-empty'
+              span.textContent = '（等待你回答，暂无选项）'
+              actionsEl.appendChild(span)
+            }
+          }
+          // 让横条可见 + 可交互
+          el.hidden = false
+          visible = true
+          reportStripBounds()
+          return true
+        }, false)
       },
     }
   })()

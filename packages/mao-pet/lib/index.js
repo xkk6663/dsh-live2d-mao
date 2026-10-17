@@ -21,6 +21,7 @@ import { isTextOnlyMessage, extractText } from './facts.js'
 import { createPusher, AGENT_ID, AGENT_NAME, AGENT_ACCENT } from './push/pusher.js'
 import { createHttpTransport } from './push/transports/http.js'
 import { createStripRemote } from './push/strip-remote.js'
+import { createInteractionRemote } from './push/interaction-remote.js'
 import { createRejectionGate } from './security/fence.js'
 import { createStreamAssembler, parseStreamFrame } from './stream.js'
 import { createApprovalDecider, describeApproval, GRANT, REJECT, CANCELLED } from './approval.js'
@@ -178,13 +179,17 @@ export default {
       // ⚠ 联调前置：本会话策略当前是 `never`，`dsh-user-approval:175` 会在派发 waterfall
       // **之前**短路返回 "rejected"，插件根本收不到。**要联调必须先把策略切回 `ask`**。
       // 代码本身已按契约写好（返回值恒落在 OUTCOMES 内）。
+      const interactionRemote = createInteractionRemote({ logger })
       const approval = createApprovalDecider({
-        // 桌宠侧的作答入口：默认"无人应答"→ cancelled（fail-closed，绝不放行）。
-        // 主体 UI 就绪后，替换为把描述推给横条/气泡并等待点击的实现。
+        // ★ 闭合回路（2026-10-17）：把审批请求上报后端（pending），轮询等桌宠点按钮，
+        //   拿到 outcome 后 resolve decide()。后端不可达/超时 → null → cancelled（fail-closed）。
         askUser: async (req) => {
           const desc = describeApproval(req)
-          logger.info?.('[Mao-pet] 收到审批请求：' + JSON.stringify(desc) + '（等待桌宠作答）')
-          return null // → cancelled
+          logger.info?.('[Mao-pet] 收到审批请求：' + JSON.stringify(desc) + '（已上报，等待桌宠作答）')
+          const outcome = await interactionRemote.openApproval(desc)
+          // outcome 是协议枚举（'allowed-once'/'rejected'/'cancelled'）；null → 交给
+          // approval.js 的 normalize 映射成 cancelled。
+          return outcome
         },
         logger,
       })

@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Mio Live2D 桌宠</title>
-    <link rel="stylesheet" href="./live2d-pet.css?v=20261017-wrapfix" />
+    <link rel="stylesheet" href="./live2d-pet.css?v=20261017-interaction" />
   </head>
   <body>
     <main id="pet-root" aria-label="Mio Live2D 桌宠">
@@ -26,6 +26,9 @@
         <!-- 左右拉伸手柄：用户要求"流式气泡的左右大小应该可手动拉伸"（2026-10-17） -->
         <span class="pet-strip-grip grip-left" data-strip-grip="left" aria-hidden="true"></span>
         <span id="pet-strip-text"></span>
+        <!-- ★ 交互按钮区（M7 2.2/2.3 审批/提问回传）：DSH 需要用户点"允许/拒绝"或选选项时，
+             插件经 agent_interaction 广播到这里，用户点按钮后 POST 回传后端。 -->
+        <span id="pet-strip-actions" class="pet-strip-actions" hidden></span>
         <button id="pet-strip-close" class="pet-strip-close" type="button" title="关闭横条" aria-label="关闭横条">×</button>
         <span class="pet-strip-grip grip-right" data-strip-grip="right" aria-hidden="true"></span>
       </section>
@@ -67,6 +70,6 @@
            xiaozhi/xiaozhi-chat.{html,js}（小智快速对话浮窗）。
          它们依赖的 /api/xiaozhi/* 后端路由已随插件阉割，保留只会持续 WS 重连失败。
          将来若要做 DSH 语音，应走**新的 DSH 插件通路**，不要复活这套小智实现。 -->
-    <script src="./live2d-pet.js?v=20261017-stripsync"></script>
+    <script src="./live2d-pet.js?v=20261017-interaction"></script>
   </body>
 </html>
