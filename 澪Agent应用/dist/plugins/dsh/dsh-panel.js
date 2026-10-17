@@ -72,6 +72,41 @@
     return '#8a97a0'
   }
 
+  // ────────────────────────────────────────────────────────────────────────
+  // ★ 12 态颜色自定义（2026-10-17 用户需求）：每个 phase 一个语义默认色，
+  //   用户可在面板里点色块改成任意色，存 localStorage（本机展示偏好，不进后端）。
+  // ────────────────────────────────────────────────────────────────────────
+  var PHASE_COLOR_KEY = 'dsh_phase_colors'
+  var PHASE_DEFAULT_COLORS = {
+    planning: '#7c5cd6',
+    thinking: '#5b7fd6',
+    executing_tool: '#e08a3c',
+    streaming: '#2e9e5b',
+    waiting_input: '#3c9ad6',
+    voice: '#d65b9e',
+    awaiting_approval: '#d09b2c',
+    idle: '#8a97a0',
+    complete: '#5aa88c',
+    error: '#c0392b',
+    paused: '#9aa5ab',
+    heartbeat: '#b9c2c7',
+  }
+
+  function loadPhaseColors() {
+    try {
+      var raw = JSON.parse(window.localStorage.getItem(PHASE_COLOR_KEY) || '{}')
+      return (raw && typeof raw === 'object') ? raw : {}
+    } catch (e) { return {} }
+  }
+
+  function savePhaseColors(colors) {
+    try { window.localStorage.setItem(PHASE_COLOR_KEY, JSON.stringify(colors || {})) } catch (e) {}
+  }
+
+  function colorOf(phase, colors) {
+    return String((colors && colors[phase]) || PHASE_DEFAULT_COLORS[phase] || ACCENT)
+  }
+
   function buildPanel() {
     if (panel) return panel
     panel = document.createElement('div')
@@ -117,10 +152,11 @@
     var html = ''
 
     // 1) 实时状态卡
+    var curPhaseColor = colorOf(rt.phase, loadPhaseColors())
     html += card('实时状态',
       '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">' +
         '<span style="width:10px;height:10px;border-radius:50%;background:' + stateColor(st) + ';flex:none;"></span>' +
-        '<strong style="font-size:15px;">' + (rt.phase_label || rt.phase || '未知') + '</strong>' +
+        '<strong style="font-size:15px;color:' + curPhaseColor + ';">' + (rt.phase_label || rt.phase || '未知') + '</strong>' +
         '<span style="font-size:11px;color:var(--muted,#687984);">' + st + ' · ' + (rt.phase || '') + '</span>' +
       '</div>' +
       kv('会话', rt.session_id || '') +
@@ -144,27 +180,37 @@
         }).join('') +
       '</div>')
 
-    // 3) 12 态图例
+    // 3) 12 态图例（颜色可自定义：localStorage dsh_phase_colors，自定义优先于语义默认色）
     var list = (phases && phases.phases) || []
+    var colors = loadPhaseColors()
     var rows = list.map(function (p) {
+      var c = colorOf(p.phase, colors)
       var isCur = p.phase === rt.phase
-      var badge = p.work ? '<span style="font-size:10px;padding:1px 7px;border-radius:9px;background:' + ACCENT + '1a;color:' + ACCENT + ';">徽标</span>' : ''
+      var badge = p.work ? '<span style="font-size:10px;padding:1px 7px;border-radius:9px;background:' + c + '1a;color:' + c + ';">徽标</span>' : ''
       var reach = p.fact_reachable ? '' : '<span style="font-size:10px;color:var(--muted,#687984);">（专用路径）</span>'
       return '<div style="display:flex;align-items:center;gap:9px;padding:6px 8px;border-radius:7px;' +
-        (isCur ? 'background:' + ACCENT + '12;' : '') + '">' +
-        '<span style="flex:none;width:118px;font-size:12px;font-weight:600;color:' + (isCur ? ACCENT : 'var(--ink,#20303a)') + ';">' + p.label + '</span>' +
+        (isCur ? 'background:' + c + '12;' : '') + '">' +
+        // 颜色块（点击弹取色器）
+        '<label title="点击自定义颜色" style="flex:none;width:16px;height:16px;border-radius:5px;border:1px solid var(--line,#d9e2e6);background:' + c + ';cursor:pointer;position:relative;">' +
+          '<input type="color" data-phase-color="' + p.phase + '" value="' + c + '" style="position:absolute;inset:0;opacity:0;cursor:pointer;" />' +
+        '</label>' +
+        '<span style="flex:none;width:104px;font-size:12px;font-weight:600;color:' + (isCur ? c : 'var(--ink,#20303a)') + ';">' + p.label + '</span>' +
         '<span style="flex:none;width:112px;font-size:11px;color:var(--muted,#687984);font-family:Consolas,monospace;">' + p.phase + '</span>' +
         '<span style="flex:none;width:74px;font-size:11px;color:var(--muted,#687984);">' + (p.hint || '') + '</span>' +
         badge + reach +
-        (isCur ? '<span style="flex:none;font-size:10px;color:' + ACCENT + ';margin-left:auto;">当前</span>' : '') +
+        (isCur ? '<span style="flex:none;font-size:10px;color:' + c + ';margin-left:auto;">当前</span>' : '') +
       '</div>'
     }).join('')
     var counts = (phases && phases.counts) || {}
     html += card('可下发的工作状态（' + (counts.registered || 12) + ' 个）',
       '<div style="display:flex;flex-direction:column;gap:2px;">' + rows + '</div>' +
-      '<div style="margin-top:10px;font-size:11px;color:var(--muted,#687984);line-height:1.7;">' +
-        '共 ' + (counts.registered || 0) + ' 个状态注册在总线；其中 ' + (counts.work || 0) + ' 个为工作细分态（桌宠头顶显示徽标），' +
-        (counts.fact_reachable || 0) + ' 个可由实时事件直接产出。</div>')
+      '<div style="margin-top:10px;display:flex;align-items:center;gap:10px;">' +
+        '<span style="flex:1;font-size:11px;color:var(--muted,#687984);line-height:1.7;">' +
+          '共 ' + (counts.registered || 0) + ' 个状态注册在总线；其中 ' + (counts.work || 0) + ' 个为工作细分态（桌宠头顶显示徽标），' +
+          (counts.fact_reachable || 0) + ' 个可由实时事件直接产出。<br />' +
+          '点行首色块可自定义该状态的颜色（保存到本机，立即生效并重渲染）。</span>' +
+        '<button type="button" id="dshPhaseColorReset" style="flex:none;border:1px solid var(--line,#d9e2e6);background:var(--surface,#fff);border-radius:7px;padding:5px 12px;font-size:11px;cursor:pointer;color:var(--muted,#687984);">恢复默认颜色</button>' +
+      '</div>')
 
     // 4) 关于 / 自检（A5）
     //    版本号唯一来源是 CHANGELOG 顶部；路径全部由后端脱敏后下发（前端不再自行拼接，
@@ -202,9 +248,36 @@
 
     body.innerHTML = html
     bindUpdateCheck()
+    bindPhaseColors()
 
     var sub = $q('#dshSub', panel)
     if (sub) sub.textContent = 'DSH · ' + (rt.phase_label || rt.phase || '—') + ' · ' + st + (ab.version ? ' · ' + ab.version : '')
+  }
+
+  // ★ 绑定 12 态颜色自定义（取色器 + 恢复默认）
+  function bindPhaseColors() {
+    if (!panel) return
+    var body = $q('#dshBody', panel)
+    if (!body) return
+    body.querySelectorAll('input[data-phase-color]').forEach(function (inp) {
+      inp.addEventListener('change', function () {
+        var phase = inp.getAttribute('data-phase-color')
+        var val = String(inp.value || '')
+        if (!phase || !/^#[0-9a-fA-F]{6}$/.test(val)) return
+        var colors = loadPhaseColors()
+        colors[phase] = val
+        savePhaseColors(colors)
+        refresh(false)   // 用新色重渲染当前面板
+      })
+    })
+    var reset = $q('#dshPhaseColorReset', panel)
+    if (reset) {
+      reset.addEventListener('click', function (e) {
+        e.stopPropagation()
+        savePhaseColors({})
+        refresh(false)
+      })
+    }
   }
 
   // 检查更新：**只在用户点击时发请求**（面板本身不轮询、不预取）
