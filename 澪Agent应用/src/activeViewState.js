@@ -1,7 +1,7 @@
 const VALID_VIEW_IDS = new Set([
   // DSH 专用化：'onboarding' 已移除（首次进入不再有六步质检流程）
+  // DSH 专用化：'chat' 已移除（那是小智对话页 ChatPage，随小智插件一并阉割）
   'home',
-  'chat',
   'diaries',
   'memory',
   'tasks',

@@ -47,7 +47,8 @@ export function useConversations(deps) {
   function openAgentHandoff() {
     const target = deps.latestTaskHandoff.value?.conversation_id
     if (!target) return
-    localStorage.setItem('mio_agent_active_view', 'chat')
+    // DSH 专用化：原为 'chat'（小智对话页），已移除 → 存 'companion'（桌宠管理页）
+    localStorage.setItem('mio_agent_active_view', 'companion')
     const next = new URL(window.location.href)
     next.searchParams.set('workspace', 'agent')
     next.searchParams.set('conversation_id', target)
@@ -196,12 +197,14 @@ export function useConversations(deps) {
     }
   }
   async function selectConversation(conversationId) {
+    // DSH 专用化：原先把 activeView 设为 'chat'（小智对话页）。该页已移除，
+    // 且 'chat' 不再是合法视图（activeViewState 会抛错），故改指 'companion'（桌宠管理页）。
     if (!conversationId || conversationId === deps.selectedConversationId.value) {
-      deps.activeView.value = 'chat'
+      deps.activeView.value = 'companion'
       await deps.settleChatScrollToBottom()
       return
     }
-    deps.activeView.value = 'chat'
+    deps.activeView.value = 'companion'
     deps.loading.value = true
     deps.errorMessage.value = ''
     deps.selectedConversationId.value = conversationId
@@ -226,7 +229,8 @@ export function useConversations(deps) {
     await deps.settleChatScrollToBottom()
   }
   async function createNewConversation() {
-    deps.activeView.value = 'chat'
+    // DSH 专用化：'chat' 视图已移除 → 'companion'
+    deps.activeView.value = 'companion'
     deps.errorMessage.value = ''
     try {
       const conversation = await chatApi.createConversation(

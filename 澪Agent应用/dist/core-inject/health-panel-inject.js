@@ -42,7 +42,9 @@
       fetchJson('/api/companion/agents', { agents: [] }).then(function (j) {
         data.agents = (j && j.agents) || []
       }),
-      fetchJson('/api/xiaozhi/status', {}).then(function (j) { data.xz = j || {} }),
+      // DSH 专用化：原来这里还会 fetch /api/xiaozhi/status，用于体检页的「小智连接」行。
+      // 小智插件已整体阉割（后端路由与前端入口都已删除），故不再请求该接口。
+      // data.xz 保持空对象，下游有 typeof 兜底，不会因缺字段报错。
       fetchJson('/api/companion/version', { data: {} }).then(function (j) {
         data.version = (j && j.data) || {}
       }),
@@ -116,19 +118,8 @@
   }
 
   function render(panel) {
-    var connAgentId = connectionAgentId()
-    var xzAgent = null
-    for (var i = 0; i < data.agents.length; i++) {
-      if (data.agents[i] && data.agents[i].agent_id === 'xiaozhi') { xzAgent = data.agents[i]; break }
-    }
-    var xzConnected = !!(data.xz && data.xz.connected)
-    var xzEnabled = !!(xzAgent && xzAgent.enabled !== false)
-    var xzOnline = !!(xzAgent && xzAgent.status === 'online')
-    var xzLine = xzConnected && xzEnabled && xzOnline
-      ? '<b style="color:#37b45c;">已连接 · 在线</b>'
-      : (xzEnabled
-        ? (xzOnline ? '<b style="color:#e6a23c;">已启用 · 在线但 WS 未连</b>' : '<b style="color:#c0392b;">已启用 · 离线</b>')
-        : '<b style="color:#b6c2c8;">已停用</b>')
+    // DSH 专用化：原 xzAgent / xzConnected / xzEnabled / xzOnline / xzLine / connAgentId
+    // 全部用于「小智连接」那一行，已随小智插件一并移除。
     var lang = langLabel(data.settings.pet_speech_language)
 
     var rows = []
@@ -152,9 +143,9 @@
       '<div style="font-size:12px;font-weight:600;color:var(--muted, #687984);margin:10px 0 4px;display:flex;align-items:center;gap:6px;">' +
         '<span style="width:4px;height:12px;border-radius:2px;background:var(--accent, #4c8798);"></span>桌宠本体自检</div>'
     html += '<div class="health-rows" style="display:flex;flex-direction:column;gap:7px;font-size:12px;color:var(--ink, #20303a);">' +
-      (connAgentId ? rowHtml('小智连接', xzLine) : '') +
+      // DSH 专用化：原「小智连接」与「会话 ID」两行随小智插件移除
+      //（它们的数据源就是 /api/xiaozhi/status 与小智 agent 记录）
       rowHtml('语音语言（当前框架）', '<b style="font-weight:600;">' + lang + '</b>') +
-      rowHtml('会话 ID', '<b>' + esc(data.xz.session_id || '-') + '</b>') +
       rowHtml('后端服务', '<b>' + esc(data.version.name || '-') + '</b>') +
       rowHtml('后端 Python', '<b>' + esc(data.version.python || '-') + '</b>') +
       rowHtml('音频解码', '<b>' + esc(data.version.av || '-') + '</b>') +

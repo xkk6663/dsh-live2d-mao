@@ -1,10 +1,14 @@
 /* plugin-nav.js — 左侧导航插件化：固定导航前置 + agent 功能入口按 enabled 动态显隐
  * 规则：
- *   - 固定导航固定顺序：Agent（置顶）→ 桌宠 → 设置，始终显示
- *   - 插件导航统一追加在固定导航之后（按出现顺序往后排），随后端 agent enabled 显隐：
- *     小智启用 → 显示「小智工具」「对话」；停用 → 隐藏（并收起已打开的小智工具面板）
+ *   - 固定导航固定顺序：桌宠 → 设置，始终显示
+ *   - 插件导航统一追加在固定导航之后（按出现顺序往后排），随后端 agent enabled 显隐，
+ *     显隐规则**完全由各插件 manifest 的 nav.keywords 驱动**，不硬编码任何 agentId
  * 状态源：GET /api/companion/agents（与桌宠插件总线同口径，以后端 enabled 为准）
  * 暴露：window.__mioPluginNav.refresh()（Agent 页切换 enabled 后立即调用）
+ *
+ * DSH 专用化（2026-10-17）：原来这里有两段小智专用逻辑
+ * （停用小智时收起 xz-mcp-panel、按 xiaozhi enabled 显隐桌宠页「观察」子tab），
+ * 已随小智插件整体阉割删除。通用机制原样保留。
  */
 (function () {
   if (window.__mioPluginNav) return
@@ -28,17 +32,9 @@
     return rules
   }
 
-  // 声明 observeTab（桌宠页「观察」子tab）的插件：任意一个 enabled 时显示观察tab
-  function observeTabEnabled() {
-    var reg = window.__mioPluginRegistry
-    if (reg && reg.observeTabEnabled) return reg.observeTabEnabled()
-    var ms = window.__mioPluginManifests || {}
-    for (var id in ms) {
-      var m = ms[id]
-      if (m && m.observeTab === true && agentEnabled[id] === true) return true
-    }
-    return false
-  }
+  // DSH 专用化：observeTabEnabled() 已移除。
+  // 它唯一的消费者是 applyObserveTab()（小智「观察」子 tab 显隐），两者都随小智插件删掉了。
+  // 若将来有插件需要 observeTab 能力，再按 manifest 重新加回来（机制本身是通用的）。
 
   function $q(sel, root) { return (root || document).querySelector(sel) }
 
@@ -96,39 +92,13 @@
     for (var m = 0; m < ordered.length; m++) nav.appendChild(ordered[m])
   }
 
-  // 停用小智时收起已打开的小智工具面板（对话页为原版路由，只隐藏入口）
-  function closePanelsFor(agentId) {
-    if (agentId !== 'xiaozhi') return
-    var p = document.getElementById('xz-mcp-panel')
-    if (p && p.style.display === 'flex') p.style.display = 'none'
-    var d = $q('.xz-mcp-nav')
-    if (d) d.classList.remove('active')
-  }
-
-  // 桌宠页(CompanionPage)内的「观察」子 tab 是小智专有功能：按 xiaozhi enabled 显隐
-  // 停用时若正在观察面板 → 模拟点击「桌宠」切回（Vue state 同步）
-  function applyObserveTab() {
-    var bar = $q('.companion-tab-bar')
-    if (!bar) return
-    var btns = bar.querySelectorAll('button')
-    var obsBtn = null
-    var petBtn = null
-    var obsActive = false
-    for (var i = 0; i < btns.length; i++) {
-      var t = btns[i].textContent || ''
-      if (t.indexOf('观察') >= 0) obsBtn = btns[i]
-      else if (t.indexOf('桌宠') >= 0) petBtn = btns[i]
-      if (obsBtn && btns[i] === obsBtn && btns[i].classList.contains('active')) obsActive = true
-    }
-    if (!obsBtn) return
-    var on = observeTabEnabled()
-    obsBtn.style.display = on ? '' : 'none'
-    if (on) obsBtn.classList.remove('plugin-off')
-    else obsBtn.classList.add('plugin-off')
-    if (!on && obsActive && petBtn && petBtn.style.display !== 'none') {
-      petBtn.click()
-    }
-  }
+  // DSH 专用化：以下两个处理函数已随小智插件移除（原为小智专用）：
+  //   - closePanelsFor(agentId)：停用小智时收起 xz-mcp-panel
+  //   - applyObserveTab()：按 xiaozhi enabled 显隐桌宠页的「观察」子 tab
+  // 现在 nav 显隐仍由通用机制（collectNavRules + applyVisibility）按各插件
+  // manifest 驱动，不依赖任何硬编码 agentId。
+  // 注意：applyVisibility 里原来会调 closePanelsFor / applyObserveTab，
+  // 已一并移除，见下方函数体。
 
   function applyVisibility() {
     var items = getNavItems()
@@ -140,10 +110,9 @@
         var btn = items[i]
         if (!matchItem(btn, keywords)) continue
         btn.style.display = enabled ? '' : 'none'
-        if (!enabled) closePanelsFor(agentId)
       }
     }
-    applyObserveTab()
+    // DSH 专用化：applyObserveTab()（小智「观察」子tab 显隐）已随小智插件移除。
   }
 
   function refresh() {

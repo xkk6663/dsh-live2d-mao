@@ -3,11 +3,13 @@ import test from 'node:test'
 
 import { filterConversationsForWorkspace, normalizeAgentView } from './workspaceState.js'
 
-test('removed creation bookmarks resume in Agent chat and task view survives restart', () => {
-  for (const view of ['creation', 'creation-image', 'creation-video']) {
-    assert.equal(normalizeAgentView(view), 'chat')
+test('removed creation bookmarks resume in the pet view and task view survives restart', () => {
+  // DSH 专用化：'chat' 已移除（那是小智对话页），遗留书签统一回落到 'companion'（桌宠管理页）
+  for (const view of ['creation', 'creation-image', 'creation-video', 'chat']) {
+    assert.equal(normalizeAgentView(view), 'companion')
   }
   assert.equal(normalizeAgentView('tasks'), 'tasks')
+  assert.equal(normalizeAgentView('companion'), 'companion')
   assert.equal(normalizeAgentView('unknown'), 'home')
 })
 

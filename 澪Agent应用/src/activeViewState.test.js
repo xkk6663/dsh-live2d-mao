@@ -13,8 +13,9 @@ test('active view report keeps only settings sections', () => {
     section_id: 'models',
     visible: true,
   })
-  assert.deepEqual(buildActiveViewReport('chat', 'models', false), {
-    view_id: 'chat',
+  // DSH 专用化：'chat' 已从合法视图移除，改用 'companion'（桌宠管理页）覆盖同一分支
+  assert.deepEqual(buildActiveViewReport('companion', 'models', false), {
+    view_id: 'companion',
     section_id: '',
     visible: false,
   })

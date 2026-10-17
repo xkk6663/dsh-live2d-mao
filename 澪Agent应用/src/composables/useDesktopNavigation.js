@@ -35,7 +35,9 @@ export function useDesktopNavigation(deps) {
     deps.activeCompanionSection.value = sectionId
   }
   async function focusDesktopPetChat() {
-    deps.activeView.value = 'chat'
+    // DSH 专用化：原为 'chat'（小智对话页），该页已移除且视图不再合法 → 'companion'。
+    // 真正的桌宠对话窗是独立窗口（#pet-chat-window），不依赖本视图切换。
+    deps.activeView.value = 'companion'
     deps.leftSidebarVisible.value = true
     localStorage.setItem('mio_left_sidebar_visible', 'true')
     await deps.refreshConversations()

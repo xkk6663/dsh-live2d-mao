@@ -110,7 +110,8 @@ export default {
       if (thread) return { title: '上次还在继续的事', content: thread.content, target: 'memory' }
       const diary = this.recentDiaries[0]
       if (diary) return { title: diary.title || `${diary.date} 的日记`, content: `${diary.date} 留下的记录`, target: 'diaries' }
-      return { title: '从今天开始', content: '还没有需要接着处理的事情', target: 'chat' }
+      // DSH 专用化：原 target 'chat'（小智对话页）已移除 → 'companion'
+      return { title: '从今天开始', content: '还没有需要接着处理的事情', target: 'companion' }
     },
     attentionItems() {
       return [
@@ -224,7 +225,9 @@ export default {
       </article>
     </section>
     <section class="home-activity-section">
-      <header><div><Sparkles :size="17" /><h2>今天的动态</h2></div><button type="button" @click="$emit('navigate', 'chat')">打开对话</button></header>
+      <!-- DSH 专用化：原目标 'chat'（小智对话页）已移除且不再合法 → 暂指 'companion'。
+           本页当前不在左侧导航中（属保留待恢复的脚手架），此改动仅为防呆。 -->
+      <header><div><Sparkles :size="17" /><h2>今天的动态</h2></div><button type="button" @click="$emit('navigate', 'companion')">打开桌宠</button></header>
       <div v-if="todayDynamics.length" class="home-activity-list"><article v-for="item in todayDynamics" :key="item.label"><span>{{ item.label }}</span><p>{{ item.value }}</p></article></div>
       <p v-else class="home-empty-line">今天的状态还在慢慢形成</p>
     </section>

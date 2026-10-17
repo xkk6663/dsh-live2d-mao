@@ -10,21 +10,24 @@
     <title>Mio</title>
     <!-- ================================================================
          本文件是 dist/index.html 的【模板】，由 scripts/compose-dist.mjs 渲染。
-         三个 {{...}} 占位符由 compose-dist 从 dist-build/index.html 里取真实 hash 文件名填入：
-           {{ENTRY_FILE}}   vite 产出的入口 bundle（assets/index-<hash>.js）
-           {{PRELOAD_FILE}} vite 产出的 modulepreload（assets/createLucideIcon-<hash>.js）
-           {{CSS_FILE}}     vite 产出的样式表（assets/index-<hash>.css）
-         其余 14 个手写注入 <script> 标签与 ?v= 版本参数【原样保留，勿让 vite 覆盖】。
+         三个占位符由 compose-dist 从 dist-build/index.html 里取真实 hash 文件名填入：
+           入口 bundle   ← vite 产出的 assets/index-<hash>.js
+           modulepreload ← vite 产出的共享 chunk（**可选**：vite 的 chunk 图里没有
+                           需要预载的共享 chunk 时它不产出这一行，compose-dist 会自动
+                           把模板里对应的 <link rel="modulepreload"> 整行删掉）
+           样式表        ← vite 产出的 assets/index-<hash>.css
+         ⚠ 本注释里**故意不写占位符字面量**：compose-dist 渲染后会断言"占位符已全部
+           被替换"，注释里留一份会让该断言在"modulepreload 缺失"时误报失败（踩过）。
+         其余手写注入 <script> 标签与 ?v= 版本参数【原样保留，勿让 vite 覆盖】。
          改了手写注入层文件 → 手动升它自己的 ?v=。
          ================================================================ -->
     <!-- 宿主注入（core-inject）：拦截原版已弃用 /api/agent/* 端点（防 404 / Not Found 提示条），必须最先同步执行 -->
     <script src="./core-inject/agent-kill-inject.js?v=20261013c"></script>
     <!-- 前端微内核：插件注册表（先于 manifest 注册与 plugin-nav 查询） -->
     <script src="./kernel/plugin-registry.js?v=20261015-p3b"></script>
-    <!-- 插件 manifest（注册进 registry；导航/观察tab/体检条目由此聚合） -->
-    <script defer src="./plugins/xiaozhi/manifest.js?v=20261015-p3b"></script>
+    <!-- 插件 manifest（注册进 registry；导航/观察tab/体检条目由此聚合）
+         DSH 专用化：xiaozhi / octop 的 manifest 已移除，只留 dsh -->
     <script defer src="./plugins/dsh/manifest.js?v=20261015-p3"></script>
-    <script defer src="./plugins/octop/manifest.js?v=20261015-p3"></script>
     <!-- 宿主注入：设置页收敛（隐藏原版已弃用的设置项/分类，只留桌宠分类） -->
     <script src="./core-inject/settings-clean-inject.js?v=20261013f"></script>
     <!-- 宿主注入：重建设置页（接管「设置」导航项，内嵌自有设置面板：资料/桌宠/语音/观察/提示词/小智/泡泡） -->
@@ -32,11 +35,9 @@
     <script type="module" crossorigin src="./assets/{{ENTRY_FILE}}?v=20261016-m0"></script>
     <link rel="modulepreload" crossorigin href="./assets/{{PRELOAD_FILE}}">
     <link rel="stylesheet" crossorigin href="./assets/{{CSS_FILE}}?v=20261015-petfix1">
-    <!-- 小智插件：图片提问（原版私人空间对话页注入 📷 上传按钮 + 粘贴图片，小智官方云视觉） -->
-    <script defer src="./plugins/xiaozhi/chat-inject.js?v=20261016-imgbtn-right"></script>
-    <!-- 小智插件：MCP 工具集中管理（左侧导航「小智工具」页） -->
-    <script defer src="./plugins/xiaozhi/mcp-panel.js?v=20261013b"></script>
-    <!-- DSH 插件：实时工作状态面板（左侧导航「DSH」页；只读本插件自己的 /api/plugin/dsh/*） -->
+    <!-- DSH 插件：实时工作状态面板（左侧导航「DSH」页；只读本插件自己的 /api/plugin/dsh/*）
+         DSH 专用化：小智插件的 chat-inject（图片提问）与 mcp-panel（MCP 工具页）已移除。
+         图片提问/视觉能力属小智官方云视觉，随小智插件一并阉割。 -->
     <script defer src="./plugins/dsh/dsh-panel.js?v=20261015-dsh1"></script>
     <!-- 泡泡工坊渲染模块：供设置面板「泡泡」tab 调用（皮肤/点击互动/图片素材库；不再注入左侧导航） -->
     <script defer src="./core-inject/bubble-panel-inject.js?v=20261015-bp5"></script>

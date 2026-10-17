@@ -8,8 +8,9 @@
   },
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "build": "vite build",
-    "build:dist": "vite build && node scripts/compose-dist.mjs --apply && node scripts/trim-pages.mjs --apply && node scripts/clean-dist.mjs",
+    "build": "node scripts/clean-build.mjs && vite build",
+    "build:dist": "node scripts/clean-build.mjs && vite build && node scripts/compose-dist.mjs --apply && node scripts/trim-pages.mjs --apply && node scripts/clean-dist.mjs",
+    "clean-build": "node scripts/clean-build.mjs",
     "compose-dist": "node scripts/compose-dist.mjs",
     "trim-pages": "node scripts/trim-pages.mjs",
     "guard": "node scripts/clean-dist.mjs",

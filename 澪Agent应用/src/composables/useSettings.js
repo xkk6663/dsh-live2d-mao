@@ -7,7 +7,9 @@ import * as settingsApi from '../services/settingsApi.js'
 
 export function useSettings(deps) {
   function focusComposer() {
-    deps.activeView.value = 'chat'
+    // DSH 专用化：'chat' 视图已移除（原 ChatPage 的 .composer-input 随之消失）
+    // → 回到 'companion'（桌宠管理页）；桌宠输入框在独立聊天窗里。
+    deps.activeView.value = 'companion'
     nextTick(() => document.querySelector('.composer-input')?.focus())
   }
   function openMemoryTab(tab) {

@@ -51,7 +51,9 @@
       return false
     },
 
-    // 聚合：声明 health.connection 的插件是否存在（决定体检「小智连接」行显隐）
+    // 聚合：声明 health.connection 的插件是否存在（决定体检页「连接自检」行的显隐）
+    // DSH 专用化：原本只有小智声明 health.connection；小智插件已阉割 → 该行自然消失。
+    // 机制保持通用，将来有插件声明即生效。
     connectionSection: function () {
       for (var id in manifests) {
         var m = manifests[id]

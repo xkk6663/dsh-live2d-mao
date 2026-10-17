@@ -40,6 +40,8 @@ const PROTECTED = ['core-inject', 'kernel', 'plugins', 'live2d-pet']
 
 const problems = []
 const info = (m) => console.log('  ' + m)
+/** 非致命告警（不中断构建）；与 problems 的区别是它提示"需要人工看一眼"而非"产物有问题"。 */
+const warn = (m) => console.warn('  ! ' + m)
 
 function die(msg) { console.error('✗ ' + msg); process.exit(2) }
 
@@ -56,7 +58,12 @@ const grab = (re, label) => {
   return m[1]
 }
 const ENTRY_FILE = grab(/<script[^>]*\bsrc="\.\/assets\/([^"]+)"/, '入口 bundle')
-const PRELOAD_FILE = grab(/rel="modulepreload"[^>]*\bhref="\.\/assets\/([^"]+)"/, 'modulepreload')
+// modulepreload 是**可选**的：vite 只在 chunk 图里存在需要预载的共享 chunk 时才产出这一行。
+// 踩过的坑（DSH 专用化删掉 ChatPage 后）：原来最大的动态 import 被移除，
+// chunk 图随之简化，vite 不再产出 modulepreload，而旧代码硬要求它 → 构建直接失败。
+// 这不是"构建坏了"，而是脚本把可选产物当成了必需物。
+const preloadMatch = /rel="modulepreload"[^>]*\bhref="\.\/assets\/([^"]+)"/.exec(builtHtml)
+const PRELOAD_FILE = preloadMatch ? preloadMatch[1] : null
 const CSS_FILE = grab(/rel="stylesheet"[^>]*\bhref="\.\/assets\/([^"]+)"/, '样式表')
 
 console.log('='.repeat(72))
@@ -67,15 +74,28 @@ console.log(`dist-build= ${BUILD}`)
 console.log(`模式      = ${APPLY ? '应用（--apply）' : '干跑（默认，只核查）'}`)
 console.log('')
 info(`入口 bundle   : assets/${ENTRY_FILE}`)
-info(`modulepreload : assets/${PRELOAD_FILE}`)
+info(`modulepreload : ${PRELOAD_FILE ? `assets/${PRELOAD_FILE}` : '（vite 本次未产出，模板对应行会被移除）'}`)
 info(`样式表        : assets/${CSS_FILE}`)
 
 // -------------------------------------------------- 渲染 index.html（模板）
 const tpl = fs.readFileSync(TEMPLATE, 'utf8')
-const renderedHtml = tpl
+let renderedHtml = tpl
   .replaceAll('{{ENTRY_FILE}}', ENTRY_FILE)
-  .replaceAll('{{PRELOAD_FILE}}', PRELOAD_FILE)
   .replaceAll('{{CSS_FILE}}', CSS_FILE)
+
+if (PRELOAD_FILE) {
+  renderedHtml = renderedHtml.replaceAll('{{PRELOAD_FILE}}', PRELOAD_FILE)
+} else {
+  // vite 本次没产出 modulepreload：把模板里那一整行 <link rel="modulepreload"> 删掉。
+  // 不能只把占位符替换成空串 —— 那会留下 href="./assets/" 的坏标签（浏览器会去请求目录）。
+  const beforeStrip = renderedHtml
+  renderedHtml = renderedHtml.replace(/^[ \t]*<link[^>]*\bmodulepreload\b[^>]*>[ \t]*\r?\n/gm, '')
+  if (renderedHtml === beforeStrip) {
+    // 模板格式变了（preload 行不再是独立整行）：至少清掉占位符，并提示人工核对
+    renderedHtml = renderedHtml.replaceAll('{{PRELOAD_FILE}}', '')
+    warn('模板里的 modulepreload 行不是独立整行，已仅清空占位符 —— 请人工核对 index.template.html')
+  }
+}
 
 for (const ph of ['{{ENTRY_FILE}}', '{{PRELOAD_FILE}}', '{{CSS_FILE}}']) {
   if (renderedHtml.includes(ph)) die(`模板占位符未被替换：${ph}`)
@@ -157,15 +177,23 @@ const afterHtml = fs.readFileSync(path.join(DIST, 'index.html'), 'utf8')
 const okEntry = afterHtml.includes(`./assets/${ENTRY_FILE}`)
 const okCss = afterHtml.includes(`./assets/${CSS_FILE}`)
 const injectCount = (afterHtml.match(/<script\s[^>]*src="\.\/(core-inject|kernel|plugins)\//g) || []).length
+// 期望值**从模板现算**，不硬编码。
+// 硬编码会在"有意增删注入项"时变成假告警（DSH 专用化删掉小智/Octop 的注入行后
+// 从 14 变 10，就是这个坑）。这条自检真正要守的是
+// **"模板里的注入行原样进到 dist/index.html（不多不少）"**，
+// 用模板现算既保住这个语义，又不会随插件增删而失效。
+const injectExpected = (tpl.match(/<script\s[^>]*src="\.\/(core-inject|kernel|plugins)\//g) || []).length
 info(`index.html 引用入口 : ${okEntry ? '✓' : '✗'}`)
 info(`index.html 引用样式 : ${okCss ? '✓' : '✗'}`)
-info(`注入 script 标签数 : ${injectCount}（期望 14）`)
+info(`注入 script 标签数 : ${injectCount}（模板 ${injectExpected}）`)
 for (const d of PROTECTED) {
   const n = fs.readdirSync(path.join(DIST, d)).length
   info(`${d.padEnd(14)} ${n} 项（应未被触碰）`)
 }
 if (!okEntry || !okCss) die('组装后 index.html 自检失败')
-if (injectCount !== 14) problems.push(`注入 script 标签数异常：${injectCount}（期望 14）`)
+if (injectCount !== injectExpected) {
+  problems.push(`注入 script 标签数异常：${injectCount}（模板 ${injectExpected}）—— 模板与产物不一致，请检查 compose-dist`)
+}
 
 console.log('')
 if (problems.length) {

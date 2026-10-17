@@ -1,7 +1,7 @@
 <script setup>
 import { computed, inject, onMounted, ref } from 'vue'
 import {
-  Boxes, Gamepad2, ImagePlus, Monitor, RefreshCw, Stethoscope, Zap,
+  Boxes, Gamepad2, ImagePlus, RefreshCw, Stethoscope,
 } from '@lucide/vue'
 import PetAppearancePanel from './PetAppearancePanel.vue'
 
@@ -124,98 +124,16 @@ function deleteModel(id) {
   })
 }
 
-// ---------------------------------------------------------------- 屏幕观察
-// 三个预设必须与 saveObserve 的映射表一致；回读时**只按 min 匹配**（min 是预设的区分因子）。
-// 旧实现要求 (min,max) 精确等于某一个配对，服务端存成 (1800,2000) 之类就三个分支全不命中，
-// observe.range 静默保持默认 '5-15' —— 看起来就是「改完设置重开变回默认」。
-const OBSERVE_RANGES = [
-  { id: '5-15', min: 300, max: 900 },
-  { id: '10-30', min: 600, max: 1800 },
-  { id: '30-60', min: 1800, max: 3600 },
-]
-function matchObserveRange(min) {
-  const exact = OBSERVE_RANGES.find((item) => item.min === min)
-  if (exact) return exact.id
-  return OBSERVE_RANGES.reduce((best, item) =>
-    Math.abs(item.min - min) < Math.abs(best.min - min) ? item : best, OBSERVE_RANGES[0]).id
-}
-const observe = ref({ enabled: false, range: '5-15' })
-const observeMessage = ref('')
-const xiaozhiStatus = ref({ connected: false, session_id: '', vision: false, observe_enabled: false })
-
-async function loadXiaozhiStatus() {
-  try {
-    const [status, vision, observeStatus] = await Promise.all([
-      getJson('/api/xiaozhi/status').catch(() => null),
-      getJson('/api/xiaozhi/vision-info').catch(() => null),
-      getJson('/api/xiaozhi/observe/status').catch(() => null),
-    ])
-    xiaozhiStatus.value = {
-      connected: Boolean(status && status.connected),
-      session_id: (status && status.session_id) || '',
-      vision: Boolean(vision && vision.ok),
-      // 读不到观察状态时保留上一次的值，不要回落成「未启动」——
-      // 旧实现用 .catch(() => ({ enabled: false })) 会把开关刷成默认，同样是「设置被重置」的假象。
-      observe_enabled: observeStatus
-        ? Boolean(observeStatus.enabled)
-        : Boolean(xiaozhiStatus.value.observe_enabled),
-    }
-    if (observeStatus) {
-      observe.value.enabled = Boolean(observeStatus.enabled)
-      const min = Number(observeStatus.min_seconds) || 300
-      const max = Number(observeStatus.max_seconds) || 900
-      observe.value.range = matchObserveRange(min)
-    }
-    observeMessage.value = ''
-  } catch (error) {
-    observeMessage.value = `读取失败：${error.message}`
-  }
-}
-
-async function saveObserve() {
-  try {
-    const preset = OBSERVE_RANGES.find((item) => item.id === observe.value.range) || OBSERVE_RANGES[0]
-    const [min, max] = [preset.min, preset.max]
-    const result = await request(observe.value.enabled ? '/api/xiaozhi/observe/start' : '/api/xiaozhi/observe/stop', 'POST', {
-      enabled: observe.value.enabled, min_seconds: min, max_seconds: max, quiet_start: '23:00', quiet_end: '08:00',
-    })
-    // 用服务端回执回填，保证「界面上看到的 = 服务端存的」
-    if (result && typeof result.enabled !== 'undefined') {
-      observe.value.enabled = Boolean(result.enabled)
-      observe.value.range = matchObserveRange(Number(result.min_seconds) || min)
-    }
-    observeMessage.value = observe.value.enabled
-      ? `✓ 自动观察已开启（${preset.id.replace('-', '–')} 分钟随机）`
-      : '✓ 自动观察已关闭'
-  } catch (error) {
-    observeMessage.value = `✗ 保存失败：${error.message}`
-  }
-}
-
-async function observeOnce() {
-  observeMessage.value = '截屏分析中…'
-  try {
-    const shot = await request('/api/companion/screen-shot', 'POST', {})
-    if (!shot.ok) throw new Error('截图失败')
-    const result = await request('/api/xiaozhi/vision-bubble', 'POST', {
-      image_base64: shot.image_base64, kind: 'observe', question: '',
-    })
-    if (!result.ok) throw new Error(result.detail || '小智视觉失败')
-    observeMessage.value = `✓ 已让小智评价：${String(result.text || '').slice(0, 60)}…`
-  } catch (error) {
-    observeMessage.value = `✗ ${error.message}`
-  }
-}
-
-function openScreenCrop() {
-  if (window.mioDesktop && typeof window.mioDesktop.openScreenCrop === 'function') {
-    window.mioDesktop.openScreenCrop()
-  } else if (window.pywebview && window.pywebview.api && window.pywebview.api.open_screen_crop) {
-    window.pywebview.api.open_screen_crop()
-  } else {
-    observeMessage.value = '快捷键可用：任意软件按 Ctrl+Shift+S 框选区域'
-  }
-}
+// ---------------------------------------------------------------- 屏幕观察：已移除
+// DSH 专用化（2026-10-17 用户裁决）：整块「屏幕自动观察（冷不丁评价）」已删除。
+// 它 100% 依赖小智：随机截屏 → 调小智视觉接口让小智评价屏幕，
+// 并读写小智的 observe 开关（后端 xiaozhi 插件已整体阉割，这些接口不复存在）。
+// 连带移除：OBSERVE_RANGES / matchObserveRange / observe / observeMessage /
+// xiaozhiStatus / loadXiaozhiStatus / saveObserve / observeOnce / openScreenCrop，
+// 以及左栏的「观察」tab 与 screen-panel 模板段。
+//
+// ⚠ 若将来要做"基于 DSH 的屏幕观察"，那是**新功能**（应走 DSH 自己的视觉能力），
+//   不要把这套小智专用实现直接搬回来。
 
 // ---------------------------------------------------------------- 体检
 // 体检面板的正式 UI 由 core-inject/health-panel-inject.js 接管渲染（Agents/本体自检增强版），
@@ -224,7 +142,6 @@ function openScreenCrop() {
 // ② 旧模板的动态绑定会让 Vue 在注入层替换 innerHTML 之后仍试图 patch 已不存在的节点。
 onMounted(() => {
   refreshModels()
-  loadXiaozhiStatus()
 })
 </script>
 
@@ -233,7 +150,7 @@ onMounted(() => {
     <div class="companion-main">
       <nav class="companion-tab-bar compact-companion-tabs" aria-label="桌宠功能">
         <button type="button" :class="{ active: context.activeCompanionSection === 'pet-panel' }" @click="context.activeCompanionSection = 'pet-panel'"><Gamepad2 :size="16" />桌宠</button>
-        <button type="button" :class="{ active: context.activeCompanionSection === 'screen-panel' }" @click="context.activeCompanionSection = 'screen-panel'"><Monitor :size="16" />观察</button>
+        <!-- DSH 专用化：「观察」tab 已移除（整块依赖小智视觉，随小智插件阉割） -->
         <button type="button" :class="{ active: context.activeCompanionSection === 'model-panel' }" @click="context.activeCompanionSection = 'model-panel'"><Boxes :size="16" />模型</button>
         <button type="button" :class="{ active: context.activeCompanionSection === 'health-panel' }" @click="context.activeCompanionSection = 'health-panel'"><Stethoscope :size="16" />体检</button>
       </nav>
@@ -259,25 +176,8 @@ onMounted(() => {
         @refresh-status="applyRefreshedStatus"
       />
 
-      <section v-else-if="context.activeCompanionSection === 'screen-panel'" class="companion-simple-panel observer-simple-panel">
-        <header><div><Monitor :size="19" /><span><h2>屏幕自动观察（冷不丁评价）</h2><p>随机截屏让小智评价你的屏幕</p></span></div><span :class="['connection-label', { online: xiaozhiStatus.observe_enabled }]">{{ xiaozhiStatus.observe_enabled ? '观察中' : '未启动' }}</span></header>
-        <div class="observe-auto-block">
-          <div class="voice-quick-grid">
-            <label><span><strong>自动观察</strong><small>随机截屏让小智评价你的屏幕</small></span><span class="switch-control"><input v-model="observe.enabled" type="checkbox" @change="saveObserve" /><i /></span></label>
-            <label><span><strong>快捷键</strong><small>全局 Ctrl+Shift+S 框选区域投喂</small></span><b class="shortcut-chip">Ctrl+Shift+S</b></label>
-          </div>
-          <div class="voice-quick-settings">
-            <label><span>间隔(分)</span><select v-model="observe.range" @change="saveObserve"><option value="5-15">5–15 分钟随机</option><option value="10-30">10–30 分钟随机</option><option value="30-60">30–60 分钟随机</option></select></label>
-            <label><span>免打扰</span><span class="dim-text">23:00 – 08:00</span></label>
-          </div>
-          <div class="voice-runtime-summary"><strong>上次更换：{{ schedule.last_switched || '尚未更换' }}</strong></div>
-          <footer class="companion-action-bar">
-            <button type="button" @click="observeOnce"><Zap :size="15" />立即观察一次</button>
-            <button type="button" @click="openScreenCrop"><Monitor :size="15" />框选屏幕区域</button>
-          </footer>
-          <p class="companion-panel-msg">{{ observeMessage }}</p>
-        </div>
-      </section>
+      <!-- DSH 专用化：原 screen-panel（屏幕自动观察 / 立即观察 / 框选屏幕区域）已整段移除。
+           该面板全部动作都打到小智接口（观察开关 + 小智视觉评价），随小智插件一并阉割。 -->
 
       <section v-else-if="context.activeCompanionSection === 'model-panel'" class="companion-simple-panel model-simple-panel">
         <header><div><Boxes :size="19" /><span><h2>Live2D 模型管理</h2><p>切换模型、导入与每天定时自动更换</p></span></div><button type="button" title="刷新" @click="refreshModels"><RefreshCw :size="15" /></button></header>

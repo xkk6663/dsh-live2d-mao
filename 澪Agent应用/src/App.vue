@@ -480,7 +480,9 @@ import AppDialog from './components/AppDialog.vue'
 // DSH 专用化：OnboardingPage 已移除（首次进入不再走六步质检）
 // Load large work surfaces on first use so the initial desktop bundle stays
 // small and the cold-start UI can become interactive sooner.
-const ChatPage = defineAsyncComponent(() => import('./components/ChatPage.vue'))
+// DSH 专用化：ChatPage 已移除 —— 该页 100% 是小智对话（消息区/输入区全接管，
+// 走小智后端接口与它自己的 WebSocket），随小智插件一并阉割。
+// 真正的对话在**桌宠自己的聊天窗**（standalonePetChat，走 /api/companion/chat）。
 const CompanionPage = defineAsyncComponent(() => import('./components/CompanionPage.vue'))
 const HomePage = defineAsyncComponent(() => import('./components/HomePage.vue'))
 const AgentHomePage = defineAsyncComponent(() => import('./components/AgentHomePage.vue'))
@@ -755,7 +757,7 @@ function readAppPreferences() {
       home_widgets: { ...DEFAULT_APP_PREFERENCES.home_widgets, ...(source.home_widgets || {}) },
     }
     if (!VALID_THEME_IDS.has(merged.theme)) merged.theme = 'mist'
-    if (!['home', 'chat', 'diaries', 'memory', 'tasks', 'companion', 'creation', 'creation-image', 'creation-video'].includes(merged.default_open_page)) {
+    if (!['home', 'diaries', 'memory', 'tasks', 'companion', 'creation', 'creation-image', 'creation-video'].includes(merged.default_open_page)) {
       merged.default_open_page = DEFAULT_APP_PREFERENCES.default_open_page
     }
     migrateDefaultOpenPage(merged, source)
@@ -798,7 +800,7 @@ function handleAppPreferencesStorage(event) {
 }
 
 const initialAppPreferences = readAppPreferences()
-const validInitialViews = new Set(['home', 'chat', 'diaries', 'memory', 'tasks', 'companion'])
+const validInitialViews = new Set(['home', 'diaries', 'memory', 'tasks', 'companion'])
 const storedAgentView = localStorage.getItem('mio_agent_active_view') || 'home'
 const activeView = ref(isAgentWorkspace
   ? normalizeAgentView(storedAgentView)
@@ -1331,17 +1333,19 @@ function onProviderDialogKeydown(event) {
   trapModalFocus(event, providerDialog.value)
 }
 
-// 主导航：只保留「对话 / 桌宠 / 设置」。
+// 主导航：只保留「桌宠 / 设置」。
+// DSH 专用化：原「对话」项是小智对话页（ChatPage，走小智后端接口），随小智插件一并移除；
+// 与 Mio 对话请用桌宠自己的聊天窗（点桌宠 → 打开/关闭对话窗口，走 /api/companion/chat）。
 // 首页(home) / 日记(diaries) / 记忆(memory) / 任务(tasks) / 统计(stats) 的后端能力已被裁剪，
 // 保留导航项会进入空页面，故不列入。对应页面组件（HomePage / RecordsPage / TasksPage）
 // 仍在源码中，日后功能补齐时把它们加回本数组即可 —— 无需改动路由与模板。
+// 进入应用默认落在 `companion`（桌宠管理页），见 DEFAULT_APP_PREFERENCES.default_open_page。
 const mainNavItems = [
-  { id: 'chat', label: '对话', icon: MessageSquareText },
   { id: 'companion', label: '桌宠', icon: Gamepad2 },
   { id: 'settings', label: '设置', icon: Settings },
 ]
 const agentNavItems = [
-  { id: 'chat', label: '对话', icon: MessageSquareText },
+  { id: 'companion', label: '桌宠', icon: Gamepad2 },
   { id: 'settings', label: '设置', icon: Settings },
 ]
 const navGroups = [{
@@ -2551,9 +2555,8 @@ watch(activeView, async (view) => {
     }
     if (view === 'companion') await loadGameWindows({ quiet: true })
   }
-  if (view === 'chat') {
-    await settleChatScrollToBottom()
-  }
+  // DSH 专用化：原来这里还有 `if (view === 'chat') await settleChatScrollToBottom()`，
+  // 那是给小智对话页（ChatPage）滚到底用的，随该页一并移除。
 })
 
 watch(activeSettingsSection, (section) => {
@@ -2681,7 +2684,9 @@ async function setPetChatWindowState(open) {
       <AgentHomePage v-if="isAgentWorkspace && activeView === 'home'" @navigate="navigatePrimaryView" />
       <AgentSettingsPage v-else-if="isAgentWorkspace && activeView === 'settings'" @preferences-change="applyAgentPreferences" @return="returnToApp" />
       <HomePage v-else-if="activeView === 'home'" :logical-date="logicalDate" :today-state="todayState" :today-state-details="todayStateDetails" :diaries="diaries" :memory-data="memoryData" :display-name="mioDisplayName" :user-address="preferredUserAddress" :companion-running="Boolean(companionStatus.pet?.running)" @navigate="activeView = $event" @open-diary="openDiary" />
-      <ChatPage v-else-if="activeView === 'chat'" />
+      <!-- DSH 专用化：ChatPage（小智对话页）分支已移除。
+           注意链尾是 <CompanionPage v-else />，故任何落到这里的 unknown view
+           （含历史遗留的 'chat'）都会安全地渲染桌宠管理页，不会白屏。 -->
       <RecordsPage v-else-if="['diaries', 'stats', 'memory'].includes(activeView)" />
       <AgentTasksPage v-else-if="isAgentWorkspace && activeView === 'tasks'" @open-settings="activeView = 'settings'" />
       <TasksPage v-else-if="activeView === 'tasks'" />
