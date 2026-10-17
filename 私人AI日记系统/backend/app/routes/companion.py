@@ -210,6 +210,11 @@ class CompanionSettingsRequest(BaseModel):
     live2d_strip_width: int = Field(default=0, ge=0, le=4000)
     live2d_strip_rows: int = Field(default=1, ge=1, le=5)
     live2d_strip_style: str = Field(default="default", max_length=40)
+    # ★ 桌宠交互打磨（2026-10-17 对标 dsh-pet-indesktop）：不透明度 / 锁定位置 / SHIFT 拖动 / 拖拽惯性
+    live2d_pet_opacity: int = Field(default=100, ge=10, le=100)
+    live2d_pet_locked: bool = False
+    live2d_pet_shift_drag: bool = False
+    live2d_pet_inertia: bool = True
     # 音效事件配置：{press/release/switch/task_end/ask/approval/error:
     #   {enabled: bool, volume: 0-100, clip: '片段文件名或空(合成音)'}}
     pet_sound_events: dict = Field(default_factory=dict)

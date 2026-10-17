@@ -120,6 +120,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "live2d_strip_width": 0,
     "live2d_strip_rows": 1,
     "live2d_strip_style": "default",
+    # ★ 桌宠交互打磨（2026-10-17）：不透明度 / 锁定位置 / SHIFT 拖动 / 拖拽惯性
+    "live2d_pet_opacity": 100,
+    "live2d_pet_locked": False,
+    "live2d_pet_shift_drag": False,
+    "live2d_pet_inertia": True,
     # 音效事件配置（clip 为空 = 用现场合成音；非空 = 播放 sounds/ 里的片段）
     "pet_sound_events": {},
     # 点击序列（first + queue；queue 为空则回退随机语句/图片）

@@ -437,6 +437,11 @@
       body.appendChild(row('窗口置顶', '桌宠窗口始终置顶', makeSwitch(!!s.live2d_always_on_top, '窗口置顶'), 'live2d_always_on_top'))
       body.appendChild(row('透明穿透', '鼠标点击穿透（锁定后生效）', makeSwitch(!!s.live2d_smart_passthrough, '透明穿透'), 'live2d_smart_passthrough'))
       body.appendChild(row('对话气泡', '显示小智对话气泡', makeSwitch(!!s.live2d_speech_bubble_enabled, '对话气泡'), 'live2d_speech_bubble_enabled'))
+      body.appendChild(section('交互打磨'))
+      body.appendChild(row('不透明度', '模型本体透明度（气泡/徽标不受影响）', makeSlider(s.live2d_pet_opacity != null ? s.live2d_pet_opacity : 100, 10, 100, 5, '%'), 'live2d_pet_opacity'))
+      body.appendChild(row('锁定位置', '开启后桌宠不可拖动（点击互动仍有效）', makeSwitch(!!s.live2d_pet_locked, '锁定位置'), 'live2d_pet_locked'))
+      body.appendChild(row('SHIFT 拖动', '开启后需按住 Shift 才能拖动，防误拖', makeSwitch(!!s.live2d_pet_shift_drag, 'SHIFT 拖动'), 'live2d_pet_shift_drag'))
+      body.appendChild(row('拖拽惯性', '松手后按拖动速度惯性滑行、阻尼停稳', makeSwitch(s.live2d_pet_inertia !== false, '拖拽惯性'), 'live2d_pet_inertia'))
       body.appendChild(section('模型自动更换'))
       body.appendChild(row('自动更换模型', '每天定时随机更换角色', makeSwitch(!!(state.schedule && state.schedule.enabled), '自动更换模型'), 'schedule_enabled'))
       body.appendChild(row('更换时间', '每天此时间触发', makeSelect((state.schedule && state.schedule.time) || '12:00', [12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 8, 9, 10, 11].map(function (h) { return { v: h + ':00', t: h + ':00' } })), 'schedule_time'))
@@ -569,6 +574,8 @@
       'screen_ai_enabled',
       // ★ 横条个性化（2026-10-17）
       'live2d_strip_width', 'live2d_strip_rows', 'live2d_strip_style',
+      // ★ 交互打磨（2026-10-17）
+      'live2d_pet_opacity', 'live2d_pet_locked', 'live2d_pet_shift_drag', 'live2d_pet_inertia',
     ]
     settingsKeys.forEach(function (k) { if (vals[k] !== undefined) settingsBody[k] = vals[k] })
     // 2) 自动观察 → observe/start or stop

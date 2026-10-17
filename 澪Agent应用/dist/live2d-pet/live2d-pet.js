@@ -302,6 +302,7 @@
   let lastSizePercent = 0
   let pointerDown = null
   let dragged = false
+  let inertiaRaf = null   // 拖拽惯性 rAF 句柄（松手滑行循环）
   let modelLoadGeneration = 0
   let sizeCommitTimer = null
   let passThroughFrame = null
@@ -1702,6 +1703,15 @@
       window.mioDesktop.setClickThroughLocked(Boolean(settings.live2d_click_through_locked))
     }
     root.classList.toggle('click-through-locked', Boolean(settings.live2d_click_through_locked))
+    // ★ 桌宠不透明度（2026-10-17 交互打磨）：控制模型 alpha（10-100%）。
+    //   只作用于 Live2D 模型本体，不影响气泡/徽标/横条的清晰度。
+    try {
+      const op = Number(settings.live2d_pet_opacity)
+      if (Number.isFinite(op)) {
+        const alpha = Math.max(0.1, Math.min(1, op / 100))
+        if (model) model.alpha = alpha
+      }
+    } catch (_) {}
     updateContextMenuLabels()
     // ★「关掉气泡就隐藏」只在**开关真的从开→关发生变化**、或**当前没有活跃流式会话**时才生效
     //   （2026-10-16 修回归：流式气泡被轮询打掉）。
@@ -3068,6 +3078,14 @@
     // 表现就是"点了完全没声音"。
     try { const s = window.__mioPetSound; if (s) { s.setEnabled(settings.pet_sound_enabled !== false); s.unlock() } } catch (_) {}
     if (clickThroughLocked() || event.button !== 0 || !pointHitsModel(event.clientX, event.clientY)) return
+    // ★ 交互打磨（2026-10-17）：锁定位置 / SHIFT 拖动。
+    //   两种都只禁止**拖动**，点击互动（音效/气泡/动作）照常。
+    //   - 锁定：完全禁止拖动；
+    //   - SHIFT 拖动：未按住 Shift 时禁止拖动（防误拖）。
+    const shiftHeld = Boolean(event.shiftKey)
+    const locked = Boolean(settings.live2d_pet_locked)
+    const shiftDragMode = Boolean(settings.live2d_pet_shift_drag)
+    const canDrag = !locked && (!shiftDragMode || shiftHeld)
     pointerDown = {
       x: event.clientX,
       y: event.clientY,
@@ -3079,6 +3097,12 @@
       positionY: Number(settings.position_y || 0),
       time: Date.now(),
       pointerId: event.pointerId,
+      canDrag,
+      vx: 0,
+      vy: 0,
+      lastX: event.clientX,
+      lastY: event.clientY,
+      lastT: Date.now(),
     }
     dragged = false
     root.classList.add('dragging')
@@ -3096,13 +3120,28 @@
     const dx = event.clientX - pointerDown.x
     const dy = event.clientY - pointerDown.y
     const distance = Math.hypot(dx, dy)
-    if (distance > 6) dragged = true
+    if (distance > 6) {
+      // ★ 锁定 / SHIFT 未按下时：标记为"想拖但被禁止"，不算拖动、不移动模型
+      if (pointerDown.canDrag) dragged = true
+    }
+    // 记录速度（供松手惯性用）：最近一段位移/时间
+    const now = Date.now()
+    const dt = Math.max(1, now - pointerDown.lastT)
+    if (pointerDown.canDrag) {
+      pointerDown.vx = (event.clientX - pointerDown.lastX) / dt * 1000
+      pointerDown.vy = (event.clientY - pointerDown.lastY) / dt * 1000
+    }
+    pointerDown.lastX = event.clientX
+    pointerDown.lastY = event.clientY
+    pointerDown.lastT = now
     if (electronRuntime && model) {
-      model.x = pointerDown.modelX + dx
-      model.y = pointerDown.modelY + dy
+      if (pointerDown.canDrag) {
+        model.x = pointerDown.modelX + dx
+        model.y = pointerDown.modelY + dy
+      }
       updateSpeechBubblePosition()
       updateLockControlAnchor()
-    } else if (dragged) {
+    } else if (dragged && pointerDown.canDrag) {
       const bridge = await waitForBridge()
       await bridge.drag_to(event.screenX, event.screenY)
     }
@@ -3137,6 +3176,44 @@
         body: JSON.stringify({ x: nextX, y: nextY }),
       }).catch(() => {})
       sendSocket('dragged', { distance: Math.round(Math.hypot(dx, dy)), x: nextX, y: nextY })
+      // ★ 拖拽惯性（2026-10-17 交互打磨）：松手后按拖动末速度继续滑行，阻尼衰减到停。
+      //   只在 Electron + 模型存在 + 惯性开关开启 + 速度够大时启动。
+      if (settings.live2d_pet_inertia !== false && model && Math.hypot(interaction.vx || 0, interaction.vy || 0) > 120) {
+        let vx = interaction.vx || 0
+        let vy = interaction.vy || 0
+        let last = Date.now()
+        const damp = 0.92          // 每帧阻尼（越小停得越快）
+        const minV = 30            // 低于此速度停止
+        const step = () => {
+          const now = Date.now()
+          const dt = Math.max(1, Math.min(50, now - last)) / 1000   // 秒，钳制防跳帧
+          last = now
+          vx *= damp
+          vy *= damp
+          const mvx = vx * dt
+          const mvy = vy * dt
+          model.x = (model.x || 0) + mvx
+          model.y = (model.y || 0) + mvy
+          updateSpeechBubblePosition()
+          updateLockControlAnchor()
+          if (Math.hypot(vx, vy) > minV) {
+            inertiaRaf = requestAnimationFrame(step)
+          } else {
+            // 停稳：把最终位置写回后端（覆盖上面"松手即存"的中间值）
+            const fx = Math.round((interaction.positionX + (model.x - (interaction.modelX || 0))) || 0)
+            const fy = Math.round((interaction.positionY + (model.y - (interaction.modelY || 0))) || 0)
+            settings.position_x = fx
+            settings.position_y = fy
+            request('/api/companion/position', {
+              method: 'PATCH',
+              body: JSON.stringify({ x: fx, y: fy }),
+            }).catch(() => {})
+            inertiaRaf = null
+          }
+        }
+        if (inertiaRaf) cancelAnimationFrame(inertiaRaf)
+        inertiaRaf = requestAnimationFrame(step)
+      }
     } else if (!wasDragged) {
       if (settings.live2d_click_motion) playMotion(semanticMotion('touch'), undefined, { force: true })
       sendSocket('clicked', { x: event?.screenX || 0, y: event?.screenY || 0, emotion: 'gentle' })
