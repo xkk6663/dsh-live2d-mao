@@ -719,11 +719,10 @@ body,
   align-items: center;
   gap: 6px;
   /* 宽度：默认按内容自适应；**用户拉伸过就固定像素宽**（JS 写 style.width）。
-     用户要求"左右大小可手动拉伸"（2026-10-17），故这里 max-width 放宽到 560px，
-     并把 min-width 放开，让 JS 能把宽度撑大。 */
+     用户要求"无限拉长、任意控制长度"（2026-10-17）：上限只受屏幕宽度约束。 */
   width: max-content;
   min-width: 150px;
-  max-width: min(560px, calc(100vw - 24px));
+  max-width: calc(100vw - 24px);
   padding: 6px 8px 6px 12px;
   color: var(--bubble-ink);
   background: var(--bubble-bg);
@@ -749,12 +748,16 @@ body,
 
 .pet-strip #pet-strip-text {
   display: block;
-  max-width: 260px;
-  max-height: 3.2em;
+  /* ★ 文字铺满整条（2026-10-17 用户反馈）：之前写死 max-width:260px + max-height:3.2em，
+     拉长横条后文字仍被锁在 260px 里、还被高度截断（后半段显示不出来）。
+     改为：宽随横条铺满，高不限，整条向下自然生长。 */
+  max-width: none;
   overflow-x: hidden;
-  overflow-y: auto;
+  overflow-y: hidden;
   white-space: pre-wrap;
   word-break: break-word;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 /* ★ 内联代码药丸（用户 2026-10-17 反馈）：把 `/api/xiaozhi/ws` 这类路径/代码段

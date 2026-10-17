@@ -62,6 +62,8 @@ let rendererRestarts = []
 let desiredAlwaysOnTop = true
 let clickThroughLocked = false
 let rendererInteractive = false
+// 渲染层上报的横条命中区（渲染层坐标，相对窗口）；null = 横条隐藏/不可命中
+let stripBounds = null
 let chatWindowOpen = false
 let modelBounds = null
 let uiOpen = false
@@ -473,8 +475,13 @@ function applyMainWindowMousePolicy() {
   const inModel = modelBounds
     && pt.x >= wb.x + modelBounds.x && pt.x <= wb.x + modelBounds.x + modelBounds.width
     && pt.y >= wb.y + modelBounds.y && pt.y <= wb.y + modelBounds.y + modelBounds.height
+  // ★ 横条区域命中：鼠标在横条矩形内 ⇒ 可交互（可拖动/拉伸/点✕），
+  //   横条之外照常穿透 —— 用户要求"只有横条那一小块可控制，其余画面不受影响"。
+  const inStrip = stripBounds
+    && pt.x >= wb.x + stripBounds.x && pt.x <= wb.x + stripBounds.x + stripBounds.width
+    && pt.y >= wb.y + stripBounds.y && pt.y <= wb.y + stripBounds.y + stripBounds.height
   const inWindow = pt.x >= wb.x && pt.x <= wb.x + wb.width && pt.y >= wb.y && pt.y <= wb.y + wb.height
-  setMainWindowIgnoreMouseEvents(!(inModel || rendererInteractive || (uiOpen && inWindow)))
+  setMainWindowIgnoreMouseEvents(!(inModel || inStrip || rendererInteractive || (uiOpen && inWindow)))
 }
 
 // 全局鼠标位置推送（渲染层坐标 = 屏幕坐标 - 虚拟边界原点）：
@@ -862,7 +869,7 @@ function createWindow() {
   setMouseInteractive(false)
   try { mainWindow.webContents.session.clearCache() } catch (_e) {}
   try { mainWindow.webContents.session.setCacheSizeLimit(0) } catch (_e) {}
-  mainWindow.loadURL(`${API_BASE}/agent-app/live2d-pet/index.html?runtime=electron&v=20261015-windowstable2`)
+  mainWindow.loadURL(`${API_BASE}/agent-app/live2d-pet/index.html?runtime=electron&v=20261017-stripbounds`)
   log('window.load', `${API_BASE}/agent-app/live2d-pet/index.html`)
   // 主进程轮询鼠标位置驱动穿透/交互（不依赖渲染层 forward 转发）
   // 60ms ≈ 16Hz：穿透策略与视线跟随共用，兼顾响应度与开销
@@ -943,6 +950,18 @@ function registerIpc() {
   ipcMain.on('mio-desktop:set-interactive', (_event, interactive) => setMouseInteractive(Boolean(interactive)))
   ipcMain.on('mio-desktop:model-bounds', (_event, bounds) => {
     modelBounds = bounds && Number.isFinite(bounds?.x) ? {
+      x: Number(bounds.x),
+      y: Number(bounds.y),
+      width: Number(bounds.width),
+      height: Number(bounds.height),
+    } : null
+  })
+  // ★ 横条命中区（2026-10-17 用户裁决）：横条是全屏透明窗口里的一个小元素，
+  //   之前渲染层在横条可见时 setInteractive(true) ⇒ **整个窗口**可交互 ⇒
+  //   桌宠窗口后面的整块屏幕（如 B 站视频）全被挡住。改为照抄 modelBounds 的
+  //   区域命中机制：渲染层上报横条矩形，主进程只在鼠标落进这一小块时才可交互。
+  ipcMain.on('mio-desktop:strip-bounds', (_event, bounds) => {
+    stripBounds = bounds && Number.isFinite(bounds?.x) && Number(bounds.width) > 0 ? {
       x: Number(bounds.x),
       y: Number(bounds.y),
       width: Number(bounds.width),

@@ -3769,11 +3769,13 @@
     const grips = el ? Array.from(el.querySelectorAll('[data-strip-grip]')) : []
 
     // ── 宽度持久化：用户拉伸过就记下来（跨会话保留），没拉伸过则按内容自适应 ──
+    // ★ 用户裁决（2026-10-17）：**不设上限，任意拉长**。只保留一个小宽度下限，
+    //   防止拉没了看不见；上限交给屏幕实际宽度（CSS max-width: 96vw 兜底）。
     const KEY_WIDTH = 'mio-pet-strip-width'
     const MIN_W = 150
-    const MAX_W = 560
     function clampWidth(px) {
-      return Math.max(MIN_W, Math.min(MAX_W, Math.round(px)))
+      const maxW = Math.max(MIN_W, Math.floor(window.innerWidth * 0.96))
+      return Math.max(MIN_W, Math.min(maxW, Math.round(px)))
     }
     function applyWidth(px) {
       if (!el) return
@@ -3845,9 +3847,9 @@
       hideTimer = null
       buffer = ''
       if (textEl) textEl.innerHTML = ''
-      // 横条收起了 ⇒ 把交互权交还给原有鼠标策略（鼠标在模型上才可交互，其余穿透）。
-      // 交给 updateMousePassThrough 按当前鼠标位置重新判定，而不是硬置 false
-      // （否则鼠标记在模型上时也会变成穿透，反而点不到桌宠本体）。
+      // 横条收起 ⇒ 先撤销命中区（鼠标策略立刻回到"仅模型区域可交互"），
+      // 再交还交互权。不撤销的话主进程还按旧矩形放行一个空区域的命中。
+      reportStripBounds()
       try { updateMousePassThrough(true) } catch (_) { setInteractive(false) }
     }
 
@@ -3876,6 +3878,25 @@
       return s
     }
 
+    // ★ 横条命中区上报（2026-10-17 用户裁决）：横条是全屏透明窗口里的一个小元素。
+    //   踩坑记录：第一版在横条可见时 setInteractive(true) —— interactive 是**整个窗口**
+    //   级别的开关，结果横条显示期间桌宠窗口后面的整块屏幕（如 B 站视频）全被这层
+    //   透明窗口挡住。正确做法是照抄 modelBounds 的**区域命中**机制：把横条的矩形
+    //   上报给主进程（mio-desktop:strip-bounds），主进程只在鼠标落进这一小块时才
+    //   关穿透 —— 横条随时可拖/可拉伸/可点✕，其余画面完全不受影响。
+    function reportStripBounds() {
+      if (!window.mioDesktop || typeof window.mioDesktop.setStripBounds !== 'function') return
+      if (!visible || el.hidden) {
+        window.mioDesktop.setStripBounds(null)
+        return
+      }
+      const r = el.getBoundingClientRect()
+      window.mioDesktop.setStripBounds({
+        x: Math.round(r.left), y: Math.round(r.top),
+        width: Math.ceil(r.width), height: Math.ceil(r.height),
+      })
+    }
+
     function render() {
       if (textEl) {
         // 用 innerHTML 才能让 <code> 生效；renderStripText 已整体转义，安全。
@@ -3884,13 +3905,9 @@
       }
       el.hidden = false
       visible = true
-      // ★ 横条可见 ⇒ 窗口必须可交互。
-      //   踩过的坑：主进程 applyMainWindowMousePolicy() 只在
-      //     inModel || rendererInteractive || (uiOpen && inWindow)
-      //   时才关掉穿透。横条画在**模型外面**，于是窗口整体处于 setIgnoreMouseEvents(true)，
-      //   横条上的 ✕ / 拖动 / 拉伸全都收不到事件 —— 表现为"点不动，只能右键开菜单才能关"。
-      //   修法：横条显示期间主动置 interactive，隐藏时再交还给原有的鼠标策略。
-      setInteractive(true)
+      // 横条可见 ⇒ 上报命中区（主进程按区域关穿透）。**不要**在这里
+      // setInteractive(true)：那是整窗开关，会把屏幕全挡住。
+      reportStripBounds()
     }
 
     /** 统一的"能不能显示"判定：禁用 / 用户已关 / 气泡总开关关闭 时都拒绝。 */
@@ -3928,6 +3945,8 @@
         el.style.top = `${top}px`
         el.style.right = 'auto'
         el.style.bottom = 'auto'
+        // 拖动中矩形在变：同步命中区，否则鼠标策略按旧矩形放行
+        reportStripBounds()
       })
 
       function endDrag(ev) {
@@ -3971,6 +3990,8 @@
               el.style.left = `${startLeft + (startW - w)}px`
               el.style.right = 'auto'
             }
+            // 拉伸中矩形在变：同步命中区
+            reportStripBounds()
           }
           function onUp(e2) {
             el.classList.remove('resizing')

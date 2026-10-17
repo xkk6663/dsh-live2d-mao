@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('mioDesktop', {
   getState: () => ipcRenderer.invoke('mio-desktop:get-state'),
   setInteractive: (interactive) => ipcRenderer.send('mio-desktop:set-interactive', Boolean(interactive)),
   setModelBounds: (bounds) => ipcRenderer.send('mio-desktop:model-bounds', bounds || null),
+  setStripBounds: (bounds) => ipcRenderer.send('mio-desktop:strip-bounds', bounds || null),
   setUiOpen: (open) => ipcRenderer.send('mio-desktop:ui-open', Boolean(open)),
   setClickThroughLocked: (enabled) => ipcRenderer.send('mio-desktop:set-click-through-locked', Boolean(enabled)),
   setLockControlAnchor: (bounds) => ipcRenderer.send('mio-desktop:set-lock-control-anchor', bounds),
