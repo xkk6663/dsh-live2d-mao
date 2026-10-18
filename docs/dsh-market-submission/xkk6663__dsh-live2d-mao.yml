@@ -1,23 +1,13 @@
-# 投稿文件：data/plugins/xkk6663__dsh-live2d-mao.yml
+# 投稿文件：data/plugins/xkk6663__dsh-live2d-mao--packages-dsh-live2d-mao.yml
 #
-# 用法（等仓库满 1 天后再做，即 2026-10-18 13:53 之后）：
-#   1. fork https://github.com/awesome-dsh-plugin/awesome-dsh-plugin
-#   2. 在 fork 里新建 data/plugins/xkk6663__dsh-live2d-mao.yml
-#      内容就是下面注释头之后的部分（本注释头不要带过去）
-#   3. 提 PR，标题：Add dsh-live2d-mao (DSH-specialized Live2D desktop pet)
+# ★ 2026-10-18 修正（CI 反馈）：本仓库是 monorepo，插件在 packages/dsh-live2d-mao/ 子包，
+#   仓库根 package.json 没有 dsh.bundle。故 url 必须指向子目录、name 用 owner/repo#subname 形式，
+#   文件名也按子包规则变成 <owner>__<repo>--packages-<pkg>.yml。
 #
-# 文件名规则：data/plugins/<owner>__<repo>.yml（双下划线）
-# ⚠ 描述含 ": " 必须加单引号（YAML 会当成嵌套键）——已加。
-# ⚠ 不要写 npm: / version: / screenshots: / capabilities: 字段
-#   ——这些由市场自动采集：
-#     · npm 映射与版本 → probe-npm.mjs 自动探测
-#     · 截图 → 读本仓库 package.json 旁的 screenshots.json（probe-screenshots.mjs）
-#     · 能力清单 → 按代码重算
-#
-# 写法对标 catalog 里同类桌面挂件的紧凑风格：定位句 + 冒号 + 斜杠分组特性，不写完整解释。
-# 数量词均已对代码核实（维护者会逐条数）：12 态 / 8 款模型 / 7 类音效。
-url: https://github.com/xkk6663/dsh-live2d-mao
-name: xkk6663/dsh-live2d-mao
+# 已提交 PR: https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/7889
+
+url: https://github.com/xkk6663/dsh-live2d-mao/tree/main/packages/dsh-live2d-mao
+name: xkk6663/dsh-live2d-mao#dsh-live2d-mao
 category: fun
 description:
   en: 'DSH desktop Live2D pet that needs no API key or token. 12-phase real-time state (planning/thinking/executing-tool/streaming/waiting-input/awaiting-approval/complete/error), tool-status bubble naming the tool in use, token-by-token streaming strip with code highlighting and scrollback, phase-coloured head badge with per-phase custom colours, per-model motion/expression slot binding, 8 built-in models, drag inertia, lock position, Shift-drag, 10-100% opacity, eye tracking, 7 event sounds.'
