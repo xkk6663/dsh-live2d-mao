@@ -719,59 +719,6 @@
     return { width: 280 * percent, height: 400 * percent }
   }
 
-  /**
-   * 桌宠可活动的边界（**model.x / model.y「模型中心」** 的合法范围）。
-   *
-   * 2026-10-18 用户报障：把桌宠甩到屏幕外就拉不回来了。
-   * 原实现松手后 model.x/y 一路累加、无任何限位，桌宠直接滑出可视区域。
-   *
-   * 坐标关系（见 fitModel）：
-   *   model.x = position_x + target.width  / 2   ← position 是模型**左上角**
-   *   model.y = position_y + target.height / 2   （再加 verticalOffset）
-   * 所以「整个身体都在屏内」⇒ position ∈ [0, vw - target.width]
-   *                        ⇒ model.x  ∈ [halfW, vw - halfW]
-   * 这里直接用 model 中心坐标系做钳制，与拖动/惯性用的是同一套坐标，不需要换算。
-   */
-  function petBounds() {
-    const t = targetSize()
-    const vw = window.innerWidth || 1920
-    const vh = window.innerHeight || 1080
-    const halfW = t.width / 2
-    const halfH = t.height / 2
-    // 极小屏兜底：模型比屏还大时，钳到正中间（避免 min > max 造成抖动）
-    return {
-      minX: Math.min(halfW, vw / 2),
-      maxX: Math.max(vw - halfW, vw / 2),
-      minY: Math.min(halfH, vh / 2),
-      maxY: Math.max(vh - halfH, vh / 2),
-    }
-  }
-
-  /**
-   * 把模型钳进边界，并把越界方向的速度**反向**（带能量损耗）。
-   *
-   * 物理直觉：撞墙不是"停住"，而是**反弹**，且损失一部分能量（这里保留 62%）。
-   * 逐轴独立处理 —— 撞左右只反 vx，撞上下只反 vy，斜着撞角两边都反。
-   *
-   * @param {{x:number,y:number}} pos 当前模型中心（就地修正后返回）
-   * @param {{vx:number,vy:number}} vel 当前速度（px/s）
-   * @returns {{pos:{x:number,y:number}, vel:{vx:number,vy:number}, bounced:boolean}}
-   */
-  function bounceIntoBounds(pos, vel) {
-    const b = petBounds()
-    const RESTITUTION = 0.62   // 反弹保留的能量比例（<1 表示会损耗，避免永动）
-    let x = pos.x
-    let y = pos.y
-    let vx = vel.vx
-    let vy = vel.vy
-    let bounced = false
-    if (x < b.minX) { x = b.minX; vx = Math.abs(vx) * RESTITUTION; bounced = true }
-    else if (x > b.maxX) { x = b.maxX; vx = -Math.abs(vx) * RESTITUTION; bounced = true }
-    if (y < b.minY) { y = b.minY; vy = Math.abs(vy) * RESTITUTION; bounced = true }
-    else if (y > b.maxY) { y = b.maxY; vy = -Math.abs(vy) * RESTITUTION; bounced = true }
-    return { pos: { x, y }, vel: { vx, vy }, bounced }
-  }
-
   function fitModel() {
     if (!model) return
     model.scale.set(1)
@@ -792,17 +739,12 @@
       const vh = Number(virtual.height) || window.innerHeight
       const marginX = Math.min(72, Math.max(32, vw * 0.08))
       const marginY = Math.min(96, Math.max(48, vh * 0.1))
-      // 2026-10-18：恢复了限位。原来写"原样恢复不做限位"，结果是**历史上被甩到屏外
-      // 的位置会原样恢复**，桌宠启动即不可见、且无法拖回来（用户报障的成因之一）。
-      // 现在按模型中心 ± 半尺寸钳进可视区，保证启动时整个身体都在屏内。
-      const t = targetSize()
-      const halfW = t.width / 2
-      const halfH = t.height / 2
-      posX = Math.min(Math.max(posX, halfW), Math.max(halfW, vw - halfW))
-      posY = Math.min(Math.max(posY, halfH), Math.max(halfH, vh - halfH))
-      model.x = posX - Number(virtual.x || 0) + t.width / 2
-      model.y = posY - Number(virtual.y || 0) + t.height / 2
-        + t.height * Number(settings.live2d_vertical_offset || 0)
+      // 位置原样恢复，不做任何限位（用户自由拖拽）
+      posX = posX
+      posY = posY
+      model.x = posX - Number(virtual.x || 0) + target.width / 2
+      model.y = posY - Number(virtual.y || 0) + target.height / 2
+        + target.height * Number(settings.live2d_vertical_offset || 0)
     } else {
       model.x = window.innerWidth / 2
       model.y = window.innerHeight * (0.5 + Number(settings.live2d_vertical_offset || 0))
@@ -3235,13 +3177,8 @@
     pointerDown.lastT = now
     if (electronRuntime && model) {
       if (pointerDown.canDrag) {
-        // 拖动中同样钳在边界内：用户把鼠标甩出屏幕外时，桌宠最多贴到边缘，不会跟丢
-        const clamped = bounceIntoBounds(
-          { x: pointerDown.modelX + dx, y: pointerDown.modelY + dy },
-          { vx: 0, vy: 0 },
-        )
-        model.x = clamped.pos.x
-        model.y = clamped.pos.y
+        model.x = pointerDown.modelX + dx
+        model.y = pointerDown.modelY + dy
       }
       updateSpeechBubblePosition()
       updateLockControlAnchor()
@@ -3282,7 +3219,6 @@
       sendSocket('dragged', { distance: Math.round(Math.hypot(dx, dy)), x: nextX, y: nextY })
       // ★ 拖拽惯性（2026-10-17 交互打磨）：松手后按拖动末速度继续滑行，阻尼衰减到停。
       //   只在 Electron + 模型存在 + 惯性开关开启 + 速度够大时启动。
-      //   2026-10-18 补：滑行途中撞到屏幕边界要**反弹**（否则会甩出屏幕、拉不回来）。
       if (settings.live2d_pet_inertia !== false && model && Math.hypot(interaction.vx || 0, interaction.vy || 0) > 120) {
         let vx = interaction.vx || 0
         let vy = interaction.vy || 0
@@ -3295,16 +3231,10 @@
           last = now
           vx *= damp
           vy *= damp
-          // 先按速度推进，再统一做边界反弹（逐轴独立，斜撞角两边都反）
-          const next = bounceIntoBounds(
-            { x: (model.x || 0) + vx * dt, y: (model.y || 0) + vy * dt },
-            { vx, vy },
-          )
-          model.x = next.pos.x
-          model.y = next.pos.y
-          vx = next.vel.vx
-          vy = next.vel.vy
-          if (next.bounced) petSound('release')   // 撞墙给一点听觉反馈（复用释放音，无需新素材）
+          const mvx = vx * dt
+          const mvy = vy * dt
+          model.x = (model.x || 0) + mvx
+          model.y = (model.y || 0) + mvy
           updateSpeechBubblePosition()
           updateLockControlAnchor()
           if (Math.hypot(vx, vy) > minV) {
@@ -3324,24 +3254,6 @@
         }
         if (inertiaRaf) cancelAnimationFrame(inertiaRaf)
         inertiaRaf = requestAnimationFrame(step)
-      } else if (model) {
-        // 没有惯性（速度太小 / 开关关闭）也要把位置钳回边界内：
-        // 用户可能只是慢慢拖到屏幕外松手，同样不能让它留在外面。
-        const clamped = bounceIntoBounds({ x: model.x || 0, y: model.y || 0 }, { vx: 0, vy: 0 })
-        if (clamped.pos.x !== model.x || clamped.pos.y !== model.y) {
-          model.x = clamped.pos.x
-          model.y = clamped.pos.y
-          updateSpeechBubblePosition()
-          updateLockControlAnchor()
-          const fx = Math.round(interaction.positionX + (model.x - (interaction.modelX || 0)))
-          const fy = Math.round(interaction.positionY + (model.y - (interaction.modelY || 0)))
-          settings.position_x = fx
-          settings.position_y = fy
-          request('/api/companion/position', {
-            method: 'PATCH',
-            body: JSON.stringify({ x: fx, y: fy }),
-          }).catch(() => {})
-        }
       }
     } else if (!wasDragged) {
       if (settings.live2d_click_motion) playMotion(semanticMotion('touch'), undefined, { force: true })
