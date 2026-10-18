@@ -1081,6 +1081,118 @@ else {
   })
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 退出时连带关闭后端（2026-10-18 修 bug）
+//
+// 症状（用户报障）：右键「退出桌宠」只结束了 UI 进程，后端 python 仍在跑并占着
+//   :8000，导致 DSH 自己升版本、换 host 端口时被堵住。
+//
+// 根因：后端由 start_mio.ps1 用 Start-Process 起成**独立隐藏进程**，与 Electron
+//   没有父子关系；原来的 before-quit 只清 UI 侧（定时器/窗口/modelServer），
+//   从来没碰后端。
+//
+// 修法（两级，先优雅后兜底）：
+//   ① POST /api/runtime/self-shutdown —— 后端走正常 lifespan 清理再退出；
+//   ② 等 ~1.2s，若 :8000 仍在监听 → 按「端口 + 命令行」**精确**匹配杀进程。
+//      绝不能按进程名 "python" 杀：用户可能开着别的 Python 项目。
+//
+// 只在**用户主动退出**时才做（quitting 由菜单/close 消息置位），单实例锁失败
+// 那条路径不动别人的后端。
+// ─────────────────────────────────────────────────────────────────────────────
+function backendStillListening() {
+  return new Promise((resolve) => {
+    const req = http.request(
+      { host: '127.0.0.1', port: 8000, path: '/api/runtime/policies', method: 'GET', timeout: 700 },
+      (res) => { res.resume(); resolve(true) },
+    )
+    req.on('error', () => resolve(false))
+    req.on('timeout', () => { req.destroy(); resolve(false) })
+    req.end()
+  })
+}
+
+function askBackendShutdown() {
+  return new Promise((resolve) => {
+    const body = '{}'
+    const req = http.request(
+      `${API_BASE}/api/runtime/self-shutdown`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+        timeout: 1500,
+      },
+      (res) => { res.resume(); resolve(res.statusCode >= 200 && res.statusCode < 300) },
+    )
+    req.on('error', () => resolve(false))
+    req.on('timeout', () => { req.destroy(); resolve(false) })
+    req.write(body)
+    req.end()
+  })
+}
+
+/** 兜底：精确杀掉监听 8000 且命令行是本项目 uvicorn 的进程。 */
+function killBackendByPort() {
+  try {
+    const { execFileSync } = require('child_process')
+    // 找监听 :8000 的 PID（Get-NetTCPConnection 是 Windows 自带，无需额外依赖）
+    const psOut = execFileSync(
+      'powershell',
+      ['-NoProfile', '-Command',
+        "(Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue).OwningProcess | Sort-Object -Unique"],
+      { encoding: 'utf8', timeout: 4000, windowsHide: true },
+    )
+    const pids = String(psOut).split(/\s+/).map((s) => Number(s.trim())).filter((n) => Number.isInteger(n) && n > 0)
+    for (const pid of pids) {
+      // 二次确认：命令行必须同时含 uvicorn 与 app.main:app，避免误杀别的东西
+      let cmdline = ''
+      try {
+        cmdline = String(execFileSync(
+          'powershell',
+          ['-NoProfile', '-Command', `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`],
+          { encoding: 'utf8', timeout: 4000, windowsHide: true },
+        ) || '')
+      } catch (_) { continue }
+      if (!/uvicorn/i.test(cmdline) || !/app\.main:app/i.test(cmdline)) continue
+      try {
+        process.kill(pid, 'SIGTERM')
+        log('backend.kill', `已按端口精确结束后端 pid=${pid}`)
+      } catch (_) {
+        try { execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { timeout: 4000, windowsHide: true }) } catch (_e) {}
+      }
+    }
+    if (!pids.length) log('backend.kill', '未发现监听 8000 的进程')
+  } catch (err) {
+    log('backend.kill.failed', String(err && err.message ? err.message : err))
+  }
+}
+
+let backendShutdownStarted = false
+
+/**
+ * 关闭后端。返回 Promise，最迟约 3.5s 内 resolve（不阻塞退出太久）。
+ */
+async function shutdownBackend() {
+  if (backendShutdownStarted) return
+  backendShutdownStarted = true
+  try {
+    const alive = await backendStillListening()
+    if (!alive) { log('backend.shutdown', '后端未运行，跳过'); return }
+    const accepted = await askBackendShutdown()
+    log('backend.shutdown', accepted ? '已请求后端自关闭' : '自关闭端点不可用，走兜底')
+    // 给 lifespan 清理留时间；期间轮询确认它真的退出了
+    for (let i = 0; i < 8; i += 1) {
+      await new Promise((r) => setTimeout(r, 200))
+      if (!(await backendStillListening())) { log('backend.shutdown', '后端已退出'); return }
+    }
+    log('backend.shutdown', '后端未在期限内退出，按端口精确清理')
+    killBackendByPort()
+    await new Promise((r) => setTimeout(r, 300))
+  } catch (err) {
+    log('backend.shutdown.failed', String(err && err.message ? err.message : err))
+    try { killBackendByPort() } catch (_) {}
+  }
+}
+
 app.on('window-all-closed', (event) => {
   if (!quitting) event.preventDefault()
 })
@@ -1089,10 +1201,29 @@ app.on('window-all-closed', (event) => {
 //   它拉起 live2d-pet/overlay.html，该页调用 /api/xiaozhi/vision-bubble（小智官方云视觉），
 //   随小智插件阉割已删除。将来若做 DSH 侧屏幕问答，应走新的 DSH 视觉通路，不要复活这套。
 
-app.on('before-quit', () => {
+let quitCleanupDone = false
+
+app.on('before-quit', (event) => {
   quitting = true
   clearInterval(topmostWatchdog)
   clearInterval(parentWatchdog)
   if (chatWindow && !chatWindow.isDestroyed()) chatWindow.destroy()
   if (modelServer) modelServer.close()
+
+  // 后端清理：异步做完再真正退出。已经做完就直接放行（否则会二次进入这里）。
+  if (!quitCleanupDone) {
+    event.preventDefault()
+    shutdownBackend().finally(() => {
+      quitCleanupDone = true
+      app.quit()     // 再走一轮 before-quit，这次直接放行
+    })
+  }
+})
+
+// 兜底：万一上面那条路径被打断（比如被杀软拦、或 app.quit 被其它监听器取消），
+//   will-quit 时再同步踢一脚 —— 此时已无法 await，用同步精确杀。
+app.on('will-quit', () => {
+  try {
+    if (!backendShutdownStarted) killBackendByPort()
+  } catch (_) {}
 })

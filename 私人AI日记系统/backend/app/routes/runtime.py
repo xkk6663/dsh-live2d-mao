@@ -2,8 +2,12 @@
 from datetime import datetime, timedelta
 from contextlib import closing
 import math
+import os
+import signal
+import threading
+import time
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from .. import db, model_runtime as runtime
@@ -72,3 +76,32 @@ async def usage(days: int = Query(30, ge=1, le=365)):
                       "unknown_cost_calls": len(selected)-len(known),
                       "p95_duration_ms": durations[math.ceil(len(durations)*.95)-1] if durations else None})
     return {"days": days, "modes": modes, "scope": "模型运行时启用后的请求"}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 自关闭（2026-10-18 修 bug：退出桌宠不彻底，只结束 UI 没结束后端）
+#
+# 背景：后端由 start_mio.ps1 用 Start-Process 起成**独立隐藏进程**，与 Electron
+#   桌宠没有任何父子关系。桌宠点「退出」只走 app.quit()，后端继续占着 :8000；
+#   下次 DSH 升级换 host 端口时就会撞上「端口被占」。
+#
+# 修法：桌宠在 before-quit 里先 POST 本端点 → 后端**走正常 lifespan 清理**再退出
+#   （而不是被强杀），桌宠侧若调用失败再回退到「按端口 + 命令行精确匹配」杀进程。
+#
+# 安全：只接受**本机回环**请求（127.0.0.1 / ::1）。这个进程只监听 127.0.0.1，
+#   但显式再校验一次 —— 一个能关掉后端的端点不该有任何被外部触达的可能。
+# ─────────────────────────────────────────────────────────────────────────────
+@router.post("/self-shutdown")
+async def self_shutdown(request: Request):
+    client_host = (request.client.host if request.client else "") or ""
+    if client_host not in {"127.0.0.1", "::1", "::ffff:127.0.0.1"}:
+        raise HTTPException(status_code=403, detail="只接受本机回环请求。")
+
+    def _die() -> None:
+        # 留一点时间把响应写回去，再给主进程发 SIGTERM —— uvicorn 收到后
+        # 正常走 lifespan.shutdown（关边车、存状态），不是硬杀。
+        time.sleep(0.4)
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    threading.Thread(target=_die, name="self-shutdown", daemon=True).start()
+    return {"ok": True, "message": "后端正在关闭"}
