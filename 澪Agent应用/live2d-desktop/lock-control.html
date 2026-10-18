@@ -65,10 +65,23 @@
       const applyState = (state) => {
         const locked = Boolean(state.locked)
         button.classList.toggle('locked', locked)
-        button.title = locked ? '关闭固定并穿透' : '开启固定并穿透'
+        // ★ 2026-10-18 用户裁决：左键 = 解锁/上锁，**右键 = 复位到右下角**。
+        //   原来解锁会顺带复位（搞错了需求），现在拆成两个动作：
+        //   想找回桌宠就右键点锁，而不是被迫改变锁定状态。
+        button.title = locked
+          ? '左键：关闭固定并穿透　|　右键：把桌宠叫回右下角'
+          : '左键：开启固定并穿透　|　右键：把桌宠叫回右下角'
         button.setAttribute('aria-label', button.title)
       }
+      // 左键：切换锁定（原有行为）
       button.addEventListener('click', () => window.mioLockControl.toggle())
+      // 右键：复位桌宠到右下角；preventDefault 掉浏览器菜单
+      button.addEventListener('contextmenu', (e) => {
+        e.preventDefault()
+        if (window.mioLockControl && typeof window.mioLockControl.reset === 'function') {
+          window.mioLockControl.reset()
+        }
+      })
       window.mioLockControl.onState(applyState)
     </script>
   </body>

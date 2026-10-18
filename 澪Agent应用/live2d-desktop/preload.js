@@ -32,6 +32,12 @@ contextBridge.exposeInMainWorld('mioDesktop', {
     ipcRenderer.on('mio-desktop:click-through-changed', listener)
     return () => ipcRenderer.removeListener('mio-desktop:click-through-changed', listener)
   },
+  // ★ 锁图标右键 → 主进程转发 → 渲染层把桌宠复位到右下角（2026-10-18）
+  onResetPosition: (callback) => {
+    const listener = () => callback()
+    ipcRenderer.on('mio-desktop:reset-position', listener)
+    return () => ipcRenderer.removeListener('mio-desktop:reset-position', listener)
+  },
   onPetEvent: (callback) => {
     const listener = (_event, payload) => callback(payload)
     ipcRenderer.on('mio-pet-event', listener)

@@ -993,6 +993,13 @@ function registerIpc() {
   ipcMain.on('mio-lock-control:toggle', () => {
     setClickThroughLocked(!clickThroughLocked, true)
   })
+  // ★ 2026-10-18 用户裁决：锁图标**右键 = 把桌宠叫回右下角**（左键仍是上/解锁）。
+  //   实现在渲染层（那里才知道模型尺寸与虚拟屏偏移），主进程只负责转发。
+  ipcMain.on('mio-lock-control:reset', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('mio-desktop:reset-position')
+    }
+  })
   ipcMain.on('mio-desktop:set-always-on-top', (_event, enabled) => {
     desiredAlwaysOnTop = Boolean(enabled)
     restoreWindowVisibility()

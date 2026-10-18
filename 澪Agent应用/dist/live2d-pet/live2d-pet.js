@@ -3027,22 +3027,30 @@
   }
 
   /**
-   * 桌宠复位到默认初始位置（2026-10-18 用户需求）。
+   * 桌宠复位到**右下角**默认位置（2026-10-18 用户需求，二次修正）。
    *
-   * 背景：桌宠原来可以被拖/甩到屏幕外，然后就拉不回来了（用户已遇到）。
-   * 反弹方案实测手感怪异，用户要求回滚 —— 改为**手动救援**：
-   * 右键点「解锁」时自动把桌宠送回默认位置，等于给用户一个"叫回来"的开关。
+   * 背景：桌宠可被拖/甩到屏幕外拉不回来；物理反弹手感怪异已回滚。
+   * 用户最终裁决：**右键点锁图标 = 把桌宠叫回右下角**（左键仍是上/解锁）。
    *
-   * 默认位置与 fitModel / 后端 DEFAULT_CONFIG 保持一致（80, 420）。
-   * 同时清掉未完成的惯性与拖动状态，避免复位后被旧的 rAF 又推走。
+   * 注意 position_x/y 的语义是模型**左上角**（见 fitModel），所以右下角 = 
+   *   x = 屏宽 - 模型宽, y = 屏高 - 模型高
+   * 留一点边距（12px），别让模型紧贴屏幕边缘显得局促。
    */
   async function resetToDefaultPosition() {
     if (inertiaRaf) { cancelAnimationFrame(inertiaRaf); inertiaRaf = null }
     pointerDown = null
     dragged = false
     root.classList.remove('dragging')
-    const defX = 80
-    const defY = 420
+
+    const virtual = desktopState.bounds || { x: 0, y: 0 }
+    const vw = Number(virtual.width) || window.innerWidth
+    const vh = Number(virtual.height) || window.innerHeight
+    const t = targetSize()
+    const margin = 12
+    // 右下角：模型完整落在屏内，右下各留 margin
+    const defX = Math.max(0, Math.round(vw - t.width - margin))
+    const defY = Math.max(0, Math.round(vh - t.height - margin))
+
     settings.position_x = defX
     settings.position_y = defY
     try {
@@ -3051,9 +3059,8 @@
         body: JSON.stringify({ x: defX, y: defY }),
       })
     } catch (_) {}
-    // 模型位置由 fitModel 按 settings 重新计算（含多屏 virtual.x/y 偏移）
+    // 模型位置由 fitModel 按 settings 重算（含多屏 virtual.x/y 偏移）
     try { fitModel() } catch (_) {}
-    // 气泡/锁定控件也跟着重新锚定
     updateSpeechBubblePosition(true)
     updateLockControlAnchor(true)
     updateMousePassThrough(true)
@@ -3061,7 +3068,6 @@
 
   async function setClickThroughLocked(enabled, persist = true) {
     const locked = Boolean(enabled)
-    const wasLocked = Boolean(settings.live2d_click_through_locked)
     settings.live2d_click_through_locked = locked
     root.classList.toggle('click-through-locked', locked)
     contextMenu.hidden = true
@@ -3074,17 +3080,10 @@
     if (persist) {
       try { await persistCompanionSetting('live2d_click_through_locked', locked) } catch (_) {}
     }
-    if (locked) {
-      setInteractive(false)
-    } else {
-      // ★ 解锁 = 把桌宠叫回来（2026-10-18 用户裁决的防丢方案）。
-      //   仅当**真的从锁定变到解锁**时才复位 —— 避免重复的 applySettings/轮询
-      //   在解锁态下反复把用户刚拖好的位置弹回默认值。
-      if (wasLocked) {
-        try { await resetToDefaultPosition() } catch (_) {}
-      }
-      updateMousePassThrough(true)
-    }
+    // ★ 2026-10-18 二次修正：解锁**不再**复位 —— 用户明确要求「左键是解锁/开锁，
+    //   右键才是复位」。把两个动作拆开，解锁只改穿透状态，位置保持不动。
+    if (locked) setInteractive(false)
+    else updateMousePassThrough(true)
   }
 
   function setInteractive(interactive) {
@@ -3749,6 +3748,12 @@
       window.mioDesktop.onClickThroughChanged(async (enabled) => {
         await setClickThroughLocked(enabled, true)
       })
+      // ★ 锁图标右键 → 主进程转发 → 这里把桌宠叫回右下角（2026-10-18）
+      if (typeof window.mioDesktop.onResetPosition === 'function') {
+        window.mioDesktop.onResetPosition(async () => {
+          try { await resetToDefaultPosition() } catch (_) {}
+        })
+      }
       // Electron 穿透模式下渲染层收不到 mousemove：主进程高频推送全局鼠标位置，
       // 渲染层喂给 pixi-live2d 的视线聚焦。关键：把鼠标坐标压缩到模型周围区域再
       // focus——否则全屏坐标会映射成大幅转头/点头，看起来像"多动症"。
