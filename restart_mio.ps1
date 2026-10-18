@@ -48,29 +48,36 @@ $errLog      = Join-Path $root 'backend_err.log'
 $startLog    = Join-Path $root 'start_mio.log'
 
 # ────────────────────────────────────────────────────────────────────────────
-#  Electron 桌宠外壳的定位（**两仓库共存时的关键**）
+#  Electron 桌宠外壳的定位
 # ────────────────────────────────────────────────────────────────────────────
-#  本仓库（Mao-dsh-pet）的 `澪Agent应用/live2d-desktop/node_modules/` 是
-#  **gitignore 的**（clone 出来没有 electron.exe）。而 Mao 主仓库里有。
-#  桌宠运行时由两部分组成，来源可以不同、但必须都指向"含本次改动"的那份：
+#  ★ 2026-10-18 独立性改造：本项目**完全独立**，不依赖任何其它仓库/项目。
+#    原实现会去同级 `../Mao` 目录找 electron.exe 与 pet-instance —— 那是开发期便利，
+#    却让"单独 clone 本仓库"跑不起来（没有 Mao 目录就找不到 electron）。
+#    现在只认**本仓库内**与**标准安装位置**。
 #
+#  桌宠运行时由两部分组成，都必须来自本仓库：
 #    1) Electron **外壳**（main.js/preload 等，来自 live2d-desktop/）
-#    2) **页面内容** /agent-app/live2d-pet/* —— 由**后端**静态托管，
-#       即"后端在哪个仓库，页面就用哪个仓库的 dist"。
-#
-#  ⇒ 本次改动（横条 __mioPetStrip / 三通路解耦）在**页面内容**里，
-#    所以真正要紧的是"**后端**跑本仓库"。外壳用 Mao 的那份完全没问题
-#    （两仓库的 live2d-desktop 代码一致，node_modules 又没进版本库）。
-#
-#  故外壳按优先级找：本仓库优先，缺失则回落 Mao 主仓库。
-$electronCandidates = @(
+#    2) **页面内容** /agent-app/live2d-pet/* —— 由**后端**静态托管
+$electronCandidates = @()
+if ($env:MIO_ELECTRON_EXE) { $electronCandidates += $env:MIO_ELECTRON_EXE }
+$electronCandidates += @(
     (Join-Path $root '澪Agent应用\live2d-desktop\node_modules\electron\dist\electron.exe'),
-    (Join-Path (Split-Path -Parent $root) 'Mao\澪Agent应用\live2d-desktop\node_modules\electron\dist\electron.exe')
+    (Join-Path $root '澪Agent应用\node_modules\electron\dist\electron.exe'),
+    (Join-Path $env:APPDATA 'npm\node_modules\electron\dist\electron.exe'),
+    (Join-Path $env:LOCALAPPDATA 'pnpm\global\5\node_modules\electron\dist\electron.exe')
 )
 $electronExe = $null
 foreach ($cand in $electronCandidates) {
-    if (Test-Path $cand) { $electronExe = $cand; break }
+    if ($cand -and (Test-Path $cand)) { $electronExe = $cand; break }
 }
+if (-not $electronExe) {
+    Write-Host '  ❌ 找不到 electron.exe。请先安装桌宠外壳依赖：' -ForegroundColor Red
+    Write-Host '     cd 澪Agent应用\live2d-desktop' -ForegroundColor Yellow
+    Write-Host '     npm ci' -ForegroundColor Yellow
+    Write-Host '     （或用环境变量 MIO_ELECTRON_EXE 显式指定）' -ForegroundColor Yellow
+    exit 1
+}
+Write-Host "  electron: $electronExe"
 # electron.exe -> dist -> electron -> node_modules -> live2d-desktop（即工作目录）
 #
 # ★ 关键修正（2026-10-17）：Electron **工作目录决定它加载哪份 main.js/preload.js**。
@@ -91,24 +98,31 @@ if (-not (Test-Path (Join-Path $electronWorkDir 'main.js'))) {
     }
 }
 
-# ★★ electron userData 锁目录（2026-10-17 真根因）：chromium 在 Windows 上创建
-#   单实例锁（SingletonLock）时，本仓库 clone 出来的 pet-data\pet-instance 会报
-#   Error 5（access denied）—— 具体是 Mao 目录上一条 AppContainer capability SID 的
-#   显式 Allow 规则在本仓库缺失所致，纯 ACL 复制（icacls/Set-Acl）无法稳定修复。
-#   已实测唯一可靠解：**复用 Mao 主仓库的 pet-instance** 作为 electron userData。
-#   pet-instance 只是 electron 的缓存/锁/localStorage，不含源码，两仓库共享无害。
-#   状态数据（Live2D桌宠）仍用本仓库，保证页面与模型走本仓库。
+# electron userData 锁目录：**只在本仓库内**（pet-data\pet-instance），不可写则退到用户 Temp。
+# 原实现强制复用同级 Mao 仓库的目录（跨仓库依赖），已删除。
+# 目录存在 ≠ 能写（AppContainer capability 情形会 Error 5），故实际写探测文件确认。
 $stateDir = Join-Path $root 'pet-data\Live2D桌宠'
-$instanceDir = Join-Path $root 'pet-data\pet-instance'
-$maoInstanceDir = Join-Path (Split-Path -Parent $root) 'Mao\pet-data\pet-instance'
-if (Test-Path $maoInstanceDir) {
-    # Mao 的 pet-instance 存在 → 用它（唯一验证能创建 SingletonLock 的路径）
-    $env:MIO_PET_INSTANCE_DIR = $maoInstanceDir
-} elseif (Test-Path $instanceDir) {
-    $env:MIO_PET_INSTANCE_DIR = $instanceDir
-} else {
-    New-Item -ItemType Directory -Force -Path $instanceDir | Out-Null
-    $env:MIO_PET_INSTANCE_DIR = $instanceDir
+$instanceCandidates = @(
+    (Join-Path $root 'pet-data\pet-instance'),
+    (Join-Path $env:TEMP 'mao-pet-instance')
+)
+$env:MIO_PET_INSTANCE_DIR = ''
+foreach ($dir in $instanceCandidates) {
+    if (-not $dir) { continue }
+    try {
+        if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir -ErrorAction Stop | Out-Null }
+        $probe = Join-Path $dir ('.write-probe-' + [guid]::NewGuid().ToString('N') + '.tmp')
+        Set-Content -Path $probe -Value 'ok' -ErrorAction Stop
+        Remove-Item $probe -Force -ErrorAction SilentlyContinue
+        $env:MIO_PET_INSTANCE_DIR = $dir
+        Write-Host "  instance: $dir"
+        break
+    } catch {
+        Write-Host "  instance 不可写，尝试下一个：$dir"
+    }
+}
+if (-not $env:MIO_PET_INSTANCE_DIR) {
+    Write-Host '  ⚠ 没有可写的 pet-instance 目录，桌宠可能无法启动' -ForegroundColor Yellow
 }
 $env:MIO_PET_STATE_DIR = $stateDir
 

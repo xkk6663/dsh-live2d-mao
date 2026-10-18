@@ -12,6 +12,7 @@ const {
 } = require('electron')
 const fs = require('fs')
 const http = require('http')
+const os = require('os')
 const path = require('path')
 const crypto = require('crypto')
 const { execFile } = require('child_process')
@@ -1044,58 +1045,75 @@ function registerIpc() {
       || path.join(process.env.LOCALAPPDATA || '', 'Programs', 'DeepSeek Harness', 'DeepSeek Harness.exe')
 
     // ① 找正在跑的 DSH 主窗口并激活
-    const psActivate = `
-$ErrorActionPreference = 'SilentlyContinue'
-Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-public class DshWin {
-  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
-  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);
-  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
-  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-  [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint a, uint b, bool f);
-  [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
-  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, IntPtr pid);
-}
-"@ -ErrorAction SilentlyContinue
-$target = Get-Process -Name 'DeepSeek Harness' -ErrorAction SilentlyContinue |
-  Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
-if (-not $target) { Write-Output 'NO-WINDOW'; exit 0 }
-$h = $target.MainWindowHandle
-if ([DshWin]::IsIconic($h)) { [DshWin]::ShowWindow($h, 9) | Out-Null }
-# 前台锁规避：附加到当前前台窗口的输入队列，再抢焦点
-$fg = [DshWin]::GetForegroundWindow()
-$fgThread = [DshWin]::GetWindowThreadProcessId($fg, [IntPtr]::Zero)
-$myThread = [DshWin]::GetCurrentThreadId()
-[DshWin]::AttachThreadInput($myThread, $fgThread, $true) | Out-Null
-[DshWin]::SetForegroundWindow($h) | Out-Null
-[DshWin]::AttachThreadInput($myThread, $fgThread, $false) | Out-Null
-Write-Output ('ACTIVATED ' + $target.Id)
-`
-    const runPs = (script) => new Promise((resolve) => {
-      // -EncodedCommand 避免引号/换行在 cmd → PowerShell 之间被拆坏
-      const encoded = Buffer.from(script, 'utf16le').toString('base64')
-      execFile('powershell', ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
+    //
+    // ⚠ 2026-10-18 修 bug：原实现把 PowerShell 脚本写成 JS 反引号模板字符串，
+    //   里面既有 PowerShell 的 here-string 又有 $ 变量，经过模板字面量后语义被破坏，
+    //   且依赖 `powershell` 在 PATH 里（Electron 从 DSH 继承的环境未必有）。
+    //   现在改成**普通字符串数组 join**（彻底避开反引号/插值），并用 powershell 的
+    //   绝对路径（%SystemRoot%\System32\...）+ 落盘脚本文件执行，不依赖 PATH。
+    const psLines = [
+      '$ErrorActionPreference = "SilentlyContinue"',
+      'Add-Type -TypeDefinition @"',
+      'using System;',
+      'using System.Runtime.InteropServices;',
+      'public class DshWin {',
+      '  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);',
+      '  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);',
+      '  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);',
+      '  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();',
+      '  [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint a, uint b, bool f);',
+      '  [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();',
+      '  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, IntPtr pid);',
+      '}',
+      '"@',
+      '$target = Get-Process -Name "DeepSeek Harness" -ErrorAction SilentlyContinue |',
+      '  Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1',
+      'if (-not $target) { Write-Output "NO-WINDOW"; exit 0 }',
+      '$h = $target.MainWindowHandle',
+      'if ([DshWin]::IsIconic($h)) { [DshWin]::ShowWindow($h, 9) | Out-Null }',
+      '$fg = [DshWin]::GetForegroundWindow()',
+      '$fgThread = [DshWin]::GetWindowThreadProcessId($fg, [IntPtr]::Zero)',
+      '$myThread = [DshWin]::GetCurrentThreadId()',
+      '[DshWin]::AttachThreadInput($myThread, $fgThread, $true) | Out-Null',
+      '[DshWin]::SetForegroundWindow($h) | Out-Null',
+      '[DshWin]::AttachThreadInput($myThread, $fgThread, $false) | Out-Null',
+      'Write-Output ("ACTIVATED " + $target.Id)',
+    ].join('\r\n')
+
+    // powershell 绝对路径（不依赖 PATH；Electron 从 DSH 继承的环境未必有 powershell）
+    const psExe = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+    const runPsScript = (scriptPath) => new Promise((resolve) => {
+      execFile(psExe, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath],
         { timeout: 8000, windowsHide: true },
-        (err, stdout) => resolve({ err, stdout: String(stdout || '') }))
+        (err, stdout, stderr) => resolve({ err, stdout: String(stdout || ''), stderr: String(stderr || '') }))
     })
 
     try {
-      const r1 = await runPs(psActivate)
+      // 脚本落盘到临时文件再执行：比 -EncodedCommand 更稳（长脚本/中文/引号都不怕）
+      const scriptPath = path.join(os.tmpdir(), `mao-dsh-activate-${process.pid}.ps1`)
+      // PowerShell 5.1 读 .ps1 默认按 ANSI；脚本纯 ASCII，安全
+      fs.writeFileSync(scriptPath, psLines, 'utf8')
+      let r1 = { stdout: '' }
+      try { r1 = await runPsScript(scriptPath) } catch (_) {}
+      try { fs.unlinkSync(scriptPath) } catch (_) {}
+
       if (/ACTIVATED/.test(r1.stdout)) {
         log('dsh.activate', r1.stdout.trim())
         return { ok: true, mode: 'activated', detail: r1.stdout.trim() }
       }
-      // ② 没在跑 → 启动它
-      if (fs.existsSync(DSH_EXE)) {
-        const { spawn } = require('child_process')
-        spawn(DSH_EXE, [], { detached: true, stdio: 'ignore', windowsHide: false }).unref()
-        log('dsh.launch', `已启动 ${DSH_EXE}`)
-        return { ok: true, mode: 'launched', detail: DSH_EXE }
+      if (/NO-WINDOW/.test(r1.stdout)) {
+        // ② DSH 没在跑（或没有窗口）→ 启动它
+        if (fs.existsSync(DSH_EXE)) {
+          const { spawn } = require('child_process')
+          spawn(DSH_EXE, [], { detached: true, stdio: 'ignore', windowsHide: false }).unref()
+          log('dsh.launch', `已启动 ${DSH_EXE}`)
+          return { ok: true, mode: 'launched', detail: DSH_EXE }
+        }
+        log('dsh.open.failed', 'DSH 未运行且找不到可执行文件')
+        return { ok: false, reason: 'dsh-not-found', detail: DSH_EXE }
       }
-      log('dsh.open.failed', '未找到 DSH 可执行文件')
-      return { ok: false, reason: 'dsh-not-found', detail: DSH_EXE }
+      log('dsh.open.failed', `激活脚本无预期输出｜stdout=${r1.stdout.trim()}｜stderr=${(r1.stderr || '').trim().slice(0, 200)}`)
+      return { ok: false, reason: 'activate-failed', detail: (r1.stderr || r1.stdout || '').trim().slice(0, 300) }
     } catch (err) {
       log('dsh.open.error', String(err && err.message ? err.message : err))
       return { ok: false, reason: 'error', detail: String(err && err.message ? err.message : err) }

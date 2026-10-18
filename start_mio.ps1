@@ -147,22 +147,61 @@ if ($electronRunning) {
     Write-Step '[2/2] 桌宠已在运行，跳过'
 } else {
     Write-Step '[2/2] 桌宠未运行，正在启动...'
-    # ★ electron.exe 回退：本仓库 node_modules 被 gitignore（clone 出来没有），
-    #   优先本仓库、缺失回落到 Mao 主仓库的 electron.exe 二进制（外壳代码仍用本仓库）。
-    if (-not (Test-Path $electronExe)) {
-        $maoElectron = Join-Path (Split-Path -Parent $root) 'Mao\澪Agent应用\live2d-desktop\node_modules\electron\dist\electron.exe'
-        if (Test-Path $maoElectron) { $electronExe = $maoElectron }
+    # ─────────────────────────────────────────────────────────────────────────
+    # electron.exe 探测（2026-10-18 独立性改造）
+    #
+    # ★ 原则：本项目**完全独立**，不依赖任何其它仓库/项目。
+    #   原实现会去同级 `../Mao` 目录找 electron.exe 和 pet-instance —— 那是开发期
+    #   的临时便利，但让"单独 clone 本仓库"无法运行，违反独立性。
+    #   全部删除，只认**本仓库内**与**标准安装位置**：
+    #   ① 环境变量 MIO_ELECTRON_EXE（显式指定，兜底逃生门）
+    #   ② 本仓库 live2d-desktop/node_modules（cd 澪Agent应用\live2d-desktop; npm ci）
+    #   ③ 本仓库 澪Agent应用/node_modules（统一在应用目录装依赖的情形）
+    #   ④ 全局 electron（npm i -g electron / pnpm add -g electron）
+    # ─────────────────────────────────────────────────────────────────────────
+    $candidates = @()
+    if ($env:MIO_ELECTRON_EXE) { $candidates += $env:MIO_ELECTRON_EXE }
+    $candidates += @(
+        (Join-Path $electronDir 'node_modules\electron\dist\electron.exe'),
+        (Join-Path $root '澪Agent应用\node_modules\electron\dist\electron.exe'),
+        (Join-Path $env:APPDATA 'npm\node_modules\electron\dist\electron.exe'),
+        (Join-Path $env:LOCALAPPDATA 'pnpm\global\5\node_modules\electron\dist\electron.exe')
+    )
+    foreach ($cand in $candidates) {
+        if ($cand -and (Test-Path $cand)) { $electronExe = $cand; break }
     }
-    # ★★ userData 锁目录（2026-10-17 真根因）：chromium 单实例锁在本仓库 clone 的
-    #   pet-data\pet-instance 报 Error 5，复用 Mao 主仓库的 pet-instance 可稳定创建。
-    #   pet-instance 只是缓存/锁，不含源码，共享无害；状态数据仍走本仓库。
-    $maoInstanceDir = Join-Path (Split-Path -Parent $root) 'Mao\pet-data\pet-instance'
-    if (Test-Path $maoInstanceDir) {
-        $env:MIO_PET_INSTANCE_DIR = $maoInstanceDir
-    } else {
-        $localInstance = Join-Path $root 'pet-data\pet-instance'
-        if (-not (Test-Path $localInstance)) { New-Item -ItemType Directory -Force -Path $localInstance | Out-Null }
-        $env:MIO_PET_INSTANCE_DIR = $localInstance
+    if (-not (Test-Path $electronExe)) {
+        Write-Step '      ❌ 找不到 electron.exe。请先安装桌宠外壳依赖：'
+        Write-Step '         cd 澪Agent应用\live2d-desktop'
+        Write-Step '         npm ci'
+        Write-Step '         （或用环境变量 MIO_ELECTRON_EXE 显式指定 electron.exe）'
+        Write-Step '      后端已就绪，桌宠窗口未启动。'
+        [Environment]::Exit(1)
+    }
+    Write-Step "      electron: $electronExe"
+
+    # userData 锁目录：**只在本仓库内**（pet-data\pet-instance），不可写则退到用户 Temp。
+    # 原实现复用同级 Mao 仓库的目录，属于跨仓库依赖，已删除。
+    $localInstance = Join-Path $root 'pet-data\pet-instance'
+    $tempInstance  = Join-Path $env:TEMP 'mao-pet-instance'
+    $env:MIO_PET_INSTANCE_DIR = ''
+    foreach ($dir in @($localInstance, $tempInstance)) {
+        if (-not $dir) { continue }
+        try {
+            if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir -ErrorAction Stop | Out-Null }
+            # 目录存在 ≠ 能写（AppContainer 情形会 Error 5），实际写一个探测文件确认
+            $probe = Join-Path $dir ('.write-probe-' + [guid]::NewGuid().ToString('N') + '.tmp')
+            Set-Content -Path $probe -Value 'ok' -ErrorAction Stop
+            Remove-Item $probe -Force -ErrorAction SilentlyContinue
+            $env:MIO_PET_INSTANCE_DIR = $dir
+            Write-Step "      instance: $dir"
+            break
+        } catch {
+            Write-Step "      instance 不可写，尝试下一个：$dir"
+        }
+    }
+    if (-not $env:MIO_PET_INSTANCE_DIR) {
+        Write-Step '      ❌ 没有可写的 pet-instance 目录，桌宠可能无法启动。'
     }
     $env:MIO_PET_STATE_DIR = $petStateDir
     # --no-sandbox: 当前系统（Win11 预览版 + 近期更新）Chromium 沙箱初始化崩溃，

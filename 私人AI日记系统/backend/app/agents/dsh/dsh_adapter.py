@@ -270,6 +270,30 @@ def default_workspace() -> str:
     return ""
 
 
+def _autodetect_enabled(sessions_root: str) -> bool:
+    """没有 dsh_config.json 时，判断是否该自动启用（2026-10-18 通用性改造）。
+
+    背景：`enabled` 默认 False，导致**新用户 clone 后必须手写配置**才能用 ——
+    但绝大多数情况下 DSH 就在标准位置（`%USERPROFILE%\\.dsh\\sessions`），
+    完全没必要让用户配。
+
+    判据（保守，宁可不启用也不误启用）：
+      · `DSH_HOME` 或 `~/.dsh/sessions` 目录**存在且非空**（真的有会话记录）
+    ⇒ 说明这台机器装过并用过 DSH，直接启用即可开箱即用。
+    用户仍可在 dsh_config.json 里写 `"enabled": false` 显式关掉（显式优先）。
+    """
+    try:
+        root = Path(sessions_root) if sessions_root else default_sessions_root()
+        if not root.is_dir():
+            return False
+        # 目录里至少有一个条目才算"用过 DSH"（空目录可能是刚装还没跑过）
+        for _ in root.iterdir():
+            return True
+        return False
+    except OSError:
+        return False
+
+
 def load_config() -> dict[str, Any]:
     default: dict[str, Any] = {
         "enabled": False,
@@ -286,13 +310,25 @@ def load_config() -> dict[str, Any]:
         "ws_url": "",
     }
     path = dsh_config_path()
+    explicit = False
     if path.exists():
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(data, dict):
                 default.update({k: v for k, v in data.items() if k in default})
+                explicit = "enabled" in data      # 用户显式写了 enabled 就以他为准
         except Exception:  # noqa: BLE001
             logger.warning("读取 dsh_config.json 失败，使用默认配置")
+
+    # ★ 2026-10-18 通用性改造：没写 enabled 时自动探测，换来"克隆即可用"。
+    #   不填 sessions_root 也自动落到 ~/.dsh/sessions（default_sessions_root 已支持）。
+    if not explicit and not default.get("enabled"):
+        root = str(default.get("sessions_root") or "").strip() or str(default_sessions_root())
+        if _autodetect_enabled(root):
+            default["enabled"] = True
+            if not str(default.get("sessions_root") or "").strip():
+                default["sessions_root"] = root
+            logger.info("检测到本机 DSH 会话目录，已自动启用 DSH 适配器：%s", root)
     return default
 
 
