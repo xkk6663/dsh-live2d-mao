@@ -782,6 +782,20 @@ def _bubble_images_dir() -> Path:
     return directory
 
 
+def _easter_eggs_dir() -> Path:
+    """彩蛋图目录（随仓库分发，不是运行时目录）。
+
+    ★ 2026-10-18 彩蛋功能：放这里的图**不进管理界面**，只参与桌宠点击时的随机抽取。
+    路径固定在 `澪Agent应用/dist/live2d-pet/easter-eggs/`（与本 backend 是兄弟目录），随 git 入库。
+
+    层级：companion.py → routes → app → backend → 私人AI日记系统 → 仓库根
+           parents[0]   parents[1] parents[2] parents[3]  parents[4]
+    所以仓库根 = parents[4]，不是 parents[3]（这里踩过一次，实测才确认）。
+    """
+    repo_root = Path(__file__).resolve().parents[4]
+    return repo_root / "澪Agent应用" / "dist" / "live2d-pet" / "easter-eggs"
+
+
 @router.get("/bubble-images")
 async def companion_bubble_images():
     def _list() -> list[dict[str, object]]:
@@ -799,9 +813,46 @@ async def companion_bubble_images():
                     "mtime": int(stat.st_mtime),
                 }
             )
+        # ★ 彩蛋池：与用户图池合并返回，但带 hidden=true ——
+        #   管理界面（bubble-panel-inject.js）跳过 hidden 项，桌宠随机抽图照常参与。
+        #   这样两边共用一个接口，不需要新增查询参数或第二个端点。
+        eggs = _easter_eggs_dir()
+        if eggs.is_dir():
+            for f in sorted(eggs.iterdir(), key=lambda p: p.name.lower()):
+                if not f.is_file() or f.suffix.lower() not in _BUBBLE_IMAGE_EXTENSIONS:
+                    continue
+                stat = f.stat()
+                items.append(
+                    {
+                        "name": f.name,
+                        "url": f"/api/companion/easter-eggs/{quote(f.name)}",
+                        "bytes": stat.st_size,
+                        "mtime": int(stat.st_mtime),
+                        "hidden": True,
+                        "easter": True,
+                    }
+                )
         return items
 
     return {"images": await asyncio.to_thread(_list)}
+
+
+@router.get("/easter-eggs/{name}")
+async def companion_easter_egg(name: str):
+    """彩蛋图本体（只在随机抽中时被桌宠请求，管理界面不会碰）。"""
+    if not name or "/" in name or "\\" in name or name in {".", ".."}:
+        raise HTTPException(status_code=400, detail="文件名无效。")
+    if Path(name).suffix.lower() not in _BUBBLE_IMAGE_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="不支持的图片格式。")
+    root = _easter_eggs_dir().resolve()
+    path = (root / name).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="路径越界。") from exc
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="图片不存在。")
+    return FileResponse(path)
 
 
 @router.get("/bubble-images/{name}")

@@ -878,7 +878,9 @@
     return fetch('/api/companion/bubble-images', { headers: { 'Cache-Control': 'no-cache' } })
       .then(function (r) { return r.json() })
       .then(function (j) {
-        images = (j && j.images) || []
+        // ★ 彩蛋图（hidden:true）只参与桌宠随机抽取，**不在素材库展示、也不可删除**。
+        //   后端把彩蛋池与用户图池合并返回，这里过滤掉即可 —— 无需第二个接口。
+        images = ((j && j.images) || []).filter(function (im) { return !(im && im.hidden) })
         if (container && container.isConnected) renderAll()
       })
       .catch(function () {})
@@ -914,7 +916,8 @@
         first: String(cb.first || ''),
         queue: Array.isArray(cb.queue) ? cb.queue.map(function (x) { return String(x || '') }) : [],
       }
-      images = (res[1] && res[1].images) || []
+      // ★ 同 refreshImages：彩蛋图（hidden）不进素材库
+      images = (((res[1] && res[1].images) || [])).filter(function (im) { return !(im && im.hidden) })
       sounds = (res[2] && res[2].sounds) || []
       renderAll()
     })

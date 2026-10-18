@@ -28,7 +28,7 @@ ACTIVE_VIEW_STALE_SECONDS = 300.0
 CONTEXT_MAX_CHARS = 5200
 VIEW_LABELS = {
     "unknown": "未知页面",
-    "onboarding": "首次启动向导",
+    # DSH 专用化：'onboarding' 标签已移除（六步向导整体删除，第一次打开即桌宠管理界面）
     "home": "首页",
     "chat": "对话",
     "diaries": "日记",

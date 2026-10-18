@@ -23,15 +23,6 @@
 .compact-reader-empty > span { max-width: 360px; font-size: 12px; line-height: 1.8; }
 .compact-reader-empty > button { flex-shrink: 0; min-height: 38px; margin-top: 7px; padding: 8px 16px; border-radius: 8px; }
 
-/* Onboarding controls share one scale and a full-width provider picker. */
-.onboarding-provider-form { padding: 18px; gap: 16px; border-radius: 12px; }
-.onboarding-provider-presets { display: block; }
-.onboarding-preset-field { display: grid; gap: 7px; font-size: 12px; color: var(--muted); }
-.onboarding-provider-presets button.app-select { min-height: 40px; justify-content: space-between; padding: 9px 12px; border-radius: 9px; font-size: 12px; font-weight: 400; background: #fff; color: var(--ink); }
-.onboarding-provider-fields { gap: 14px; }
-.onboarding-provider-fields label,.onboarding-manual-model { gap: 7px; font-size: 12px; }
-.onboarding-provider-fields input,.onboarding-manual-model input { min-height: 40px; font-size: 12px; border-radius: 9px; background: #fff; }
-.onboarding-provider-actions button,.onboarding-provider-save { min-height: 38px; padding: 9px 14px; font-size: 12px; border-radius: 8px; }
 
 /* The Agent has a compact green utility rail, independent of Mio's status cards. */
 .app-shell.integrated-shell.agent-workspace-shell { grid-template-columns: 64px minmax(0, 1fr) 64px; }
@@ -85,5 +76,4 @@
   .agent-home { padding: 20px 16px; }
   .agent-home-header { padding: 20px; align-items: stretch; }
   .agent-tool-list { grid-template-columns: 1fr; }
-  .onboarding-provider-fields { grid-template-columns: 1fr; }
 }
