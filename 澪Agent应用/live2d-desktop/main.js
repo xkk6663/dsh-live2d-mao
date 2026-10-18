@@ -1023,6 +1023,84 @@ function registerIpc() {
     return { ok: true, selectedModelId: available ? id : '' }
   })
   ipcMain.handle('mio-desktop:open-agent', () => openPetAdmin())
+  // ───────────────────────────────────────────────────────────────────────────
+  // ★ 双击桌宠 → 打开 **DSH 主应用**（2026-10-18 用户需求）
+  //
+  // 原来双击打开的是「MIO 管理窗里的 DSH 面板」，那是本项目的只读状态页；
+  // 用户真正想跳转的是**正在跑任务的 DeepSeek Harness 主应用界面**。
+  //
+  // 策略（优先级从高到低）：
+  //   ① 已有 DSH 窗口在跑 → 把它**激活到前台**（不新开实例，避免开出第二个 DSH）
+  //   ② 没在跑 → 用已知路径启动 DSH
+  //   ③ 都失败 → 由渲染层回落（保持原来的面板行为，不让双击变成死键）
+  //
+  // 激活窗口用 PowerShell + user32（SetForegroundWindow / ShowWindow）：
+  //   Electron 自身没有「激活别的进程窗口」的 API，而 DSH 是独立进程。
+  //   ▸ SW_RESTORE(9) 先还原（最小化时也能拉起来）
+  //   ▸ 附带 ALT 键技巧绕过 Windows 前台锁（只 SetForegroundWindow 常被拒）
+  // ───────────────────────────────────────────────────────────────────────────
+  ipcMain.handle('mio-desktop:open-dsh-app', async () => {
+    const DSH_EXE = String(process.env.MIO_DSH_EXE || '')
+      || path.join(process.env.LOCALAPPDATA || '', 'Programs', 'DeepSeek Harness', 'DeepSeek Harness.exe')
+
+    // ① 找正在跑的 DSH 主窗口并激活
+    const psActivate = `
+$ErrorActionPreference = 'SilentlyContinue'
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class DshWin {
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);
+  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint a, uint b, bool f);
+  [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, IntPtr pid);
+}
+"@ -ErrorAction SilentlyContinue
+$target = Get-Process -Name 'DeepSeek Harness' -ErrorAction SilentlyContinue |
+  Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+if (-not $target) { Write-Output 'NO-WINDOW'; exit 0 }
+$h = $target.MainWindowHandle
+if ([DshWin]::IsIconic($h)) { [DshWin]::ShowWindow($h, 9) | Out-Null }
+# 前台锁规避：附加到当前前台窗口的输入队列，再抢焦点
+$fg = [DshWin]::GetForegroundWindow()
+$fgThread = [DshWin]::GetWindowThreadProcessId($fg, [IntPtr]::Zero)
+$myThread = [DshWin]::GetCurrentThreadId()
+[DshWin]::AttachThreadInput($myThread, $fgThread, $true) | Out-Null
+[DshWin]::SetForegroundWindow($h) | Out-Null
+[DshWin]::AttachThreadInput($myThread, $fgThread, $false) | Out-Null
+Write-Output ('ACTIVATED ' + $target.Id)
+`
+    const runPs = (script) => new Promise((resolve) => {
+      // -EncodedCommand 避免引号/换行在 cmd → PowerShell 之间被拆坏
+      const encoded = Buffer.from(script, 'utf16le').toString('base64')
+      execFile('powershell', ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
+        { timeout: 8000, windowsHide: true },
+        (err, stdout) => resolve({ err, stdout: String(stdout || '') }))
+    })
+
+    try {
+      const r1 = await runPs(psActivate)
+      if (/ACTIVATED/.test(r1.stdout)) {
+        log('dsh.activate', r1.stdout.trim())
+        return { ok: true, mode: 'activated', detail: r1.stdout.trim() }
+      }
+      // ② 没在跑 → 启动它
+      if (fs.existsSync(DSH_EXE)) {
+        const { spawn } = require('child_process')
+        spawn(DSH_EXE, [], { detached: true, stdio: 'ignore', windowsHide: false }).unref()
+        log('dsh.launch', `已启动 ${DSH_EXE}`)
+        return { ok: true, mode: 'launched', detail: DSH_EXE }
+      }
+      log('dsh.open.failed', '未找到 DSH 可执行文件')
+      return { ok: false, reason: 'dsh-not-found', detail: DSH_EXE }
+    } catch (err) {
+      log('dsh.open.error', String(err && err.message ? err.message : err))
+      return { ok: false, reason: 'error', detail: String(err && err.message ? err.message : err) }
+    }
+  })
   // ★ 双击桌宠直达 DSH 面板（2026-10-17 用户要求）：打开管理窗后在其渲染层
   //   触发 dsh-panel 的 show()。面板脚本可能还没 boot 完（窗口首次创建），
   //   故带重试：每 400ms 试一次，最多 15 次（≈6s）。

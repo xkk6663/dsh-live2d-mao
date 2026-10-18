@@ -3316,12 +3316,22 @@
 
   canvas.addEventListener('dblclick', async (event) => {
     if (clickThroughLocked() || !pointHitsModel(event.clientX, event.clientY)) return
-    // ★ DSH 专用化快捷操作（2026-10-17 用户要求）：双击桌宠直达 **DSH 面板**。
-    //   主进程打开 MIO 管理窗并在其渲染层触发 __mioDshPanel.show()（带就绪重试）。
-    //   Electron 桥缺失时（非宿主环境）回落到原行为（开对话横条）。
+    // ★ 双击桌宠 → 打开 **DSH 主应用界面**（2026-10-18 用户需求修正）
+    //   原先打开的是「MIO 管理窗里的 DSH 面板」（本项目自己的只读状态页），
+    //   但用户双击时想要的是**正在跑任务的 DeepSeek Harness 主界面**。
+    //   主进程优先激活已在跑的 DSH 窗口（不动它、不新开实例），没有才启动。
     event.preventDefault()
     sendSocket('double_clicked', { x: event.screenX, y: event.screenY })
     try {
+      if (electronRuntime && window.mioDesktop?.openDshApp) {
+        const r = await window.mioDesktop.openDshApp()
+        if (r && r.ok) return
+        // 打不开 DSH 主应用（没装/路径变了）→ 回落到原来的 DSH 面板，双击不至于变死键
+        if (window.mioDesktop?.openDshPanel) {
+          window.mioDesktop.openDshPanel()
+          return
+        }
+      }
       if (electronRuntime && window.mioDesktop?.openDshPanel) {
         window.mioDesktop.openDshPanel()
         return

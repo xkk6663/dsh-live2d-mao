@@ -19,6 +19,9 @@ contextBridge.exposeInMainWorld('mioDesktop', {
   openAgent: () => ipcRenderer.invoke('mio-desktop:open-agent'),
   // 双击桌宠直达 DSH 面板（主进程打开管理窗并触发 dsh-panel.show()）
   openDshPanel: () => ipcRenderer.invoke('mio-desktop:open-dsh-panel'),
+  // ★ 双击桌宠 → 打开**正在跑任务的 DSH 主应用界面**（2026-10-18 用户需求）
+  //   优先激活已在跑的 DSH 窗口，没有才启动。失败时渲染层回落 openDshPanel。
+  openDshApp: () => ipcRenderer.invoke('mio-desktop:open-dsh-app'),
   getVersion: () => ipcRenderer.invoke('mio-desktop:get-version'),
   close: () => ipcRenderer.send('mio-desktop:close'),
   sendPetEvent: (event) => ipcRenderer.send('mio-desktop:pet-event', event),
