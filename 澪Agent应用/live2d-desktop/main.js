@@ -1193,6 +1193,21 @@ async function shutdownBackend() {
   }
 }
 
+/**
+ * 带硬超时的后端清理：**绝不因为后端异常而卡住桌面退出**。
+ * 用户点了「退出桌宠」，桌宠必须退出，这是契约；后端清理是尽力而为。
+ */
+function shutdownBackendWithTimeout(maxMs = 4000) {
+  return Promise.race([
+    shutdownBackend(),
+    new Promise((resolve) => setTimeout(() => {
+      log('backend.shutdown.timeout', `${maxMs}ms 内未完成，强制继续退出`)
+      try { killBackendByPort() } catch (_) {}
+      resolve()
+    }, maxMs)),
+  ])
+}
+
 app.on('window-all-closed', (event) => {
   if (!quitting) event.preventDefault()
 })
@@ -1211,9 +1226,10 @@ app.on('before-quit', (event) => {
   if (modelServer) modelServer.close()
 
   // 后端清理：异步做完再真正退出。已经做完就直接放行（否则会二次进入这里）。
+  // 用带硬超时的版本：后端异常绝不能卡住桌面退出。
   if (!quitCleanupDone) {
     event.preventDefault()
-    shutdownBackend().finally(() => {
+    shutdownBackendWithTimeout().finally(() => {
       quitCleanupDone = true
       app.quit()     // 再走一轮 before-quit，这次直接放行
     })
