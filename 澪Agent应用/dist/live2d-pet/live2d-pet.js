@@ -3026,8 +3026,42 @@
     return { text: s }
   }
 
+  /**
+   * 桌宠复位到默认初始位置（2026-10-18 用户需求）。
+   *
+   * 背景：桌宠原来可以被拖/甩到屏幕外，然后就拉不回来了（用户已遇到）。
+   * 反弹方案实测手感怪异，用户要求回滚 —— 改为**手动救援**：
+   * 右键点「解锁」时自动把桌宠送回默认位置，等于给用户一个"叫回来"的开关。
+   *
+   * 默认位置与 fitModel / 后端 DEFAULT_CONFIG 保持一致（80, 420）。
+   * 同时清掉未完成的惯性与拖动状态，避免复位后被旧的 rAF 又推走。
+   */
+  async function resetToDefaultPosition() {
+    if (inertiaRaf) { cancelAnimationFrame(inertiaRaf); inertiaRaf = null }
+    pointerDown = null
+    dragged = false
+    root.classList.remove('dragging')
+    const defX = 80
+    const defY = 420
+    settings.position_x = defX
+    settings.position_y = defY
+    try {
+      await request('/api/companion/position', {
+        method: 'PATCH',
+        body: JSON.stringify({ x: defX, y: defY }),
+      })
+    } catch (_) {}
+    // 模型位置由 fitModel 按 settings 重新计算（含多屏 virtual.x/y 偏移）
+    try { fitModel() } catch (_) {}
+    // 气泡/锁定控件也跟着重新锚定
+    updateSpeechBubblePosition(true)
+    updateLockControlAnchor(true)
+    updateMousePassThrough(true)
+  }
+
   async function setClickThroughLocked(enabled, persist = true) {
     const locked = Boolean(enabled)
+    const wasLocked = Boolean(settings.live2d_click_through_locked)
     settings.live2d_click_through_locked = locked
     root.classList.toggle('click-through-locked', locked)
     contextMenu.hidden = true
@@ -3040,8 +3074,17 @@
     if (persist) {
       try { await persistCompanionSetting('live2d_click_through_locked', locked) } catch (_) {}
     }
-    if (locked) setInteractive(false)
-    else updateMousePassThrough(true)
+    if (locked) {
+      setInteractive(false)
+    } else {
+      // ★ 解锁 = 把桌宠叫回来（2026-10-18 用户裁决的防丢方案）。
+      //   仅当**真的从锁定变到解锁**时才复位 —— 避免重复的 applySettings/轮询
+      //   在解锁态下反复把用户刚拖好的位置弹回默认值。
+      if (wasLocked) {
+        try { await resetToDefaultPosition() } catch (_) {}
+      }
+      updateMousePassThrough(true)
+    }
   }
 
   function setInteractive(interactive) {
