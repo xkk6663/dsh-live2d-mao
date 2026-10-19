@@ -45,6 +45,8 @@ DSH 专用 Live2D 桌宠：桌宠本体只认统一状态总线上的 12 态 pha
 | 后端 `app/agents/dsh/**` | `dsh_adapter.py` 头部注释 + `dsh_adapter_selftest.py` |
 | 桌宠外壳 `live2d-desktop/main.js` | `docs/DSH专用化阉割记录.md` §7.4（**外壳起不来三层真根因**：ELECTRON_RUN_AS_NODE / pet-instance 锁 / 工作目录回落 Mao） |
 | 设置页 / 泡泡页 | `settings-panel-inject.js` / `bubble-panel-inject.js` 头部注释 |
+| **要发版 / 上架市场** | ★ **`docs/SKILL-发布与版本迭代.md`**（门禁 → 版本号同步 → npm publish → 实机验证 → 市场 PR 全流程 + 故障速查） |
+| 项目独立性 / Electron 权限 | `docs/项目独立性-技术分析.md`（AppContainer 沙箱、ACL 继承、方案 B） |
 
 ---
 

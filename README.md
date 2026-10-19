@@ -140,7 +140,7 @@ DSH 的回答不走气泡，走一条**独立的横条**：
 ### 环境要求
 
 - Windows 10 / 11 x64
-- **PowerShell 7**（`pwsh`，不是系统自带的 `powershell`）
+- **PowerShell 7**（`pwsh`，推荐）—— 系统自带的 5.1 也能跑（脚本已带 UTF-8 BOM，中文不会乱码）
 - Python 3.10+
 - Node.js 18+
 - **DeepSeek Harness（DSH）** —— 桌宠是给它做「脸」的，没有 DSH 就只能看形象
@@ -152,9 +152,32 @@ DSH 的回答不走气泡，走一条**独立的横条**：
 git clone <本仓库地址> Mao-dsh-pet
 cd Mao-dsh-pet
 
-# 2. 装依赖（Python venv + Node + Electron，交互式）
+# 2. 装依赖（Python venv + Node + Electron + 运行时目录权限，交互式）
 pwsh -NoProfile -ExecutionPolicy Bypass -File 安装依赖.ps1
 ```
+
+安装脚本的**第 4 步**会做一件跟"能启动"直接相关的事：
+
+| 做的事 | 为什么 |
+|---|---|
+| 创建 `pet-data\` / `pet-data\pet-instance\` / `pet-data\Live2D桌宠\Chromium\` | Electron 的单实例锁（`SingletonLock`）必须有可写目录，否则 `Error code: 3` 主进程秒退 |
+| 给这几个目录**关闭继承并重建 ACL**（当前用户/SYSTEM/管理员全控，Everyone 修改） | 让权限**自包含**，不再依赖机器上恰好存在某条历史遗留规则 |
+| 真写一个探针文件再删掉 | 目录存在 ≠ 能写（受限令牌下 `mkdir` 会 `Error 5`），不验证等于没做 |
+
+> 这一步失败也**不会**让桌宠起不来：`main.js` 会按
+> `项目内 pet-data` → `%LOCALAPPDATA%\Mao-pet` → `%TEMP%\mao-pet-runtime` 自动降级，
+> 并在全部不可写时弹窗给出修复命令（不再静默秒退）。
+> 技术细节与排查过程见 **[docs/项目独立性-技术分析.md](docs/项目独立性-技术分析.md)**。
+
+### `.env` 是可选的
+
+后端会读 `私人AI日记系统\backend\.env`，**没有这个文件也能启动**（全部走默认值）。
+需要接大模型 / 联网搜索时再复制模板填 key：
+
+```powershell
+Copy-Item 私人AI日记系统\backend\.env.example 私人AI日记系统\backend\.env
+```
+
 
 ### 配置 DSH 接入
 
@@ -270,6 +293,7 @@ DSH 会话事件 ──┬─→ 日志边车（读会话日志，兜底路径�
 |---|---|
 | [`AGENTS.md`](AGENTS.md) | ★ 工程纪律权威：三条架构红线（机器守卫）/ 变更纪律 / D1~D5 裁决 / 提交前门禁 |
 | [`SRC-MAP-源码地图.md`](SRC-MAP-源码地图.md) | ★ 改哪块看哪份：界面导航 / 后端导航 / 修改守则 |
+| [`docs/SKILL-发布与版本迭代.md`](docs/SKILL-发布与版本迭代.md) | ★ **发版必读**：门禁检查 / 版本号同步 / npm 发布 / 实机验证 / 市场上架全流程 + 故障速查 |
 | [`docs/后续开发方向.md`](docs/后续开发方向.md) | 待办清单、明确不做的事、已知技术债 |
 | [`docs/竞品对标-dsh-pet-indesktop.md`](docs/竞品对标-dsh-pet-indesktop.md) | 与 dsh-pet-indesktop / whale 的能力对比 |
 | [`docs/DSH专用化阉割记录.md`](docs/DSH专用化阉割记录.md) | 项目演进记录（做了什么、为什么、怎么验） |
