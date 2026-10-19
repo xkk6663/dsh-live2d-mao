@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 #  Mio 桌宠 一键启动脚本（后端 + Electron 桌宠）
 #  用法: pwsh -NoProfile -ExecutionPolicy Bypass -File start_mio.ps1
 #  幂等: 已在运行的服务会被跳过，不会重复启动
@@ -13,6 +13,33 @@ $ErrorActionPreference = 'Stop'
 #   拉起 electron 前必须清掉（只影响本脚本进程树）。
 Remove-Item env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
 $env:ELECTRON_RUN_AS_NODE = $null
+
+# ★ 环境变量大小写去重（2026-10-19 实测踩到）：
+#   Windows PowerShell 5.1 的 Start-Process 在**同一环境变量存在两种大小写写法**时
+#   （Clash/v2ray/系统代理常同时设置 HTTP_PROXY 与 http_proxy）会抛
+#     "已添加项。字典中的关键字:"HTTPS_PROXY" 所添加的关键字:"https_proxy""
+#   导致后端根本起不来。这里在拉起子进程前删掉重复的小写键（保留大写）。
+function Remove-DuplicateEnvKeys {
+    try {
+        $vars = [Environment]::GetEnvironmentVariables('Process')
+        $seen = @{}
+        foreach ($k in @($vars.Keys)) {
+            $lower = $k.ToLowerInvariant()
+            if ($seen.ContainsKey($lower)) {
+                $prev = $seen[$lower]
+                if ($k -ceq $k.ToUpperInvariant()) {
+                    [Environment]::SetEnvironmentVariable($prev, $null, 'Process')
+                    $seen[$lower] = $k
+                } else {
+                    [Environment]::SetEnvironmentVariable($k, $null, 'Process')
+                }
+            } else {
+                $seen[$lower] = $k
+            }
+        }
+    } catch {}
+}
+Remove-DuplicateEnvKeys
 
 # 发布版相对路径：脚本所在目录为项目根，可在任意位置解压运行
 $root = $PSScriptRoot
@@ -92,11 +119,79 @@ function Start-Wmi($exe, $argList, $workdir) {
 
 Write-Step '========== Mio 桌宠启动 =========='
 
+# ────────────────────────────────────────────────────────────────────────────
+#  运行时目录探测（2026-10-19 独立性改造 · 方案 B）
+#
+#  ★ 原则：单独 clone 本仓库，不依赖任何其它仓库/机器上遗留的 ACL 规则就能跑。
+#    目录存在 ≠ 能写（受限令牌下 mkdir 会 Error 5），所以必须**真写探针**。
+#    探测链与 澪Agent应用/live2d-desktop/main.js 的 resolveStateDir() 完全一致：
+#      ① 项目内 pet-data（数据随项目走，首选）
+#      ② %LOCALAPPDATA%\Mao-pet（项目目录不可写时的标准位置）
+#      ③ %TEMP%\mao-pet-runtime（最后兜底）
+#    全部不可写 → 打印修复命令且**不启动**（避免窗口秒退后用户一脸问号）。
+# ────────────────────────────────────────────────────────────────────────────
+function Test-DirWritable($dir) {
+    if (-not $dir) { return $false }
+    try {
+        if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir -ErrorAction Stop | Out-Null }
+        $probe = Join-Path $dir ('.write-probe-' + [guid]::NewGuid().ToString('N') + '.tmp')
+        Set-Content -Path $probe -Value 'ok' -ErrorAction Stop
+        Remove-Item $probe -Force -ErrorAction SilentlyContinue
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+# ★ Low 完整性标签检查（2026-10-19 真根因）：
+#   本脚本是 Medium 进程，能写 ≠ Electron 能写 —— Electron 被降权到 Low IL，
+#   往 Medium 目录写入会被 no-write-up 直接挡。缺这个标签时桌宠会弹
+#   「运行时目录不可写」然后秒退，而这里的所有探测都是"通过"的。
+#   故单独查标签，缺了就在启动前提示，别等用户对着弹窗猜。
+function Test-LowIntegrityLabel($dir) {
+    if (-not $dir) { return $false }
+    try { return (((& icacls.exe $dir) -join "`n") -match 'Low Mandatory Level') } catch { return $false }
+}
+
+$runtimeCandidates = @(
+    @{ State = (Join-Path $root 'pet-data\Live2D桌宠');               Instance = (Join-Path $root 'pet-data\pet-instance'); Label = '项目内 pet-data' },
+    @{ State = (Join-Path $env:LOCALAPPDATA 'Mao-pet\Live2D桌宠');    Instance = (Join-Path $env:LOCALAPPDATA 'Mao-pet\pet-instance'); Label = '用户 LOCALAPPDATA' },
+    @{ State = (Join-Path $env:TEMP 'mao-pet-runtime\Live2D桌宠');    Instance = (Join-Path $env:TEMP 'mao-pet-instance'); Label = '系统 TEMP' }
+)
+$petStateDir = $null
+$petInstanceDir = $null
+foreach ($c in $runtimeCandidates) {
+    if ((Test-DirWritable $c.State) -and (Test-DirWritable (Join-Path $c.State 'Chromium')) -and (Test-DirWritable $c.Instance)) {
+        $petStateDir = $c.State
+        $petInstanceDir = $c.Instance
+        Write-Step "运行时目录: $petStateDir（来源：$($c.Label)）"
+        break
+    }
+    Write-Step "运行时目录不可写，尝试下一个：$($c.State)"
+}
+if (-not $petStateDir) {
+    Write-Step '❌ 找不到可写的桌宠运行时目录，已中止（不启动，避免窗口秒退）。'
+    Write-Step '   请在本项目根目录用**普通用户 PowerShell**运行一次：'
+    Write-Step '     pwsh -NoProfile -ExecutionPolicy Bypass -File 安装依赖.ps1'
+    Write-Step '   或手动授权：'
+    Write-Step ('     icacls "{0}" /grant "{1}:(OI)(CI)F" /T' -f (Join-Path $root 'pet-data'), "$env:USERDOMAIN\$env:USERNAME")
+    Write-Step '   详细原因见 docs/项目独立性-技术分析.md'
+    [Environment]::Exit(1)
+}
+
+# Low 标签预检：缺失时明确告知（不中止——Electron 若以 Medium 跑仍可工作）
+$petDataRoot = Split-Path $petStateDir -Parent
+if (-not (Test-LowIntegrityLabel $petDataRoot)) {
+    Write-Step "⚠ $(Split-Path $petStateDir -Parent) 缺少 Low 完整性标签"
+    Write-Step '   Electron 以 Low 完整性级别运行时将无法写入 → 桌宠会弹「运行时目录不可写」并秒退。'
+    Write-Step '   修复：运行一次 安装依赖.ps1（第 4 步会补），或手动执行：'
+    Write-Step ('     icacls "{0}" /setintegritylevel (OI)(CI)Low /T' -f $petDataRoot)
+}
+
 # ---------- 1) 后端 (uvicorn :8000) ----------
 # 桌宠数据目录：后端与 Electron 必须解析到**同一个**目录，否则后端写的
 # runtime.json（模型选择）与桌宠读的不是同一个文件 → 切角色"成功但无效"。
 # 这里显式传入，避免两边各自推导出不同路径。
-$petStateDir = Join-Path $root 'pet-data\Live2D桌宠'
 
 # 就绪探测用 /api/companion/agents（纯读总线，稳定）；
 # 不用 /api/companion/status —— 它依赖 Live2D 资源与磁盘写入，
@@ -180,30 +275,11 @@ if ($electronRunning) {
     }
     Write-Step "      electron: $electronExe"
 
-    # userData 锁目录：**只在本仓库内**（pet-data\pet-instance），不可写则退到用户 Temp。
-    # 原实现复用同级 Mao 仓库的目录，属于跨仓库依赖，已删除。
-    $localInstance = Join-Path $root 'pet-data\pet-instance'
-    $tempInstance  = Join-Path $env:TEMP 'mao-pet-instance'
-    $env:MIO_PET_INSTANCE_DIR = ''
-    foreach ($dir in @($localInstance, $tempInstance)) {
-        if (-not $dir) { continue }
-        try {
-            if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir -ErrorAction Stop | Out-Null }
-            # 目录存在 ≠ 能写（AppContainer 情形会 Error 5），实际写一个探测文件确认
-            $probe = Join-Path $dir ('.write-probe-' + [guid]::NewGuid().ToString('N') + '.tmp')
-            Set-Content -Path $probe -Value 'ok' -ErrorAction Stop
-            Remove-Item $probe -Force -ErrorAction SilentlyContinue
-            $env:MIO_PET_INSTANCE_DIR = $dir
-            Write-Step "      instance: $dir"
-            break
-        } catch {
-            Write-Step "      instance 不可写，尝试下一个：$dir"
-        }
-    }
-    if (-not $env:MIO_PET_INSTANCE_DIR) {
-        Write-Step '      ❌ 没有可写的 pet-instance 目录，桌宠可能无法启动。'
-    }
+    # userData 锁目录 / 数据目录：已在上方统一探测（$petInstanceDir / $petStateDir），
+    # 与 main.js 的 resolveStateDir()/resolveInstanceDir() 结果一致，不再各自推导。
+    $env:MIO_PET_INSTANCE_DIR = $petInstanceDir
     $env:MIO_PET_STATE_DIR = $petStateDir
+    Write-Step "      instance: $petInstanceDir"
     # --no-sandbox: 当前系统（Win11 预览版 + 近期更新）Chromium 沙箱初始化崩溃，
     # 必须禁用沙箱才能启动；数据目录默认已迁至项目根 pet-data（避开受控目录）
     $petPid = Start-Wmi $electronExe '--no-sandbox .' $electronDir

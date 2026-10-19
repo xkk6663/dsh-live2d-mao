@@ -37,8 +37,11 @@ class IngestPayload(BaseModel):
     """
 
     phase: str = Field(..., description="总线 12 态词汇之一")
-    agent_id: str = Field("", description="缺省 mao-pet")
-    name: str = Field("", description="缺省 Mao-pet")
+    # ⚠ 缺省身份是**总线 agent_id `dsh`**（v1.0.0 合并身份后与日志边车共用），
+    #   不是插件名 `dsh-live2d-mao`；插件名只用于 npm 包名 / cordis id / 路由前缀 / 日志 tag。
+    #   见 dsh_adapter._plugin_owns_bus()：它按 `dsh` 取总线状态来判断"插件在线、边车让位"。
+    agent_id: str = Field("", description="缺省 dsh")
+    name: str = Field("", description="缺省 DeepSeek Harness")
     accent: str = Field("", description="身份色，缺省 #4F6BED")
     state: dict[str, Any] = Field(default_factory=dict, description="短字段上下文")
     force: bool = Field(False, description="绕过 300ms 同 phase 节流（phase 变化时建议 true）")
@@ -248,8 +251,8 @@ class StripPayload(BaseModel):
     sessionId: str = Field("", description="来源会话（可选）")
     durationMs: int = Field(0, description="自动隐藏时长，0=由主体决定")
     sticky: bool = Field(False, description="true=流式追加中，不排自动隐藏")
-    agent_id: str = Field("", description="缺省 mao-pet")
-    name: str = Field("", description="缺省 Mao-pet")
+    agent_id: str = Field("", description="缺省 dsh")
+    name: str = Field("", description="缺省 DeepSeek Harness")
     accent: str = Field("", description="身份色，缺省 #4F6BED")
 
 

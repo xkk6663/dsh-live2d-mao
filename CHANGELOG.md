@@ -5,6 +5,94 @@
 
 ---
 
+## v1.1.0（2026-10-19）· **工作状态驱动动作/表情：四条断链修复 + 活人感 + 个性化页**
+
+> 现象：DSH 的 phase 明明在变（徽标实时刷新），桌宠本体既不换表情、也没有对应动作。
+> 调查结论是**四层独立断点叠加**，逐层修掉（只改渲染端 + 模型清单，后端零改动）。
+
+### ① 前置根因：Electron 下发内置模型时把能力清单清空了 ★
+- `main.js` 的 `modelCatalog()` 扫 `dist/live2d-pet/models` 发现内置模型时，`capabilities` 一律给 `{}`；
+  渲染端 `mergeImportedModels()` 早先**无脑覆盖** ⇒ `builtInModels` 里写死的动作组/表情表/槽位表
+  在 Electron 运行时全部失效（`semanticMotion` 恒返空、`expressionForEmotion` 因 `names=[]`
+  连**用户配好的表情槽**都校验不过）。
+- 规则改为：内置模型以渲染端清单为准（主进程只提供 URL/来源），导入模型仍以 `mio-model.json` 为准。
+- 单独取证：`mio-desktop:get-state` 返回的 `models` 就是 `modelCatalog()`，内置项 `capabilities` 为空对象。
+
+### ② 表情：phase 链路根本不存在
+- `applyAgentPhase()` 只改 `currentActivity` + 动作，**从不调用 `applyEmotion`**；DSH 的
+  `phase_for_facts()` 也不透传 emotion。新增 `PHASE_EMOTION`（planning/thinking/executing_tool→serious、
+  streaming/waiting_input→gentle、awaiting_approval/error→concerned、complete→cheerful），
+  只在**相位真的变化**时打一次（4.2s），`voice` 期间跳过（避免抢说话链路的表情）。
+
+### ③ 动作：解析结果恒等于 idle
+- whale-deepseek 的 `motionSlots` 把 think/observe/attention 全指向 `idle` ⇒ 4 种工作态长得一样。
+  按 manifest 语义重分配：think→`bubble`（吹泡泡）、observe→`ketchup`（挤番茄酱）、attention→`openLid`（开盖）；
+  `mio-model.json` 同步。
+- 新增判据：**解析结果等于待机动作时不播 motion**（播 idle 等于没播），改走程序化动作 ——
+  官方模型（hiyori/mao/mark/rice/wanko 只有 Idle/TapBody）因此也重新有了可见动作。
+- 去抖改为相位感知：相位变化时 `force` 允许打断（1.2s / 同组 3.5s 门限不再是"吞动作"的黑洞），
+  同相位 2s 重发一律不重播。
+
+### ④ 参数写入时序：ticker(-50) 写参数会被每帧回滚
+- 库的每帧顺序是 `motionManager.update → saveParameters → 表情/眨眼/视线/呼吸/物理 → coreModel.update
+  → loadParameters`。在 ticker 里写的参数要么被 motion 按权重覆盖，要么被 `saveParameters` 吞进
+  下一帧基线（`addParameter` 型会跨帧累积到参数钳位）。
+- 参数写入统一收进 `applyFrameParameters()`，由 `internalModel.on('beforeModelUpdate')` 驱动
+  （模型加载时 `bindFrameParameterHook()` 重挂）；钩子挂不上时退回 ticker 兜底。
+
+### 第二轮（同日，用户指定）：表现绑定可配置化
+- **完成→开心槽 / 出错→担心槽**：`PHASE_MOTION_SLOT` 补 `complete: 'cheerful'`、`error: 'concerned'`，
+  表情侧同步 `complete/error → cheerful/concerned`（原来这两个状态既不播动作也不换表情）。
+- **点击桌宠→害羞槽**：由 `touch 动作 + gentle 情绪` 改为 `shy 槽`（表情 + 动作）；
+  socket 的 `clicked.emotion` 一并改成 `shy`，否则后端 `set_pet_activity` 广播的 activity 会在
+  3 秒内把害羞表情盖回 gentle。
+- **「聆听」拆成独立动作槽**：新增 `listen` 槽（原 `listening` 只能复用 `attention`）。
+  `semanticMotion(hint)` 拆成 `motionForSlot(槽名)` + 别名表，相位与情绪都走同一套槽位解析。
+- **「警觉」表情槽可绑**：`LIVE2D_EXPRESSION_SLOT_IDS` 补 `alert`，界面表情下拉新增「警觉」。
+- **大肥鱼有了可绑的动作**：它没有 `motion3.json`，把 12 个表情登记成 `kind: 'expression'` 的"动作"，
+  `playMotion()` 检测到该 kind 就直接播表情（3.8s 后自动回自然脸）。
+  界面「动作」区块因此不再对它隐身，`motionSlots` 也按表情重新配了一遍。
+- **任务状态可在界面绑定**：新增设置 `live2d_phase_slots`
+  （`{模型id: {phase: {motion: 槽名, expression: 槽名}}}`），管理面板新增「任务状态」区块，
+  11 个状态各带「动作槽 / 表情槽」两个下拉，选「自动」即用内置默认。
+  后端：`CompanionSettingsRequest` 加字段 + `configuration.py` 归一化（词表校验，非法值丢弃）+ 默认配置项。
+- **保存白名单补齐**：`App.vue` 的 `companionSettingKeys.pet` 漏了 `live2d_phase_slots`，
+  界面上的「任务状态」绑定保存时会被快照过滤掉（选了不生效）。已补上并重建。
+- **下拉选项口径修正**：任务状态的「动作」下拉原本列的是**具体动作名**，而渲染端 `motionForSlot()`
+  按**槽名**解析 ⇒ 选了会掉进 idle 兜底。改为与「动作」区块一致的槽名下拉（换模型不用重配）；
+  同时在解析器里加「精确动作名直通」兜底，手写/老配置直接写动作名也不再被吞。
+- **构建**：`npm run build:dist` 重建（trim-pages 被沙箱批量删除守卫拦住，手工移出 3 个被裁页残留后
+  `npm run guard` 全绿：A/B/C/D 全 0，mapDeps 自洽）。
+
+**改动文件**：`澪Agent应用/dist/live2d-pet/live2d-pet.js`、`models/whale-deepseek/mio-model.json`、
+`dist/live2d-pet/index.html`（`?v=20261019-slots2`）、`src/components/PetAppearancePanel.vue`、
+`src/App.vue`（保存白名单）、`src/styles/companion.css`、`live2d-desktop/main.js`（窗载版本号）、
+`dist/assets/*`（重建）、`backend/app/companion/configuration.py`、
+`backend/app/companion/companion_service.py`、`backend/app/routes/companion.py`。
+
+### 同日追加：活人感 L3 + 皮肤切换修复 + 设置页重组
+
+- **活人感 L3**：台词库升级为 9 场景词表（any/idle/busy/night/lonely/late/dawn/poke/grind），
+  大肥鱼台词 48→77 条、默认台词 15→24 条；新增**长任务提醒**（同一 phase 卡超 25 分钟说一句，
+  `since` 计时在三条更新路径上保持粘性）与**连点彩蛋**（3 秒内戳 3 次→嫌弃、6 次→装死 60 秒，
+  `pet_poke_enabled` 开关端到端接通）。
+- **皮肤切换修复**：切换气泡/横条皮肤后 UI 不动的两层根因——缓存戳漏 bump + 旧版
+  `pet-bubble-styles.setStyle()` 收到数组抛 TypeError 被共享 `try/catch` 静默吞掉。
+  修复为四段独立 try + `console.warn` + 版本握手（`typeof bs.applyTo === 'function'`）。
+- **设置页重组**：新增与「主题」并列的**个性化** tab（资料/桌宠/语音/个性化/主题），
+  活人感、交互打磨、模型自动更换、逐 token 流式、点击互动、图片素材库、音效事件、音效片段
+  八块全部归位；气泡卡片改为注册表 + 分组注入（`CARD_RENDER`/`PART_CARDS`），卡片只写一遍。
+- **身份契约测试修正**：插件 e2e 的 agent_id 断言从 `dsh-live2d-mao` 改为 `dsh`
+  （v1.0.0「合并身份」后总线身份是 `dsh`，`dsh_adapter._plugin_owns_bus()` 以它为让位判据），
+  后端 docstring 同步；e2e 9/11 → 11/11。
+- **回归探针**（不进 npm 包，仓库内 `.workbuddy/probes/`）：tab 拆分 19、桌宠页 31、
+  皮肤三方契约 10、L3 状态机 21、表情引用 59，共 140 条断言全绿。
+
+**门禁**：插件 220/220 · adapter 201/201 · ingest 63/63 · guard 全绿 · E2E 18/18 ·
+`npm pack --dry-run` 25 文件（含 5 截图，无 mock.js/test）。
+
+---
+
 ## v1.0.1（2026-10-17）· **市场展示资源**：5 张实拍截图 + screenshots.json
 
 - **市场展示**：新增 `screenshots.json` + `assets/` 5 张实拍截图（桌宠界面展示 / 12 态面板 / 动作表情 / 主题设置 / 模型库），

@@ -17,8 +17,10 @@
   var ACCENT = '#2d7ff9'
   var POLL_MS = 5000
 
-  // 与桌宠端 pet-bubble-styles.js 的 STYLES 保持一致（id/cls/swatch）
+  // 与桌宠端 pet-bubble-styles.js 的 STYLES 保持一致（id/name/swatch/theme）
+  // ★ 2026-10-19：气泡与横条**合并成一套皮肤**，面板只列一次（以前两张卡各列 8 款）。
   var STYLE_DEFS = [
+    { id: 'theme', name: '跟随主题', swatch: 'conic-gradient(#4c8798,#b7798f,#668978,#4c8798)', theme: true },
     { id: 'default', name: '默认白', swatch: '#ffffff' },
     { id: 'mono', name: '墨黑', swatch: '#243036' },
     { id: 'navy', name: '靛蓝', swatch: '#4f6bed' },
@@ -27,7 +29,77 @@
     { id: 'note', name: '便利贴', swatch: '#ffe27a' },
     { id: 'terminal', name: '终端绿', swatch: '#17301f' },
     { id: 'comic', name: '漫画描边', swatch: '#ffffff' },
+    { id: 'glass', name: '磨砂玻璃', swatch: 'linear-gradient(135deg,rgba(255,255,255,.85),rgba(226,240,244,.45))', glass: true },
+    { id: 'neon', name: '霓虹', swatch: 'radial-gradient(circle at 50% 50%,#9df6ff,#0b1220 70%)' },
+    { id: 'paper', name: '纸墨', swatch: '#f7f0df' },
+    { id: 'ink', name: '夜墨', swatch: '#14161a' },
   ]
+
+  // 全局 UI 主题（必须与 src/styles/companion.css 的 .app-shell.theme-* 同值）
+  var UI_THEME_DEFS = [
+    { id: 'mist', name: '柔雾', colors: ['#e9eef0', '#4c8798', '#20303a'] },
+    { id: 'clear', name: '清晨', colors: ['#f0f4f4', '#5b8c98', '#26363d'] },
+    { id: 'rose', name: '蔷薇', colors: ['#f0eaed', '#9a6f78', '#2d282c'] },
+    { id: 'forest', name: '森雨', colors: ['#edf1ed', '#668978', '#293a34'] },
+    { id: 'sakura', name: '晚樱', colors: ['#f3eef1', '#b7798f', '#38323a'] },
+    { id: 'celadon', name: '青瓷', colors: ['#e9f0ee', '#5f8f80', '#22322e'] },
+    { id: 'amber', name: '琥珀', colors: ['#f3ede2', '#a8763c', '#3a3128'] },
+  ]
+
+  // 话痨程度锚点：**必须与 live2d-pet.js 的 TALK_ANCHORS 保持一致**，
+  // 否则面板写"每 6~15 分钟"、桌宠按另一套节奏跑，用户会觉得滑块骗人。
+  var TALK_ANCHORS = [
+    { t: 0, talk: [1800, 2400], beat: [300, 600] },
+    { t: 0.45, talk: [360, 900], beat: [30, 90] },
+    { t: 1, talk: [60, 150], beat: [8, 20] },
+  ]
+
+  function talkativenessNumbers(level) {
+    var t = Math.max(0, Math.min(100, Number(level) || 0)) / 100
+    var lo = TALK_ANCHORS[0]
+    var hi = TALK_ANCHORS[TALK_ANCHORS.length - 1]
+    for (var i = 0; i < TALK_ANCHORS.length - 1; i++) {
+      if (t >= TALK_ANCHORS[i].t && t <= TALK_ANCHORS[i + 1].t) { lo = TALK_ANCHORS[i]; hi = TALK_ANCHORS[i + 1]; break }
+    }
+    var k = hi.t === lo.t ? 0 : (t - lo.t) / (hi.t - lo.t)
+    var mix = function (a, b) { return Math.round(a + (b - a) * k) }
+    return {
+      silent: t <= 0,
+      talkMin: mix(lo.talk[0], hi.talk[0]), talkMax: mix(lo.talk[1], hi.talk[1]),
+      beatMin: mix(lo.beat[0], hi.beat[0]), beatMax: mix(lo.beat[1], hi.beat[1]),
+    }
+  }
+
+  function talkativenessLabel(level) {
+    var v = Number(level) || 0
+    if (v <= 0) return '完全安静'
+    if (v < 25) return '寡言'
+    if (v < 60) return '正常'
+    if (v < 85) return '健谈'
+    return '话痨'
+  }
+
+  /** 区间文案：只有**两端都到分钟级**才换成分钟（"6~15 分钟"），
+      否则保持秒（"30~90 秒"）—— 30s 写成"1 分钟"会失真。 */
+  function fmtRange(minSec, maxSec) {
+    var a = Math.max(0, Math.round(Number(minSec) || 0))
+    var b = Math.max(a, Math.round(Number(maxSec) || 0))
+    if (a >= 60) {
+      var am = Math.max(1, Math.round(a / 60))
+      var bm = Math.max(am, Math.round(b / 60))
+      return am + '~' + bm + ' 分钟'
+    }
+    return a + '~' + b + ' 秒'
+  }
+
+  /** "每 6~15 分钟说一句 · 每 30~90 秒换个表情" */
+  function talkativenessPreview(level) {
+    var n = talkativenessNumbers(level)
+    if (n.silent) return '不会主动说话（微表情仍然保留，只是很慢）'
+    return '每 ' + fmtRange(n.talkMin, n.talkMax) + '说一句 · 每 ' +
+      fmtRange(n.beatMin, n.beatMax) + '换个表情'
+  }
+
 
   // 与桌宠端 pet-sound.js 的 EVENT_PRESET 保持一致（事件 → 说明）
   var SOUND_EVENTS = [
@@ -52,8 +124,11 @@
   var pollTimer = null
   var clickTalk = true
   var styleId = 'default'
-  // 7.6 横条皮肤（与 styleId 同族，独立存储）
-  var stripStyleId = 'default'
+  // 个性化状态（2026-10-19）：全局主题。
+  // 话痨程度 / 微表情 / 台词开关已迁到「设置 → 个性化 → 活人感」，本页只留主题。
+  // ★ 同日二次拆分：本文件不再直接决定"哪些卡渲染"，而由 CARD_RENDER + PART_CARDS
+  //   按「主题（appearance）」/「个性化（behavior）」两组分别注入到两个 tab。
+  var uiThemeId = 'mist'
   var streamText = true
   var images = []
   var imageWeights = {}
@@ -65,20 +140,36 @@
 
   function $q(sel, root) { return (root || document).querySelector(sel) }
 
+  // ---- 面板视觉基线（2026-10-19 美化）----
+  // 参考 pbakaus/impeccable 的反模式清单，这里刻意遵守三条：
+  //   1. **不做嵌套卡片**：卡片内只用"浅底控制行"（row()），不再给行加边框+投影；
+  //   2. **功能文字不小于 12px**：旧版大量 9~10px 的说明/标签（含权重输入框）已提到 12px；
+  //   3. **焦点可见**：所有可点元素保留浏览器默认 focus 环，并给 hover 态（旧版只有静态）。
+  // 唯一的取舍：标题 16px / 正文 13px / 说明 12px，比例 1.23 略低于 impeccable 的 1.25 阶梯，
+  // 因为宿主设置页正文就是 13px —— 与周边保持光学一致比满足纯比例更重要。
   function card(title, body) {
-    return '<div style="border:1px solid var(--line,#d9e2e6);border-radius:10px;background:var(--surface,#fff);padding:14px 16px;">' +
-      (title ? '<div style="font-size:12px;font-weight:700;margin-bottom:10px;color:var(--ink,#20303a);">' + title + '</div>' : '') +
-      body + '</div>'
+    return '<section style="border:1px solid var(--line,#d9e2e6);border-radius:12px;background:var(--surface,#fff);padding:16px;">' +
+      (title ? '<h3 style="margin:0 0 12px;font-size:16px;font-weight:650;letter-spacing:.01em;color:var(--ink,#20303a);">' + title + '</h3>' : '') +
+      body + '</section>'
+  }
+
+  /** 卡片内的控制行：浅底、无边框（避免"卡片套卡片"的反模式） */
+  function row(inner) {
+    return '<div style="padding:12px;border-radius:10px;background:var(--surface-soft,#f2f6f7);">' + inner + '</div>'
+  }
+
+  function hint(text) {
+    return '<div style="margin-top:10px;font-size:12px;line-height:1.75;color:var(--muted,#687984);">' + text + '</div>'
   }
 
   function btnStyle(kind) {
     if (kind === 'primary') {
-      return 'border:1px solid ' + ACCENT + '55;background:' + ACCENT + '12;color:' + ACCENT + ';border-radius:7px;padding:4px 11px;font-size:12px;cursor:pointer;'
+      return 'border:1px solid ' + ACCENT + '55;background:' + ACCENT + '12;color:' + ACCENT + ';border-radius:8px;padding:6px 13px;font-size:12px;font-weight:600;cursor:pointer;'
     }
     if (kind === 'danger') {
-      return 'border:1px solid #c0392b44;background:#c0392b0f;color:#c0392b;border-radius:7px;padding:4px 11px;font-size:12px;cursor:pointer;'
+      return 'border:1px solid #c0392b44;background:#c0392b0f;color:#c0392b;border-radius:8px;padding:6px 13px;font-size:12px;font-weight:600;cursor:pointer;'
     }
-    return 'border:1px solid var(--line,#d9e2e6);background:var(--surface,#fff);color:var(--ink,#20303a);border-radius:7px;padding:4px 11px;font-size:12px;cursor:pointer;'
+    return 'border:1px solid var(--line,#d9e2e6);background:var(--surface,#fff);color:var(--ink,#20303a);border-radius:8px;padding:6px 13px;font-size:12px;font-weight:600;cursor:pointer;'
   }
 
   function toast(msg, ok) {
@@ -105,46 +196,70 @@
     return (Math.round(Number(sec) * 100) / 100).toFixed(2) + 's'
   }
 
-  // ---------- 皮肤 ----------
+  // ---------- 主题（气泡 + 横条 合并成一处）----------
 
-  function renderStyles() {
+  function uiThemeName(id) {
+    var found = null
+    UI_THEME_DEFS.forEach(function (t) { if (t.id === id) found = t })
+    return found ? found.name : id
+  }
+
+  function renderAppearance() {
     var items = STYLE_DEFS.map(function (s) {
       var cur = s.id === styleId
-      return '<button type="button" data-style="' + s.id + '" style="display:flex;flex-direction:column;align-items:center;gap:5px;padding:9px 4px;border:1px solid ' +
-        (cur ? ACCENT : 'var(--line,#d9e2e6)') + ';border-radius:10px;background:' + (cur ? ACCENT + '10' : 'var(--surface,#fff)') +
-        ';cursor:pointer;box-shadow:' + (cur ? '0 0 0 2px ' + ACCENT + '2e' : 'none') + ';">' +
-        '<span style="width:26px;height:26px;border-radius:50%;background:' + s.swatch + ';border:1px solid #94a7ad;"></span>' +
-        '<span style="font-size:11px;color:var(--ink,#20303a);">' + s.name + '</span></button>'
+      // 预览同时画"气泡"（大块）和"横条"（细胶囊）：一眼看出这是一条设置管两个窗位
+      return '<button type="button" data-style="' + s.id + '" aria-pressed="' + (cur ? 'true' : 'false') + '" title="' + s.name + '" ' +
+        'style="display:flex;flex-direction:column;align-items:center;gap:7px;padding:10px 6px;border:1px solid ' +
+        (cur ? ACCENT : 'var(--line,#d9e2e6)') + ';border-radius:12px;background:' + (cur ? ACCENT + '12' : 'var(--surface,#fff)') +
+        ';cursor:pointer;transition:border-color .15s ease,box-shadow .15s ease;box-shadow:' + (cur ? '0 0 0 2px ' + ACCENT + '33' : 'none') + ';">' +
+        '<span aria-hidden="true" style="display:flex;flex-direction:column;gap:3px;width:44px;">' +
+          '<i style="display:block;height:15px;border-radius:6px 6px 6px 2px;background:' + s.swatch + ';box-shadow:inset 0 0 0 1px rgb(20 35 45 / 14%);"></i>' +
+          '<i style="display:block;height:6px;width:72%;margin:0 auto;border-radius:3px;background:' + s.swatch + ';box-shadow:inset 0 0 0 1px rgb(20 35 45 / 14%);"></i>' +
+        '</span>' +
+        '<span style="font-size:12px;font-weight:600;color:var(--ink,#20303a);">' + s.name + '</span></button>'
     }).join('')
-    return card('气泡皮肤',
-      '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;">' + items + '</div>' +
-      '<div style="margin-top:9px;font-size:10px;color:var(--muted,#687984);">插件身份色（如 DSH 蓝）优先于皮肤——气泡颜色跟"谁在说话"走。</div>')
-  }
-
-  // ---------- 横条皮肤（7.6：DSH 流式提示专用窗位）----------
-
-  // 横条与气泡**共用同一套皮肤 id**（default/mono/navy/…），只是作用元素不同。
-  // 所以这里复用 STYLE_DEFS 渲染，避免两处各自维护一份皮肤清单导致漂移。
-  function renderStripStyles() {
-    var items = STYLE_DEFS.map(function (s) {
-      var cur = s.id === stripStyleId
-      return '<button type="button" data-strip-style="' + s.id + '" style="display:flex;flex-direction:column;align-items:center;gap:5px;padding:9px 4px;border:1px solid ' +
-        (cur ? ACCENT : 'var(--line,#d9e2e6)') + ';border-radius:10px;background:' + (cur ? ACCENT + '10' : 'var(--surface,#fff)') +
-        ';cursor:pointer;box-shadow:' + (cur ? '0 0 0 2px ' + ACCENT + '2e' : 'none') + ';">' +
-        '<span style="width:26px;height:26px;border-radius:7px;background:' + s.swatch + ';border:1px solid #94a7ad;"></span>' +
-        '<span style="font-size:11px;color:var(--ink,#20303a);">' + s.name + '</span></button>'
-    }).join('')
-    return card('横条皮肤（DSH 流式提示）',
-      '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;">' + items + '</div>' +
-      '<div style="margin-top:9px;font-size:10px;line-height:1.8;color:var(--muted,#687984);">' +
-        '• 横条是 DSH 下发**流式提示**的专用窗位（可拖动、✕ 可关），与说话气泡**互斥**使用，不再打架。<br />' +
-        '• 形状是胶囊条，所以这里用圆角色块示意；皮肤与气泡共用同一套配色。<br />' +
-        '• 用户按 ✕ 关闭后，横条在本机**不会自动再弹**；重新想用请点下面这个按钮。' +
-      '</div>' +
-      '<div style="margin-top:9px;display:flex;gap:8px;">' +
+    var themeNote = styleId === 'theme'
+      ? '<br />当前<b style="color:' + ACCENT + ';">跟随全局主题：' + uiThemeName(uiThemeId) + '</b>（在「个性化 → 全局主题」里切换）'
+      : ''
+    return card('气泡与横条主题',
+      '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(86px,1fr));gap:8px;">' + items + '</div>' +
+      hint('• 一处选择，<b>气泡和横条同时生效</b>——它们本来就是同一套视觉语言，以前分开配是重复劳动。' + themeNote +
+        '<br />• 插件身份色（如 DSH 蓝）优先级更高：气泡颜色仍然跟"谁在说话"走。' +
+        '<br />• 横条形状是胶囊条，所以预览只用细条示意；配色与气泡完全一致。') +
+      '<div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">' +
         '<button type="button" data-strip-reset="1" style="' + btnStyle() + '">重新启用横条</button>' +
+        '<span style="font-size:12px;color:var(--muted,#687984);">按过 ✕ 之后横条不再自动弹出，点这里恢复。</span>' +
       '</div>')
   }
+
+  // ---------- 个性化（话痨程度 / 微表情 / 台词库 / 全局主题）----------
+
+  function renderPersonalization() {
+    var themeTiles = UI_THEME_DEFS.map(function (t) {
+      var cur = t.id === uiThemeId
+      var swatches = t.colors.map(function (c) {
+        return '<i style="display:block;width:100%;height:8px;background:' + c + ';"></i>'
+      }).join('')
+      return '<button type="button" data-ui-theme="' + t.id + '" aria-pressed="' + (cur ? 'true' : 'false') + '" ' +
+        'style="display:flex;flex-direction:column;gap:6px;padding:8px;border:1px solid ' + (cur ? ACCENT : 'var(--line,#d9e2e6)') +
+        ';border-radius:10px;background:' + (cur ? ACCENT + '12' : 'var(--surface,#fff)') + ';cursor:pointer;">' +
+        '<span aria-hidden="true" style="display:flex;flex-direction:column;border-radius:4px;overflow:hidden;box-shadow:inset 0 0 0 1px rgb(20 35 45 / 10%);">' + swatches + '</span>' +
+        '<span style="font-size:12px;font-weight:600;color:var(--ink,#20303a);text-align:left;">' + t.name + '</span></button>'
+    }).join('')
+
+    // ★ 2026-10-19：话痨滑块 + 两个"活人感"开关**整块迁到「设置 → 个性化 → 活人感」**。
+    //   原因：本页已经有 7 张卡（皮肤 / 全局主题 / 流式 / 点击互动 / 图片 / 音效事件 / 音效片段），
+    //   而话痨程度本质是桌宠**行为**，不是外观；放在个性化页更符合职责，也不会有两个入口。
+    //   锚点换算仍然是本文件的 talkativenessNumbers/talkativenessPreview（唯一真源），
+    //   个性化页通过 window.__mioBubblePanel.talkativeness.* 复用，不各算一套。
+    //   ⚠ 本卡属于 PART_CARDS.appearance（主题 tab），提示里要指向"个性化"而不是"桌宠"。
+    return card('全局主题',
+      '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:8px;">' + themeTiles + '</div>' +
+      hint('全局主题决定整个应用（含本页）的底色与主色，也是皮肤选「跟随主题」时气泡/横条的取色来源。' +
+        '<br />与「设置 → 外观 → 主题」是同一个设置，改哪边都同步。' +
+        '<br />话痨程度 / 随机微表情 / 模型台词已移到「个性化」页。'))
+  }
+
 
   // ---------- 逐 token 流式（M1） ----------
 
@@ -154,9 +269,9 @@
         '<input type="checkbox" id="bpStreamText"' + (streamText ? ' checked' : '') + ' style="flex:none;" />' +
         '<label for="bpStreamText" style="flex:1;display:flex;flex-direction:column;cursor:pointer;">' +
           '<strong style="font-size:12px;">助手正文逐块铺进气泡</strong>' +
-          '<small style="font-size:10px;color:var(--muted,#687984);">Agent（如 DSH）输出正文时，气泡按上游原始节奏逐块追加，而不是整段一次性弹出</small></label>' +
+          '<small style="font-size:12px;color:var(--muted,#687984);">Agent（如 DSH）输出正文时，气泡按上游原始节奏逐块追加，而不是整段一次性弹出</small></label>' +
       '</div>' +
-      '<div style="margin-top:9px;font-size:10px;line-height:1.8;color:var(--muted,#687984);">' +
+      '<div style="margin-top:9px;font-size:12px;line-height:1.8;color:var(--muted,#687984);">' +
         '• 关掉后仍可用「一次性文本气泡」（插件主动喊你时的一句话），只是不逐块铺开。<br />' +
         '• 上游把几十个 token 一次性 flush 时，气泡会给每块垫一个可感知的最小间隔，避免"啪"地全段出现。<br />' +
         '• 收尾用权威全文校正一次，保证零丢字、零重复；播完按文字长度停留 3.5~12 秒。' +
@@ -168,8 +283,8 @@
   function renderClickTalk() {
     var queueRows = clickCfg.queue.map(function (text, i) {
       return '<div style="display:flex;align-items:center;gap:6px;">' +
-        '<span style="flex:none;font-size:10px;color:var(--muted,#687984);width:34px;">第' + (i + 2) + '次</span>' +
-        '<input type="text" data-queue-idx="' + i + '" value="' + String(text).replace(/"/g, '&quot;') + '" style="flex:1;min-height:26px;padding:0 8px;border:1px solid #d5e0e3;border-radius:6px;font-size:11px;" />' +
+        '<span style="flex:none;font-size:12px;color:var(--muted,#687984);width:34px;">第' + (i + 2) + '次</span>' +
+        '<input type="text" data-queue-idx="' + i + '" value="' + String(text).replace(/"/g, '&quot;') + '" style="flex:1;min-height:26px;padding:0 8px;border:1px solid #d5e0e3;border-radius:6px;font-size:12px;" />' +
         '<button type="button" data-queue-up="' + i + '" title="上移" style="' + btnStyle() + 'padding:2px 7px;">↑</button>' +
         '<button type="button" data-queue-del="' + i + '" title="删除" style="' + btnStyle('danger') + 'padding:2px 7px;">✕</button>' +
       '</div>'
@@ -180,17 +295,17 @@
         '<input type="checkbox" id="bpClickTalk"' + (clickTalk ? ' checked' : '') + ' style="flex:none;" />' +
         '<label for="bpClickTalk" style="flex:1;display:flex;flex-direction:column;cursor:pointer;">' +
           '<strong style="font-size:12px;">点击桌宠时随机互动</strong>' +
-          '<small style="font-size:10px;color:var(--muted,#687984);">关闭后除了"点击序列"，随机语句/图片也不再触发</small></label>' +
+          '<small style="font-size:12px;color:var(--muted,#687984);">关闭后除了"点击序列"，随机语句/图片也不再触发</small></label>' +
       '</div>' +
       '<div style="display:flex;flex-direction:column;gap:7px;">' +
         '<div style="display:flex;align-items:center;gap:6px;">' +
-          '<span style="flex:none;font-size:10px;color:var(--muted,#687984);width:34px;">第1次</span>' +
-          '<input type="text" id="bpClickFirst" placeholder="首次点击显示的话（留空跳过）" value="' + String(clickCfg.first || '').replace(/"/g, '&quot;') + '" style="flex:1;min-height:26px;padding:0 8px;border:1px solid #d5e0e3;border-radius:6px;font-size:11px;" />' +
+          '<span style="flex:none;font-size:12px;color:var(--muted,#687984);width:34px;">第1次</span>' +
+          '<input type="text" id="bpClickFirst" placeholder="首次点击显示的话（留空跳过）" value="' + String(clickCfg.first || '').replace(/"/g, '&quot;') + '" style="flex:1;min-height:26px;padding:0 8px;border:1px solid #d5e0e3;border-radius:6px;font-size:12px;" />' +
           '<button type="button" id="bpQueueAdd" style="' + btnStyle('primary') + '">加一条</button>' +
         '</div>' +
         queueRows +
       '</div>' +
-      '<div style="margin-top:9px;font-size:10px;line-height:1.8;color:var(--muted,#687984);">' +
+      '<div style="margin-top:9px;font-size:12px;line-height:1.8;color:var(--muted,#687984);">' +
         '点桌宠按「第1次 → 第2次 → … → 循环」推进（whale 的点击序列玩法）。<br />' +
         '单项语法：<code>a|b|c</code> = 等权随机取一句；<code>{image}</code> = 从图片素材库随机抽一张。<br />' +
         '未配置序列时走缺省随机：素材库有图时约 45% 出图片，否则随机语句。气泡 3 秒自动消失。' +
@@ -205,21 +320,21 @@
       var weight = Number.isFinite(w) && w > 0 ? w : 1
       return '<div style="position:relative;width:104px;">' +
         '<img src="' + im.url + '?v=' + im.mtime + '" style="width:104px;height:64px;object-fit:cover;border-radius:7px;border:1px solid var(--line,#d9e2e6);" />' +
-        '<button type="button" data-del="' + encodeURIComponent(im.name) + '" title="删除" style="position:absolute;top:-6px;right:-6px;width:18px;height:18px;border:none;border-radius:50%;background:#c0392b;color:#fff;font-size:10px;cursor:pointer;">✕</button>' +
+        '<button type="button" data-del="' + encodeURIComponent(im.name) + '" title="删除" style="position:absolute;top:-6px;right:-6px;width:18px;height:18px;border:none;border-radius:50%;background:#c0392b;color:#fff;font-size:12px;cursor:pointer;">✕</button>' +
         '<div style="display:flex;align-items:center;gap:4px;margin-top:3px;">' +
-          '<span style="flex:1;font-size:9px;color:var(--muted,#687984);overflow:hidden;white-space:nowrap;text-overflow:ellipsis;" title="' + im.name + '">' + im.name + '</span>' +
-          '<input type="number" min="1" max="99" step="1" data-weight="' + encodeURIComponent(im.name) + '" value="' + weight + '" title="抽到权重（越大越常出）" style="width:38px;min-height:20px;padding:0 3px;border:1px solid #d5e0e3;border-radius:5px;font-size:10px;" />' +
+          '<span style="flex:1;font-size:12px;color:var(--muted,#687984);overflow:hidden;white-space:nowrap;text-overflow:ellipsis;" title="' + im.name + '">' + im.name + '</span>' +
+          '<input type="number" min="1" max="99" step="1" data-weight="' + encodeURIComponent(im.name) + '" value="' + weight + '" title="抽到权重（越大越常出）" style="width:48px;min-height:22px;padding:0 4px;border:1px solid #d5e0e3;border-radius:5px;font-size:12px;" />' +
         '</div></div>'
     }).join('')
-    var empty = images.length ? '' : '<div style="font-size:11px;color:var(--muted,#687984);padding:8px 2px;">素材库为空——上传图片后，点击互动就能出图片了。</div>'
+    var empty = images.length ? '' : '<div style="font-size:12px;color:var(--muted,#687984);padding:8px 2px;">素材库为空——上传图片后，点击互动就能出图片了。</div>'
     return card('图片素材库（' + images.length + ' 张）',
       '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">' +
         '<button type="button" id="bpUploadBtn" style="' + btnStyle('primary') + '">上传图片</button>' +
         '<input type="file" id="bpUploadFile" accept=".png,.jpg,.jpeg,.gif,.webp" multiple style="display:none;" />' +
-        '<span id="bpToast" style="font-size:11px;"></span>' +
+        '<span id="bpToast" style="font-size:12px;"></span>' +
       '</div>' +
       '<div style="display:flex;flex-wrap:wrap;gap:12px;">' + items + empty + '</div>' +
-      '<div style="margin-top:9px;font-size:10px;color:var(--muted,#687984);">单张 ≤5MB，支持 PNG/JPG/GIF/WebP；右下角数字是抽到权重（默认 1）。也可以直接把图片放进 Live2D桌宠/bubble-imgs 目录。</div>')
+      '<div style="margin-top:9px;font-size:12px;color:var(--muted,#687984);">单张 ≤5MB，支持 PNG/JPG/GIF/WebP；右下角数字是抽到权重（默认 1）。也可以直接把图片放进 Live2D桌宠/bubble-imgs 目录。</div>')
   }
 
   // ---------- 音效（事件表 + 片段库） ----------
@@ -267,16 +382,16 @@
         '<input type="checkbox" data-snd-on="' + ev.id + '"' + (on ? ' checked' : '') + ' style="flex:none;" title="响不响" />' +
         '<div style="flex:1;min-width:96px;display:flex;flex-direction:column;">' +
           '<strong style="font-size:12px;">' + ev.label + '</strong>' +
-          '<small style="font-size:10px;color:var(--muted,#687984);">' + ev.hint + '</small></div>' +
-        '<select data-snd-clip="' + ev.id + '" style="min-height:26px;max-width:150px;border:1px solid #d5e0e3;border-radius:6px;font-size:11px;">' + clipOptions(clip) + '</select>' +
+          '<small style="font-size:12px;color:var(--muted,#687984);">' + ev.hint + '</small></div>' +
+        '<select data-snd-clip="' + ev.id + '" style="min-height:26px;max-width:150px;border:1px solid #d5e0e3;border-radius:6px;font-size:12px;">' + clipOptions(clip) + '</select>' +
         '<input type="range" min="0" max="100" step="5" value="' + vol + '" data-snd-vol="' + ev.id + '" title="本事件音量" style="width:82px;" />' +
-        '<span data-snd-vol-out="' + ev.id + '" style="flex:none;width:32px;font-size:10px;color:var(--muted,#687984);">' + vol + '%</span>' +
+        '<span data-snd-vol-out="' + ev.id + '" style="flex:none;width:32px;font-size:12px;color:var(--muted,#687984);">' + vol + '%</span>' +
         '<button type="button" data-snd-play="' + ev.id + '" style="' + btnStyle() + '">试听</button>' +
       '</div>'
     }).join('')
     return card('音效事件',
       '<div style="display:flex;flex-direction:column;gap:7px;">' + rows + '</div>' +
-      '<div style="margin-top:9px;font-size:10px;line-height:1.8;color:var(--muted,#687984);">' +
+      '<div style="margin-top:9px;font-size:12px;line-height:1.8;color:var(--muted,#687984);">' +
         '每行下拉直接选播什么：默认音效（推荐，内置片段）／内置合成音／内置片段（小黄鸭、Minecraft 经验球等）／我的片段。选中即所见，试听播的也是下拉当前选中的那条。<br />' +
         '总开关与基准音量在「设置 → 桌宠 → 音效」；本页音量是各事件相对基准的百分比。</div>')
   }
@@ -285,8 +400,8 @@
     var rows = sounds.map(function (s) {
       var active = trim && trim.name === s.name
       var row = '<div style="display:flex;align-items:center;gap:8px;padding:6px 9px;border:1px solid var(--line,#d9e2e6);border-radius:9px;background:var(--surface,#fff);">' +
-        '<span style="flex:1;font-size:11px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;" title="' + s.name + '">' + s.name + '</span>' +
-        '<span style="flex:none;font-size:10px;color:var(--muted,#687984);">' + (s.bytes / 1024).toFixed(1) + ' KB</span>' +
+        '<span style="flex:1;font-size:12px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;" title="' + s.name + '">' + s.name + '</span>' +
+        '<span style="flex:none;font-size:12px;color:var(--muted,#687984);">' + (s.bytes / 1024).toFixed(1) + ' KB</span>' +
         '<button type="button" data-clip-play="' + encodeURIComponent(s.name) + '" style="' + btnStyle() + '">试听</button>' +
         '<button type="button" data-clip-trim="' + encodeURIComponent(s.name) + '" style="' + btnStyle('primary') + '">裁剪</button>' +
         '<button type="button" data-clip-del="' + encodeURIComponent(s.name) + '" style="' + btnStyle('danger') + '">删除</button>' +
@@ -295,7 +410,7 @@
         row += '<div style="margin:6px 0 2px;padding:9px;border:1px dashed ' + ACCENT + '66;border-radius:9px;background:' + ACCENT + '08;">' +
           '<canvas id="bpTrimCanvas" width="420" height="72" style="width:100%;max-width:420px;height:72px;background:#fff;border:1px solid var(--line,#d9e2e6);border-radius:6px;cursor:crosshair;"></canvas>' +
           '<div style="display:flex;align-items:center;gap:8px;margin-top:7px;flex-wrap:wrap;">' +
-            '<span id="bpTrimRange" style="font-size:11px;color:var(--muted,#687984);">' + (trim.busy ? '解码中…' : '在波形上按住拖选要保留的区间') + '</span>' +
+            '<span id="bpTrimRange" style="font-size:12px;color:var(--muted,#687984);">' + (trim.busy ? '解码中…' : '在波形上按住拖选要保留的区间') + '</span>' +
             '<button type="button" id="bpTrimPreview" style="' + btnStyle() + '">试听选区</button>' +
             '<button type="button" id="bpTrimSave" style="' + btnStyle('primary') + '">保存为片段</button>' +
             '<button type="button" id="bpTrimCancel" style="' + btnStyle() + '">取消</button>' +
@@ -303,13 +418,13 @@
       }
       return row
     }).join('')
-    var empty = sounds.length ? '' : '<div style="font-size:11px;color:var(--muted,#687984);padding:6px 2px;">还没有自定义片段——上传音频后可在上方事件表里替换任意事件音。</div>'
+    var empty = sounds.length ? '' : '<div style="font-size:12px;color:var(--muted,#687984);padding:6px 2px;">还没有自定义片段——上传音频后可在上方事件表里替换任意事件音。</div>'
     return card('音效片段（' + sounds.length + ' 个）',
       '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap;">' +
         '<button type="button" id="bpSoundUploadBtn" style="' + btnStyle('primary') + '" title="支持：' + SOUND_EXTS.join(' / ') + '（≤' + SOUND_MAX_MB + 'MB）">上传音频</button>' +
         '<input type="file" id="bpSoundUploadFile" accept="' + SOUND_ACCEPT + '" multiple style="display:none;" />' +
       '</div>' +
-      '<div style="margin-bottom:10px;padding:8px 10px;border:1px solid var(--line,#d9e2e6);border-radius:8px;background:var(--surface-soft,#f2f6f7);font-size:10px;line-height:1.9;color:var(--muted,#687984);">' +
+      '<div style="margin-bottom:10px;padding:8px 10px;border:1px solid var(--line,#d9e2e6);border-radius:8px;background:var(--surface-soft,#f2f6f7);font-size:12px;line-height:1.9;color:var(--muted,#687984);">' +
         '<b style="color:var(--ink,#20303a);">格式要求</b>：只支持浏览器能解码的音频 —— ' +
         SOUND_EXTS.join(' / ') + '，单个 ≤' + SOUND_MAX_MB + 'MB。<br />' +
         '• <b>推荐 WAV / MP3</b>（最稳，任何浏览器都能播）；OGG/Opus/FLAC 也支持。<br />' +
@@ -318,13 +433,47 @@
         '• 事件音默认用内置片段（小黄鸭 / Minecraft 经验球等），无需任何素材；下拉里选「内置合成音」可回到纯合成音。' +
       '</div>' +
       '<div style="display:flex;flex-direction:column;gap:6px;">' + rows + empty + '</div>' +
-      '<div style="margin-top:9px;font-size:10px;color:var(--muted,#687984);">「裁剪」在波形上拖选区间，保存为新片段（WAV），原片段保留。</div>')
+      '<div style="margin-top:9px;font-size:12px;color:var(--muted,#687984);">「裁剪」在波形上拖选区间，保存为新片段（WAV），原片段保留。</div>')
+  }
+
+  // 卡片渲染表 + 分组（2026-10-19：设置页拆出「个性化」tab 后，本模块要能分两次渲染）
+  //   appearance → 「设置 → 主题」：皮肤（气泡+横条）+ 全局主题
+  //   behavior   → 「设置 → 个性化」：流式 / 点击互动 / 图片素材库 / 音效事件 / 音效片段
+  // 只渲染当前这一组的原因：两个 tab 不会同时存在（renderBody 每次重建 #mioSetBody），
+  // 没必要把另一组的 DOM 也塞进来再隐藏。绑定侧全是 querySelectorAll / 空值保护，
+  // 少了元素不会抛错（已逐个核对过）。
+  var CARD_RENDER = {
+    appearance: renderAppearance,
+    personalization: renderPersonalization,
+    streamText: renderStreamText,
+    clickTalk: renderClickTalk,
+    images: renderImages,
+    soundEvents: renderSoundEvents,
+    soundClips: renderSoundClips,
+  }
+  var PART_CARDS = {
+    appearance: ['appearance', 'personalization'],
+    behavior: ['streamText', 'clickTalk', 'images', 'soundEvents', 'soundClips'],
+  }
+  var currentPart = 'all'
+
+  var PART_INTRO = {
+    appearance: '皮肤同时作用于<b style="color:var(--accent,#4c8798);">气泡与横条</b>；选「跟随主题」时调色板跟随全局 UI 主题。改动即时保存。',
+    behavior: '所有改动<b style="color:var(--accent,#4c8798);">即时保存</b>并热应用到桌宠（无需重启）。' +
+      '气泡 3 秒自动消失；点桌宠按「点击序列」推进（未配置则随机语句/图片）。',
+    all: '所有改动<b style="color:var(--accent,#4c8798);">即时保存</b>并热应用到桌宠（无需重启）。',
   }
 
   function renderAll() {
     var body = $q('#bpBody', container)
     if (!body) return
-    body.innerHTML = renderStyles() + renderStripStyles() + renderStreamText() + renderClickTalk() + renderImages() + renderSoundEvents() + renderSoundClips()
+    var keys = PART_CARDS[currentPart] || Object.keys(CARD_RENDER)
+    var html = ''
+    for (var i = 0; i < keys.length; i++) {
+      var fn = CARD_RENDER[keys[i]]
+      if (typeof fn === 'function') html += fn()
+    }
+    body.innerHTML = html
     bindAll()
     if (trim) drawTrim()
   }
@@ -509,17 +658,37 @@
       btn.addEventListener('click', function (e) {
         e.stopPropagation()
         styleId = btn.getAttribute('data-style')
-        saveSettings({ live2d_bubble_style: styleId }, '皮肤已切换').then(function () { refresh() })
+        saveSettings({ live2d_bubble_style: styleId }, '主题已切换（气泡与横条同时生效）').then(function () { refresh() })
       })
     })
 
-    // 7.6 横条皮肤：写 live2d_strip_style（与气泡皮肤同族）。
-    // 桌宠渲染端认这个键并热应用（applySettings → __mioPetStrip.applyStyle）。
-    body.querySelectorAll('[data-strip-style]').forEach(function (btn) {
+    // ---- 话痨滑块/能力开关的绑定已移除 ----
+    //   它们现在挂在「设置 → 个性化 → 活人感」（settings-panel-inject.js），
+    //   沿用那一页的 collectValues + 保存按钮，PATCH 到同一批键（pet_talkativeness 等）。
+    //   本页不再提供入口，避免同一设置两处可改、改一处漏另一处。
+
+    // ---- 全局主题（与「设置 → 外观 → 主题」双向同步）----
+    // 两处存储各管一层，缺一不可：
+    //   ① 后端 ui_theme → 桌宠窗口的气泡/横条（"跟随主题"取色）；
+    //   ② 本机 app preferences（localStorage）→ 主界面 Vue 的 .app-shell.theme-*。
+    // storage 事件**同窗口不触发**，所以写完 localStorage 手动派发一次，
+    // 让主界面即时换肤（不必再点"保存"，与面板"即时生效"的语义一致）。
+    var applyGlobalTheme = function (themeId) {
+      saveSettings({ ui_theme: themeId }, '全局主题：' + uiThemeName(themeId)).then(function () { refresh() })
+      try {
+        var raw = window.localStorage.getItem('mio_app_preferences')
+        var prefs = raw ? JSON.parse(raw) : {}
+        prefs.theme = themeId
+        var next = JSON.stringify(prefs)
+        window.localStorage.setItem('mio_app_preferences', next)
+        window.dispatchEvent(new StorageEvent('storage', { key: 'mio_app_preferences', newValue: next }))
+      } catch (_) {}
+    }
+    body.querySelectorAll('[data-ui-theme]').forEach(function (btn) {
       btn.addEventListener('click', function (e) {
         e.stopPropagation()
-        stripStyleId = btn.getAttribute('data-strip-style')
-        saveSettings({ live2d_strip_style: stripStyleId }, '横条皮肤已切换').then(function () { refresh() })
+        uiThemeId = btn.getAttribute('data-ui-theme')
+        applyGlobalTheme(uiThemeId)
       })
     })
 
@@ -905,8 +1074,12 @@
     ]).then(function (res) {
       if (!container || container.isConnected !== undefined && !container.isConnected) { stopPoll(); return }
       var st = (res[0] && res[0].pet && res[0].pet.settings) || {}
+      // ★ 唯一真源 live2d_bubble_style；live2d_strip_style 只在"气泡还没选过"时做一次迁移
       styleId = String(st.live2d_bubble_style || 'default')
-      stripStyleId = String(st.live2d_strip_style || 'default')
+      if ((styleId === 'default' || !styleId) && st.live2d_strip_style && st.live2d_strip_style !== 'default') {
+        styleId = String(st.live2d_strip_style)
+      }
+      uiThemeId = String(st.ui_theme || 'mist')
       clickTalk = st.pet_click_talk_enabled !== false
       streamText = st.live2d_stream_text_enabled !== false
       soundEvents = (st.pet_sound_events && typeof st.pet_sound_events === 'object') ? JSON.parse(JSON.stringify(st.pet_sound_events)) : {}
@@ -937,16 +1110,38 @@
     if (pollTimer) { window.clearInterval(pollTimer); pollTimer = null }
   }
 
-  // ---------- 入口：渲染进指定容器（由设置面板「泡泡」tab 调用） ----------
+  // ---------- 入口：渲染进指定容器 ----------
+  // 调用方：设置面板「主题」tab（part='appearance'）与「个性化」tab（part='behavior'）。
+  // 不传 part 时渲染全部卡片（保留老行为，便于单独调试本模块）。
 
-  function renderInto(host) {
+  function renderInto(host, part) {
     if (!host) return
     container = host
+    currentPart = PART_CARDS[part] ? part : 'all'
+    // 切换分组时清掉裁剪态：轮询遇到 trim.buffer 会整轮跳过刷新，
+    // 而「音效片段」卡只在 behavior 组里 —— 带着残留的 trim 去「主题」tab，
+    // 那一页会永远不刷新（看起来像卡死）。离开音效组就把状态丢掉。
+    var cards = PART_CARDS[currentPart] || []
+    if (currentPart !== 'all' && cards.indexOf('soundClips') < 0) trim = null
     stopPoll()
+    // 注入一小段作用域限定的 CSS：内联样式写不了 :hover/:focus-visible，
+    // 而"焦点看不见"是注入式面板最常见的可访问性缺口（impeccable 反模式之一）。
+    // 选择器一律挂在 #bpBody 下，不外溢到宿主设置页。
+    var scopedCss =
+      '<style>' +
+        '#bpBody button{transition:filter .15s ease, border-color .15s ease, box-shadow .15s ease;}' +
+        '#bpBody button:hover{filter:brightness(.985);}' +
+        '#bpBody button:focus-visible{outline:2px solid ' + ACCENT + ';outline-offset:2px;}' +
+        '#bpBody input:focus-visible,#bpBody select:focus-visible,#bpBody textarea:focus-visible{outline:2px solid ' + ACCENT + ';outline-offset:2px;}' +
+        '#bpBody input[type=range]{height:22px;}' +
+        '#bpBody input[type=range]:focus-visible{outline-offset:4px;border-radius:6px;}' +
+        '#bpBody input[type=checkbox]{width:15px;height:15px;accent-color:' + ACCENT + ';cursor:pointer;}' +
+        '@media (prefers-reduced-motion: reduce){#bpBody *{transition:none !important;animation:none !important;}}' +
+      '</style>'
     container.innerHTML =
-      '<div style="flex:none;padding:10px 14px;font-size:11px;line-height:1.7;color:var(--muted,#687984);background:var(--surface-soft,#f2f6f7);border:1px solid var(--line,#d9e2e6);border-radius:9px;margin-bottom:12px;">' +
-        '所有改动<b style="color:var(--accent,#4c8798);">即时保存</b>并热应用到桌宠（无需重启）。' +
-        '气泡 3 秒自动消失；点桌宠按「点击序列」推进（未配置则随机语句/图片）。' +
+      scopedCss +
+      '<div style="flex:none;padding:11px 14px;font-size:12px;line-height:1.7;color:var(--muted,#687984);background:var(--surface-soft,#f2f6f7);border-radius:10px;margin-bottom:12px;">' +
+        (PART_INTRO[currentPart] || PART_INTRO.all) +
       '</div>' +
       '<div id="bpBody" style="display:flex;flex-direction:column;gap:14px;"></div>'
     refresh(true)
@@ -957,5 +1152,14 @@
     renderInto: renderInto,
     refresh: refresh,
     destroy: stopPoll,
+    // 「设置 → 个性化 → 活人感」复用同一套锚点/文案：
+    // 曲线真源在 live2d-pet.js 的 TALK_ANCHORS，本文件是它的**面板侧镜像**，
+    // 个性化页不再自己算一遍（否则三处各一套，滑块文案迟早和实际节奏对不上）。
+    talkativeness: {
+      numbers: talkativenessNumbers,
+      label: talkativenessLabel,
+      preview: talkativenessPreview,
+      fmtRange: fmtRange,
+    },
   }
 })()

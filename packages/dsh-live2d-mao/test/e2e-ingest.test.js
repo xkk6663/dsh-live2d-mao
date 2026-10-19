@@ -97,7 +97,7 @@ test('6.5·E2E · 后端可测性探测', { skip: !READY && '后端环境不可�
   assert.equal(READY, true)
 })
 
-test('6.5·E2E · ★ 插件真实 phase 信封 → 后端 200，且总线认到 dsh-live2d-mao', { skip: !READY && '后端不可用' }, async () => {
+test('6.5·E2E · ★ 插件真实 phase 信封 → 后端 200，且总线认到 dsh（合并身份）', { skip: !READY && '后端不可用' }, async () => {
   const t = realTransport()
   const pusher = createPusher({ transport: t, logger: quiet })
 
@@ -105,8 +105,13 @@ test('6.5·E2E · ★ 插件真实 phase 信封 → 后端 200，且总线认到
   assert.equal(r.ok, true, '真实后端应接受插件信封')
   assert.equal(r.status, 200)
   assert.equal(r.body.ok, true)
-  // ★ 证明后端真的注册并广播了 dsh-live2d-mao（而不是默默丢弃）
-  assert.equal(r.body.agent_id, 'dsh-live2d-mao')
+  // ★ 证明后端真的注册并广播了总线上那个 `dsh`（而不是默默丢弃）。
+  //   ⚠ 这里断言的是**总线 agent_id `dsh`**，不是插件名 `dsh-live2d-mao`：
+  //   v1.0.0「合并身份」后插件复用日志边车的身份，桌宠上只显示一个 DSH 徽标；
+  //   插件名只出现在 npm 包名 / cordis id / 路由前缀 / 日志 tag 里。
+  //   一旦有人把这条改回 'dsh-live2d-mao'，等于同时废掉 dsh_adapter._plugin_owns_bus()
+  //   的"边车让位"判据（它 get(AGENT_ID='dsh')），会导致两条链路互相覆盖 phase。
+  assert.equal(r.body.agent_id, 'dsh')
   assert.equal(r.body.phase, 'thinking')
 })
 
@@ -140,14 +145,14 @@ test('6.5·E2E · 真实后端拒绝非法 phase（后端侧防线，400）', { 
 })
 
 test('6.5·E2E · 缺 phase → 后端 422（契约校验）', { skip: !READY && '后端不可用' }, () => {
-  const res = postToRealApp('/api/plugin/dsh/ingest', { agent_id: 'dsh-live2d-mao' })
+  const res = postToRealApp('/api/plugin/dsh/ingest', { agent_id: 'dsh' })
   assert.equal(res.status, 422)
 })
 
 test('6.5·E2E · ★ 跨站请求被后端中间件 403（LocalControlMiddleware）', { skip: !READY && '后端不可用' }, () => {
   const res = postToRealApp(
     '/api/plugin/dsh/ingest',
-    { phase: 'thinking', agent_id: 'dsh-live2d-mao' },
+    { phase: 'thinking', agent_id: 'dsh' },
     { 'sec-fetch-site': 'cross-site' },
   )
   assert.equal(res.status, 403, '跨站必须被拒')
@@ -156,20 +161,20 @@ test('6.5·E2E · ★ 跨站请求被后端中间件 403（LocalControlMiddlewar
 test('6.5·E2E · ★ 非回环 Host 被后端 403', { skip: !READY && '后端不可用' }, () => {
   const res = postToRealApp(
     '/api/plugin/dsh/ingest',
-    { phase: 'thinking', agent_id: 'dsh-live2d-mao' },
+    { phase: 'thinking', agent_id: 'dsh' },
     { host: 'evil.example.com' },
   )
   assert.equal(res.status, 403, '伪造 Host 必须被拒')
 })
 
-test('6.5·E2E · 缺省 agent_id 落到 dsh-live2d-mao（D5 全小写）', { skip: !READY && '后端不可用' }, () => {
+test('6.5·E2E · 缺省 agent_id 落到 dsh（D5 全小写）', { skip: !READY && '后端不可用' }, () => {
   const res = postToRealApp('/api/plugin/dsh/ingest', { phase: 'idle' })
   assert.equal(res.status, 200)
-  assert.equal(res.json.agent_id, 'dsh-live2d-mao')
+  assert.equal(res.json.agent_id, 'dsh')
 })
 
 test('6.5·E2E · 响应含 throttled / phase_changed（调试用字段）', { skip: !READY && '后端不可用' }, () => {
-  const res = postToRealApp('/api/plugin/dsh/ingest', { phase: 'planning', agent_id: 'dsh-live2d-mao', force: true })
+  const res = postToRealApp('/api/plugin/dsh/ingest', { phase: 'planning', agent_id: 'dsh', force: true })
   assert.equal(res.status, 200)
   assert.equal(typeof res.json.throttled, 'boolean')
   assert.equal(typeof res.json.phase_changed, 'boolean')
@@ -181,7 +186,7 @@ import json
 from fastapi.testclient import TestClient
 from app.main import app
 c = TestClient(app)
-r = c.get("/api/plugin/dsh/agent", params={"agent_id": "dsh-live2d-mao"})
+r = c.get("/api/plugin/dsh/agent", params={"agent_id": "dsh"})
 print(json.dumps({"status": r.status_code, "json": r.json() if r.status_code == 200 else None}))
 `
   const raw = execFileSync(PY, ['-c', script], { cwd: BACKEND, timeout: 120_000, encoding: 'utf8' })

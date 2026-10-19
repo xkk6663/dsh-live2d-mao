@@ -3,8 +3,11 @@
 import io, os, re, sys, collections, ast
 
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-DIST = r'C:\Users\xiao1\Mao\澪Agent应用\dist'
-APP = r'C:\Users\xiao1\Mao\私人AI日记系统\backend\app'
+# ★ 独立性（2026-10-19）：原值硬编码为上游 Mao 仓库的绝对路径，换机器即失效。
+#   改为根据本文件位置反推项目根（backend/_apicheck.py → 项目根）。
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+DIST = os.path.join(_PROJECT_ROOT, '澪Agent应用', 'dist')
+APP = os.path.join(_PROJECT_ROOT, '私人AI日记系统', 'backend', 'app')
 
 # 1) 前端 dist 所有 API 调用
 api_calls = collections.Counter()

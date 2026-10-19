@@ -225,22 +225,23 @@
                          "motionSlots":  {
                                              "idle":  "idle",
                                              "touch":  "aidale",
-                                             "think":  "idle",
+                                             "think":  "bubble",
                                              "speak":  "idle",
-                                             "observe":  "idle",
+                                             "observe":  "ketchup",
                                              "cheerful":  "aidale",
-                                             "concerned":  "idle",
+                                             "concerned":  "splash",
                                              "alert":  "aidale",
-                                             "attention":  "idle",
-                                             "shy":  "idle"
+                                             "attention":  "openLid",
+                                             "shy":  "selfieQuick",
+                                             "listen":  "selfie"
                                          },
                          "expressionSlots":  {
                                                  "gentle":  "love",
-                                                 "cheerful":  "兔兔贴纸",
-                                                 "concerned":  "单边马尾",
-                                                 "serious":  "双手比耶",
-                                                 "shy":  "吐舌",
-                                                 "alert":  "吐魂"
+                                                 "cheerful":  "开心兴奋",
+                                                 "concerned":  "悲伤",
+                                                 "serious":  "生气",
+                                                 "shy":  "脸红",
+                                                 "alert":  "感叹号"
                                              },
                          "unassignedMotions":  [
                                                    "selfie",

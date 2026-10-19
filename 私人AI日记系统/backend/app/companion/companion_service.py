@@ -108,6 +108,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "live2d_disable_gpu": False,
     "live2d_motion_slots": {},
     "live2d_expression_slots": {},
+    # 任务状态（phase）→ 表现绑定：{模型id: {phase: {motion: 槽名, expression: 槽名}}}。
+    # 空 = 用渲染端内置默认（PHASE_MOTION_SLOT / PHASE_EMOTION）。
+    "live2d_phase_slots": {},
     # 泡泡工坊：气泡皮肤 id + 点击互动（点桌宠随机语句/图片，复用说话气泡）
     "live2d_bubble_style": "default",
     "pet_click_talk_enabled": True,
@@ -141,6 +144,23 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "pet_idle_talk_enabled": True,
     "pet_idle_talk_min_seconds": 90,
     "pet_idle_talk_max_seconds": 240,
+    # 随机微表情节拍（M1/M2：不动它时随机换表情，不说话）
+    "pet_idle_beat_enabled": True,
+    "pet_idle_beat_min_seconds": 30,
+    "pet_idle_beat_max_seconds": 90,
+    # 模型专属台词库（quotes/<modelId>.json）：关掉则只用通用内容池
+    "pet_quotes_enabled": True,
+    # 话痨程度 0-100（个性化总旋钮）：一条滑块同时缩放"自语间隔"和"微表情节奏"，
+    # 0 = 完全安静（不主动出声/不主动换表情），100 = 话痨。
+    # 具体间隔由渲染端按曲线换算（见 live2d-pet.js talkativenessProfile），
+    # 显式设了 pet_idle_talk_* / pet_idle_beat_* 时以显式值为准（高级覆写）。
+    "pet_talkativeness": 45,
+    # 连点彩蛋（L3-c）：短时间内反复戳桌宠 → 给"嫌弃→装死"的分级反应。
+    # 每一级都复用现成的点击气泡通道（pet_click_bubbles），关掉即退回"每次都是害羞"。
+    "pet_poke_enabled": True,
+    # 全局 UI 主题 id（mist/clear/rose/forest/sakura/celadon/amber）：
+    # 主界面与外层窗共用一套调色板；气泡/横条皮肤选 "theme" 时跟随它。
+    "ui_theme": "mist",
     # 按压 Q 弹反馈
     "pet_press_bounce_enabled": True,
     "position_x": 80,
@@ -217,10 +237,17 @@ def _builtin_live2d_models() -> tuple[dict[str, Any], ...]:
 
 
 LIVE2D_MOTION_SLOT_IDS = frozenset(
-    {"idle", "touch", "think", "speak", "observe", "cheerful", "concerned", "alert", "attention", "shy"}
+    {"idle", "touch", "think", "speak", "observe", "cheerful", "concerned", "alert", "attention", "shy", "listen"}
 )
 LIVE2D_EXPRESSION_SLOT_IDS = frozenset(
-    {"neutral", "gentle", "cheerful", "concerned", "serious", "shy"}
+    {"neutral", "gentle", "cheerful", "concerned", "serious", "shy", "alert"}
+)
+# 任务状态白名单（heartbeat 不参与表现绑定）
+LIVE2D_PHASE_IDS = frozenset(
+    {
+        "idle", "planning", "thinking", "executing_tool", "streaming", "waiting_input",
+        "voice", "complete", "error", "paused", "awaiting_approval",
+    }
 )
 
 
@@ -640,6 +667,7 @@ _configuration_service = ConfigurationService(
     dep_DEFAULT_CONFIG=lambda: DEFAULT_CONFIG,
     dep_LIVE2D_EXPRESSION_SLOT_IDS=lambda: LIVE2D_EXPRESSION_SLOT_IDS,
     dep_LIVE2D_MOTION_SLOT_IDS=lambda: LIVE2D_MOTION_SLOT_IDS,
+    dep_LIVE2D_PHASE_IDS=lambda: LIVE2D_PHASE_IDS,
     dep__live2d_model_ids=lambda *args, **kwargs: _live2d_model_ids(*args, **kwargs),
     dep_settings=lambda: settings,
 )

@@ -13,12 +13,14 @@ class ConfigurationService:
                  dep_DEFAULT_CONFIG: Callable[..., Any],
                  dep_LIVE2D_EXPRESSION_SLOT_IDS: Callable[..., Any],
                  dep_LIVE2D_MOTION_SLOT_IDS: Callable[..., Any],
+                 dep_LIVE2D_PHASE_IDS: Callable[..., Any],
                  dep__live2d_model_ids: Callable[..., Any],
                  dep_settings: Callable[..., Any],
                  ) -> None:
         self._dep_DEFAULT_CONFIG = dep_DEFAULT_CONFIG
         self._dep_LIVE2D_EXPRESSION_SLOT_IDS = dep_LIVE2D_EXPRESSION_SLOT_IDS
         self._dep_LIVE2D_MOTION_SLOT_IDS = dep_LIVE2D_MOTION_SLOT_IDS
+        self._dep_LIVE2D_PHASE_IDS = dep_LIVE2D_PHASE_IDS
         self._dep__live2d_model_ids = dep__live2d_model_ids
         self._dep_settings = dep_settings
 
@@ -56,6 +58,19 @@ class ConfigurationService:
                 normalized[model_id] = slots
         return normalized
 
+    def _normalize_ui_theme(self, value: object) -> str:
+        """全局 UI 主题 id 白名单。
+
+        必须与前端 `App.vue` 的 `THEME_OPTIONS` 以及 `companion.css` 的
+        `.app-shell.theme-*` 三处保持一致：这里拦掉脏值，前端才不会挂上一个
+        不存在的 class（表现为"主题保存了但没生效"，很难查）。
+        """
+        allowed = {
+            "mist", "clear", "rose", "forest", "sakura", "celadon", "amber",
+        }
+        theme = str(value or "").strip().lower()
+        return theme if theme in allowed else "mist"
+
     def _normalize_live2d_expression_slots(self, value: object) -> dict[str, dict[str, str]]:
         if not isinstance(value, dict):
             return {}
@@ -72,6 +87,40 @@ class ConfigurationService:
                     slots[slot] = expression
             if slots:
                 normalized[model_id] = slots
+        return normalized
+
+    def _normalize_live2d_phase_slots(self, value: object) -> dict[str, dict[str, dict[str, str]]]:
+        """任务状态（phase）→ 表现绑定：{模型id: {phase: {"motion": 槽名, "expression": 槽名}}}。
+
+        与 motion/expression 槽位的区别：这里存的是**槽名**而不是具体动作/表情名。
+        这样同一个状态换模型时不用重配，且渲染端仍然走槽位解析（模型级默认 → 用户覆盖）。
+        """
+        if not isinstance(value, dict):
+            return {}
+        motion_slots = self._dep_LIVE2D_MOTION_SLOT_IDS()
+        expression_slots = self._dep_LIVE2D_EXPRESSION_SLOT_IDS()
+        phases = self._dep_LIVE2D_PHASE_IDS()
+        normalized: dict[str, dict[str, dict[str, str]]] = {}
+        for raw_model_id, raw_phases in list(value.items())[:30]:
+            model_id = str(raw_model_id or "").strip()[:100]
+            if not model_id or not isinstance(raw_phases, dict):
+                continue
+            per_model: dict[str, dict[str, str]] = {}
+            for raw_phase, raw_binding in list(raw_phases.items())[:20]:
+                phase = str(raw_phase or "").strip().lower()
+                if phase not in phases or not isinstance(raw_binding, dict):
+                    continue
+                motion = str(raw_binding.get("motion") or "").strip().lower()[:60]
+                expression = str(raw_binding.get("expression") or "").strip().lower()[:60]
+                binding: dict[str, str] = {}
+                if motion in motion_slots:
+                    binding["motion"] = motion
+                if expression in expression_slots:
+                    binding["expression"] = expression
+                if binding:
+                    per_model[phase] = binding
+            if per_model:
+                normalized[model_id] = per_model
         return normalized
 
     def load_config(self) -> dict[str, Any]:
@@ -139,15 +188,25 @@ class ConfigurationService:
         data["live2d_disable_gpu"] = bool(data.get("live2d_disable_gpu", False))
         data["live2d_motion_slots"] = self._normalize_live2d_motion_slots(data.get("live2d_motion_slots"))
         data["live2d_expression_slots"] = self._normalize_live2d_expression_slots(data.get("live2d_expression_slots"))
+        data["live2d_phase_slots"] = self._normalize_live2d_phase_slots(data.get("live2d_phase_slots"))
         # A 档：桌宠"生命感"设置（区间收敛，防脏值把桌宠刷屏/静音）
         data["pet_sound_enabled"] = bool(data.get("pet_sound_enabled", True))
         data["pet_sound_volume"] = max(0, min(100, int(data.get("pet_sound_volume", 70))))
         data["pet_idle_talk_enabled"] = bool(data.get("pet_idle_talk_enabled", True))
         data["pet_idle_talk_min_seconds"] = max(30, min(3600, int(data.get("pet_idle_talk_min_seconds", 90))))
         data["pet_idle_talk_max_seconds"] = max(30, min(7200, int(data.get("pet_idle_talk_max_seconds", 240))))
+        data["pet_idle_beat_enabled"] = bool(data.get("pet_idle_beat_enabled", True))
+        data["pet_idle_beat_min_seconds"] = max(8, min(1800, int(data.get("pet_idle_beat_min_seconds", 30))))
+        data["pet_idle_beat_max_seconds"] = max(8, min(3600, int(data.get("pet_idle_beat_max_seconds", 90))))
+        data["pet_quotes_enabled"] = bool(data.get("pet_quotes_enabled", True))
+        data["pet_talkativeness"] = max(0, min(100, int(data.get("pet_talkativeness", 45))))
+        data["pet_poke_enabled"] = bool(data.get("pet_poke_enabled", True))
+        data["ui_theme"] = self._normalize_ui_theme(data.get("ui_theme"))
         # 上下限防倒挂：max 必须 >= min，否则随机区间会抛错
         if data["pet_idle_talk_max_seconds"] < data["pet_idle_talk_min_seconds"]:
             data["pet_idle_talk_max_seconds"] = data["pet_idle_talk_min_seconds"]
+        if data["pet_idle_beat_max_seconds"] < data["pet_idle_beat_min_seconds"]:
+            data["pet_idle_beat_max_seconds"] = data["pet_idle_beat_min_seconds"]
         data["pet_press_bounce_enabled"] = bool(data.get("pet_press_bounce_enabled", True))
         data["position_x"] = max(-10000, min(10000, int(data.get("position_x", 80))))
         data["position_y"] = max(-10000, min(10000, int(data.get("position_y", 420))))
@@ -244,13 +303,23 @@ class ConfigurationService:
         normalized["live2d_disable_gpu"] = bool(normalized.get("live2d_disable_gpu", False))
         normalized["live2d_motion_slots"] = self._normalize_live2d_motion_slots(normalized.get("live2d_motion_slots"))
         normalized["live2d_expression_slots"] = self._normalize_live2d_expression_slots(normalized.get("live2d_expression_slots"))
+        normalized["live2d_phase_slots"] = self._normalize_live2d_phase_slots(normalized.get("live2d_phase_slots"))
         normalized["pet_sound_enabled"] = bool(normalized.get("pet_sound_enabled", True))
         normalized["pet_sound_volume"] = max(0, min(100, int(normalized.get("pet_sound_volume", 70))))
         normalized["pet_idle_talk_enabled"] = bool(normalized.get("pet_idle_talk_enabled", True))
         normalized["pet_idle_talk_min_seconds"] = max(30, min(3600, int(normalized.get("pet_idle_talk_min_seconds", 90))))
         normalized["pet_idle_talk_max_seconds"] = max(30, min(7200, int(normalized.get("pet_idle_talk_max_seconds", 240))))
+        normalized["pet_idle_beat_enabled"] = bool(normalized.get("pet_idle_beat_enabled", True))
+        normalized["pet_idle_beat_min_seconds"] = max(8, min(1800, int(normalized.get("pet_idle_beat_min_seconds", 30))))
+        normalized["pet_idle_beat_max_seconds"] = max(8, min(3600, int(normalized.get("pet_idle_beat_max_seconds", 90))))
+        normalized["pet_quotes_enabled"] = bool(normalized.get("pet_quotes_enabled", True))
+        normalized["pet_talkativeness"] = max(0, min(100, int(normalized.get("pet_talkativeness", 45))))
+        normalized["pet_poke_enabled"] = bool(normalized.get("pet_poke_enabled", True))
+        normalized["ui_theme"] = self._normalize_ui_theme(normalized.get("ui_theme"))
         if normalized["pet_idle_talk_max_seconds"] < normalized["pet_idle_talk_min_seconds"]:
             normalized["pet_idle_talk_max_seconds"] = normalized["pet_idle_talk_min_seconds"]
+        if normalized["pet_idle_beat_max_seconds"] < normalized["pet_idle_beat_min_seconds"]:
+            normalized["pet_idle_beat_max_seconds"] = normalized["pet_idle_beat_min_seconds"]
         normalized["pet_press_bounce_enabled"] = bool(normalized.get("pet_press_bounce_enabled", True))
         normalized["position_x"] = max(-10000, min(10000, int(normalized.get("position_x", 80))))
         normalized["position_y"] = max(-10000, min(10000, int(normalized.get("position_y", 420))))

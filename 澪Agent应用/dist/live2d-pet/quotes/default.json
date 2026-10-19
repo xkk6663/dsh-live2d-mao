@@ -1,0 +1,32 @@
+{
+  "modelId": "default",
+  "name": "通用保底池",
+  "version": 1,
+  "note": "没有专属台词库的模型走这里（等价于原 pet-idle-talk.js 的内容池，迁过来统一 schema）。",
+  "lines": [
+    { "id": "any-01", "text": "在的，有事叫我～", "when": "any", "weight": 3 },
+    { "id": "any-02", "text": "我在这儿陪着你。", "when": "any", "weight": 2 },
+    { "id": "any-03", "text": "我一直都在哦。", "when": "any", "weight": 2 },
+    { "id": "idle-01", "text": "要不要歇一会儿？", "when": "idle", "weight": 1 },
+    { "id": "idle-02", "text": "发呆中…", "when": "idle", "weight": 1 },
+    { "id": "idle-03", "text": "今天天气怎么样？", "when": "idle", "weight": 1 },
+    { "id": "idle-04", "text": "有点无聊，陪我聊两句嘛。", "when": "idle", "weight": 2 },
+    { "id": "idle-05", "text": "我数了数，你有一会儿没理我了。", "when": "idle", "weight": 1 },
+    { "id": "busy-01", "text": "忙完了记得看看我。", "when": "busy", "weight": 2 },
+    { "id": "busy-02", "text": "看起来挺忙的，我安静待着。", "when": "busy", "weight": 2 },
+    { "id": "busy-03", "text": "需要我搭把手吗？", "when": "busy", "weight": 1 },
+    { "id": "busy-04", "text": "慢慢来，不着急。", "when": "busy", "weight": 2 },
+    { "id": "night-01", "text": "夜深了，注意休息。", "when": "night", "weight": 3 },
+    { "id": "night-02", "text": "这么晚还在忙呀…", "when": "night", "weight": 2 },
+    { "id": "night-03", "text": "早点睡，明天再战。", "when": "night", "weight": 2 },
+    { "id": "late-01", "text": "真的很晚了，明天再说也来得及。", "when": "late", "weight": 2 },
+    { "id": "late-02", "text": "我陪你收尾，然后就去睡。", "when": "late", "weight": 2 },
+    { "id": "dawn-01", "text": "早上好，今天也一起加油。", "when": "dawn", "weight": 2 },
+    { "id": "dawn-02", "text": "天亮了，先喝口水吧。", "when": "dawn", "weight": 1 },
+    { "id": "poke-01", "text": "别戳啦，会痒的。", "when": "poke", "weight": 3 },
+    { "id": "poke-02", "text": "再戳我就要生气了哦。", "when": "poke", "weight": 2 },
+    { "id": "poke-03", "text": "好好好，我在我在。", "when": "poke", "weight": 2 },
+    { "id": "grind-01", "text": "已经忙很久了，起来动一动吧。", "when": "grind", "weight": 2 },
+    { "id": "grind-02", "text": "累了就停一下，我等你。", "when": "grind", "weight": 2 }
+  ]
+}

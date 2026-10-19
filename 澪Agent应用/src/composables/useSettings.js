@@ -47,6 +47,27 @@ export function useSettings(deps) {
       visibility: { ...deps.appPreferencesDraft.value.visibility, ...preset },
     })
   }
+  /**
+   * 把主界面主题镜像到桌宠设置（ui_theme）。
+   *
+   * 为什么需要镜像：主界面主题存在 app preferences（本机 localStorage），
+   * 桌宠窗口是**另一个窗口**、拿不到这份偏好；而"气泡跟随主题"必须知道当前主题。
+   * 规则是**单向**的：主界面主题是唯一真源，这里只负责推给桌宠侧，
+   * 从不反向读取（避免两边互相覆盖产生抖动）。
+   * 失败静默：主题是纯视觉偏好，不该因为后端一时不通就打断保存流程。
+   */
+  function syncUiThemeToPet(theme) {
+    const id = String(theme || '').trim()
+    if (!id) return
+    try {
+      fetch('/api/companion/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ui_theme: id }),
+      }).catch(() => {})
+    } catch (_) {}
+  }
+
   function saveAppearanceSettings(section = 'appearance') {
     const current = deps.cloneAppPreferences(deps.savedAppPreferences.value)
     const draft = deps.cloneAppPreferences(deps.appPreferencesDraft.value)
@@ -73,6 +94,8 @@ export function useSettings(deps) {
     localStorage.setItem('mio_left_sidebar_visible', String(deps.leftSidebarVisible.value))
     localStorage.setItem('mio_right_sidebar_visible', String(deps.rightSidebarVisible.value))
     deps.showSettingsFeedback(section, 'success', section === 'general' ? '基础设置已保存' : '外观与界面设置已保存并生效')
+    // 主题变了才镜像（避免每次保存外观都写一遍桌宠设置）
+    if (section !== 'general' && saved.theme !== current.theme) syncUiThemeToPet(saved.theme)
   }
   async function loadRuntimeSettings({ quiet = false } = {}) {
     if (deps.runtimeSettingsBusy.value) return
@@ -403,5 +426,5 @@ export function useSettings(deps) {
     if (sectionId === 'data') deps.refreshDataPrivacy()
     if (!deps.runtimeSettingsReady.value) loadRuntimeSettings()
   }
-  return { focusComposer, openMemoryTab, handleSettingsModelChange, handlePetModelChange, applyDisplayMode, saveAppearanceSettings, loadRuntimeSettings, saveRuntimeSettings, loadMioProfileSettings, saveMioProfileSettings, uploadProfileAvatar, resetProfileAvatar, uploadAppearanceImage, resetAppearanceImage, saveConversationSettings, saveActiveSettings, resetActiveSettings, openSettingsSection }
+  return { focusComposer, openMemoryTab, handleSettingsModelChange, handlePetModelChange, applyDisplayMode, saveAppearanceSettings, syncUiThemeToPet, loadRuntimeSettings, saveRuntimeSettings, loadMioProfileSettings, saveMioProfileSettings, uploadProfileAvatar, resetProfileAvatar, uploadAppearanceImage, resetAppearanceImage, saveConversationSettings, saveActiveSettings, resetActiveSettings, openSettingsSection }
 }

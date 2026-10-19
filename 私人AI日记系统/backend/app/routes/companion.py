@@ -4,6 +4,7 @@ import asyncio
 import base64
 from difflib import SequenceMatcher
 import logging
+import os
 import random
 import re
 import subprocess
@@ -200,6 +201,8 @@ class CompanionSettingsRequest(BaseModel):
     live2d_disable_gpu: bool = False
     live2d_motion_slots: dict[str, dict[str, str]] = Field(default_factory=dict)
     live2d_expression_slots: dict[str, dict[str, str]] = Field(default_factory=dict)
+    # 任务状态（phase）→ 表现绑定：{模型id: {phase: {motion: 槽名, expression: 槽名}}}
+    live2d_phase_slots: dict[str, dict[str, dict[str, str]]] = Field(default_factory=dict)
     # 泡泡工坊：说话气泡皮肤 + 点击互动开关（Mio「泡泡」页管理，桌宠热应用）
     live2d_bubble_style: str = Field(default="default", max_length=40)
     pet_click_talk_enabled: bool = True
@@ -234,6 +237,15 @@ class CompanionSettingsRequest(BaseModel):
     pet_idle_talk_enabled: bool = True
     pet_idle_talk_min_seconds: int = Field(default=90, ge=30, le=3600)
     pet_idle_talk_max_seconds: int = Field(default=240, ge=30, le=7200)
+    pet_idle_beat_enabled: bool = True
+    pet_idle_beat_min_seconds: int = Field(default=30, ge=8, le=1800)
+    pet_idle_beat_max_seconds: int = Field(default=90, ge=8, le=3600)
+    pet_quotes_enabled: bool = True
+    pet_talkativeness: int = Field(default=45, ge=0, le=100)
+    # ★ L3-c 连点彩蛋（2026-10-19）：短时间内反复戳桌宠 → 分级嫌弃/装死。
+    #   关掉即退回"每次点击都是害羞+随机一句"的老行为。
+    pet_poke_enabled: bool = True
+    ui_theme: str = ''
     pet_press_bounce_enabled: bool = True
 
 
@@ -1245,7 +1257,15 @@ async def companion_preview_feedback(payload: dict):
     return {"ok": True}
 
 
-_PREVIEW_DIAG_FILE = r"C:\Users\xiao1\Mao\preview_diag.log"
+from ..config import settings as _settings
+
+# 预览链路诊断日志（临时诊断：确认预览消息是否到达桌宠并播放）。
+# ★ 独立性（2026-10-19）：原值硬编码为上游 Mao 仓库的绝对路径
+#   （C:\Users\xiao1\Mao\preview_diag.log），换机器/单独 clone 后该目录不存在，
+#   且会把诊断写进**别的仓库**。改为项目根相对路径 + 环境变量覆盖。
+_PREVIEW_DIAG_FILE = os.getenv("MIO_PREVIEW_DIAG_FILE", "").strip() or str(
+    Path(_settings.project_root) / "preview_diag.log"
+)
 
 
 def _preview_diag_log(tag: str, data) -> None:

@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Mio Live2D 桌宠</title>
-    <link rel="stylesheet" href="./live2d-pet.css?v=20261017-mdstrip" />
+    <link rel="stylesheet" href="./live2d-pet.css?v=20261019-skins" />
   </head>
   <body>
     <main id="pet-root" aria-label="Mio Live2D 桌宠">
@@ -63,16 +63,18 @@
     <!-- A 档能力：交互音效（内置默认片段 + 现场合成保底）+ 空闲自语内容池（数据驱动） -->
     <script src="./pet-sound.js?v=20261017-explicitclips"></script>
     <script src="./pet-idle-talk.js?v=20261015-a6"></script>
+    <!-- M2：模型专属台词库（quotes/<modelId>.json 数据驱动；缺失自动回退通用池） -->
+    <script src="./pet-quotes.js?v=20261019-alive2"></script>
     <!-- A7 角色图库：桌宠内直接浏览/更换 Live2D 形象（数据来自既有 models 接口） -->
     <script src="./pet-gallery.js?v=20261015-a6"></script>
     <!-- A组 渲染增强：随机图片池 + 泡泡图库（气泡皮肤） + 模块化泡泡系统（6 类模块） -->
     <script src="./pet-random-image.js?v=20261015-a15"></script>
-    <script src="./pet-bubble-styles.js?v=20261015-a9"></script>
+    <script src="./pet-bubble-styles.js?v=20261019-styles2"></script>
     <!-- DSH 专用化（用户裁决 2026-10-17）：小智插件资源已整体删除 ——
            xiaozhi-plugin.js（小智挂载器）、pet-xz-audio.js（小智语音/口型）、
            xiaozhi/xiaozhi-chat.{html,js}（小智快速对话浮窗）。
          它们依赖的 /api/xiaozhi/* 后端路由已随插件阉割，保留只会持续 WS 重连失败。
          将来若要做 DSH 语音，应走**新的 DSH 插件通路**，不要复活这套小智实现。 -->
-    <script src="./live2d-pet.js?v=20261018-dshapp"></script>
+    <script src="./live2d-pet.js?v=20261019-alive3"></script>
   </body>
 </html>

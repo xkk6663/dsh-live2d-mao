@@ -119,6 +119,11 @@
     // 保留它们只会渲染出"永远读不到数据、点保存就报错"的空界面。
     // ★ 2026-10-17 用户裁决：原「泡泡」「横条」两个 tab 合并为「主题」
     //    （气泡皮肤/点击互动/音效 + 横条尺寸/皮肤，都是外观主题范畴）。
+    // ★ 2026-10-19 用户裁决：再拆一次 —— 「主题」只留**看得见的外观**
+    //    （皮肤 / 全局主题 / 横条尺寸）；其余"行为与玩法"（活人感、交互打磨、
+    //    模型自动更换、流式、点击互动、图片素材库、音效）统统搬到新开的「个性化」。
+    //    理由：主题页当时堆了 7 段，用户原话"分布还是有点杂乱"。
+    { id: 'personalization', label: '个性化' },
     { id: 'theme', label: '主题' },
   ]
 
@@ -138,7 +143,7 @@
       '<div style="flex:none;display:flex;align-items:center;gap:10px;padding:12px 20px;background:var(--sidebar-bg, #f4f7f8);border-bottom:1px solid var(--line, #d9e2e6);">' +
         '<span style="width:9px;height:9px;border-radius:50%;background:var(--accent, #4c8798);flex:none;"></span>' +
         '<strong style="font-size:14px;flex:none;">设置</strong>' +
-        '<span style="flex:1;font-size:11px;color:var(--muted, #687984);overflow:hidden;white-space:nowrap;text-overflow:ellipsis;" id="mioSetStatus">资料 · 桌宠 · 语音 · 主题</span>' +
+        '<span style="flex:1;font-size:11px;color:var(--muted, #687984);overflow:hidden;white-space:nowrap;text-overflow:ellipsis;" id="mioSetStatus">资料 · 桌宠 · 语音 · 个性化 · 主题</span>' +
         '<button type="button" id="mioSetClose" title="关闭设置" style="border:none;background:transparent;font-size:16px;cursor:pointer;color:var(--muted, #687984);padding:2px 6px;">✕</button>' +
       '</div>' +
       '<div style="flex:none;display:flex;gap:4px;padding:8px 20px;background:var(--surface-soft, #f2f6f7);border-bottom:1px solid var(--line, #d9e2e6);" id="mioSetTabs"></div>' +
@@ -275,6 +280,18 @@
     return wrap
   }
   function readSlider(wrap) { return Number(wrap.__mioInput.value) }
+
+  /**
+   * 话痨档位 → 一句人话（"正常 · 每 6~15 分钟说一句 · 每 30~90 秒换个表情"）。
+   * 曲线与文案的唯一真源在 bubble-panel-inject.js（锚点又来自 live2d-pet.js TALK_ANCHORS），
+   * 这里只调用、不重算；模块没加载时退化成裸档位，不至于报错。
+   */
+  function talkPreviewText(level) {
+    var lv = Math.max(0, Math.min(100, Math.round(Number(level) || 0)))
+    var api = window.__mioBubblePanel && window.__mioBubblePanel.talkativeness
+    if (!api) return '当前档位 ' + lv + ' / 100'
+    return '当前：' + api.label(lv) + ' · ' + api.preview(lv)
+  }
 
   function makeSelect(value, options) {
     var sel = document.createElement('select')
@@ -437,13 +454,55 @@
       body.appendChild(row('窗口置顶', '桌宠窗口始终置顶', makeSwitch(!!s.live2d_always_on_top, '窗口置顶'), 'live2d_always_on_top'))
       body.appendChild(row('透明穿透', '鼠标点击穿透（锁定后生效）', makeSwitch(!!s.live2d_smart_passthrough, '透明穿透'), 'live2d_smart_passthrough'))
       body.appendChild(row('对话气泡', '显示小智对话气泡', makeSwitch(!!s.live2d_speech_bubble_enabled, '对话气泡'), 'live2d_speech_bubble_enabled'))
+    } else if (id === 'personalization') {
+      // ★ 2026-10-19 新 tab「个性化」：所有"行为与玩法"集中在这里。
+      //   来源分两批：
+      //     ① 从「桌宠」搬来：活人感 / 交互打磨 / 模型自动更换（都是 __mioKey 行，走本页保存按钮）
+      //     ② 从「主题」搬来：逐 token 流式 / 点击互动 / 图片素材库 / 音效事件 / 音效片段
+      //        —— 这五张卡由 bubble-panel-inject 渲染，通过 renderInto(host, 'behavior') 只取这一组。
+      //   为什么这样分：主题页只管"看得见的外观（皮肤/主题/横条尺寸）"，
+      //   个性化页只管"它怎么动、怎么说话、点什么、放什么声音"。
+      body.appendChild(section('活人感'))
+      var talkNum = Number(s.pet_talkativeness)
+      if (!isFinite(talkNum)) talkNum = 45
+      var talkSlider = makeSlider(Math.round(talkNum), 0, 100, 5, '')
+      talkSlider.__mioInput.style.width = '160px'
+      if (talkSlider.__mioVal) talkSlider.__mioVal.style.fontSize = '12px'
+      var talkHint = document.createElement('div')
+      talkHint.id = 'mioSetTalkHint'
+      talkHint.style.cssText = 'font-size:12px;color:var(--muted, #687984);line-height:1.6;margin:-4px 0 10px 12px;'
+      talkHint.textContent = talkPreviewText(talkNum)
+      talkSlider.__mioInput.addEventListener('input', function () {
+        talkHint.textContent = talkPreviewText(Number(talkSlider.__mioInput.value))
+      })
+      body.appendChild(row('话痨程度', '一条滑块同时决定"多久说一句"和"多久换个表情"', talkSlider, 'pet_talkativeness'))
+      body.appendChild(talkHint)
+      body.appendChild(row('随机微表情', '不说话时也会随机换个表情，别像冻住的图',
+        makeSwitch(s.pet_idle_beat_enabled !== false, '随机微表情'), 'pet_idle_beat_enabled'))
+      body.appendChild(row('模型专属台词', '用该形象的台词库（如大肥鱼名言录）；关掉则用通用问候，长任务提醒也一并停止',
+        makeSwitch(s.pet_quotes_enabled !== false, '模型专属台词'), 'pet_quotes_enabled'))
+      body.appendChild(row('连点彩蛋', '3 秒内连点 3 下 → 嫌弃；连点 6 下 → 装死 60 秒（X X 眼，怎么戳都不理）',
+        makeSwitch(s.pet_poke_enabled !== false, '连点彩蛋'), 'pet_poke_enabled'))
+
       body.appendChild(section('交互打磨'))
       body.appendChild(row('锁定位置', '开启后桌宠不可拖动（点击互动仍有效）', makeSwitch(!!s.live2d_pet_locked, '锁定位置'), 'live2d_pet_locked'))
       body.appendChild(row('SHIFT 拖动', '开启后需按住 Shift 才能拖动，防误拖', makeSwitch(!!s.live2d_pet_shift_drag, 'SHIFT 拖动'), 'live2d_pet_shift_drag'))
       body.appendChild(row('拖拽惯性', '松手后按拖动速度惯性滑行、阻尼停稳', makeSwitch(s.live2d_pet_inertia !== false, '拖拽惯性'), 'live2d_pet_inertia'))
+
       body.appendChild(section('模型自动更换'))
       body.appendChild(row('自动更换模型', '每天定时随机更换角色', makeSwitch(!!(state.schedule && state.schedule.enabled), '自动更换模型'), 'schedule_enabled'))
       body.appendChild(row('更换时间', '每天此时间触发', makeSelect((state.schedule && state.schedule.time) || '12:00', [12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 8, 9, 10, 11].map(function (h) { return { v: h + ':00', t: h + ':00' } })), 'schedule_time'))
+
+      // 气泡行为卡（逐 token 流式 / 点击互动 / 图片素材库 / 音效事件 / 音效片段）
+      var behaviorHost = document.createElement('div')
+      behaviorHost.id = 'mio-bubble-behavior-host'
+      behaviorHost.style.cssText = 'display:flex;flex-direction:column;gap:12px;margin-top:14px;'
+      body.appendChild(behaviorHost)
+      if (window.__mioBubblePanel && window.__mioBubblePanel.renderInto) {
+        window.__mioBubblePanel.renderInto(behaviorHost, 'behavior')
+      } else {
+        behaviorHost.innerHTML = '<div style="font-size:12px;color:var(--muted,#687984);padding:14px;">泡泡模块未加载，请刷新页面后重试。</div>'
+      }
     } else if (id === 'voice') {
       body.appendChild(section('小智语音'))
       body.appendChild(row('语音回复', '小智回答时播放语音', makeSwitch(s.voice_enabled !== false, '语音回复'), 'voice_enabled'))
@@ -461,7 +520,6 @@
       //    所以这里的初始值 = 横条**实时状态**（拉伸过就显示拉伸后的宽度）。
       var sw0 = Number(s.live2d_strip_width) || 0
       var sr0 = Number(s.live2d_strip_rows) || 1
-      var ss0 = s.live2d_strip_style || 'default'
 
       body.appendChild(section('横条尺寸'))
       // 默认宽度：0 = CSS 默认（420px，文字换行）；>0 = 固定像素宽。
@@ -474,28 +532,23 @@
       var rowsSlider = makeSlider(sr0, 1, 5, 1, ' 行')
       body.appendChild(row('显示行数', '横条可见窗口的行数；文字按宽度换行往下递增，超出的历史由右侧竖条滚动浏览（最新在最底）。', rowsSlider, 'live2d_strip_rows'))
 
-      body.appendChild(section('横条皮肤（为 UI 可更换预留）'))
-      var styleSel = makeSelect(ss0, [
-        { v: 'default', t: '默认' },
-        { v: 'mono', t: '黑白' },
-        { v: 'navy', t: '藏蓝' },
-        { v: 'peach', t: '蜜桃' },
-        { v: 'matcha', t: '抹茶' },
-        { v: 'note', t: '便签' },
-        { v: 'terminal', t: '终端' },
-        { v: 'comic', t: '漫画' },
-      ])
-      body.appendChild(row('横条皮肤', '横条的配色主题，与气泡皮肤同一套 id，后续可扩展更多 UI。', styleSel, 'live2d_strip_style'))
+      // ★ 2026-10-19：原本这里的"横条配色"下拉框已**删除**。
+      //   它和下方泡泡工坊的「皮肤」是同一套配色，用户看到两份，
+      //   改一份另一份不动（写的是 live2d_strip_style / live2d_bubble_style 两个键）。
+      //   现在皮肤统一在下方「皮肤与全局主题」里选一次、两处同时生效；
+      //   横条这里只保留真正只属于横条的两项：默认宽度、显示行数。
 
-      //  ── 下半：泡泡工坊（气泡皮肤 / 点击互动 / 图片素材库 / 音效）──
-      //    UI 由 bubble-panel-inject.js 渲染模块提供。
-      body.appendChild(section('气泡与互动（泡泡工坊）'))
+      //  ── 下半：皮肤 + 全局主题 ──
+      //   ★ 2026-10-19：本 tab 只留**看得见的外观**。流式 / 点击互动 / 图片 / 音效这些
+      //   "行为与玩法"已经搬到「个性化」tab（renderInto 的第二参数 'behavior'）。
+      //   这里传 'appearance' ⇒ 只渲染 appearance + personalization 两张卡。
+      body.appendChild(section('皮肤与全局主题'))
       var bubbleHost = document.createElement('div')
       bubbleHost.id = 'mio-bubble-host'
       bubbleHost.style.cssText = 'display:flex;flex-direction:column;gap:12px;'
       body.appendChild(bubbleHost)
       if (window.__mioBubblePanel && window.__mioBubblePanel.renderInto) {
-        window.__mioBubblePanel.renderInto(bubbleHost)
+        window.__mioBubblePanel.renderInto(bubbleHost, 'appearance')
       } else {
         bubbleHost.innerHTML = '<div style="font-size:12px;color:var(--muted,#687984);padding:14px;">泡泡模块未加载，请刷新页面后重试。</div>'
       }
@@ -574,10 +627,14 @@
       'live2d_speech_bubble_enabled', 'voice_enabled', 'voice_streaming_enabled',
       'voice_volume', 'pet_speech_language', 'speak_screen_observations',
       'screen_ai_enabled',
-      // ★ 横条个性化（2026-10-17）
-      'live2d_strip_width', 'live2d_strip_rows', 'live2d_strip_style',
+      // ★ 横条个性化（2026-10-17）。2026-10-19 起皮肤并入 live2d_bubble_style，
+      //   这里不再收集 live2d_strip_style（留着只会让"改了没反应"更难查）。
+      'live2d_strip_width', 'live2d_strip_rows',
       // ★ 交互打磨（2026-10-17）
       'live2d_pet_opacity', 'live2d_pet_locked', 'live2d_pet_shift_drag', 'live2d_pet_inertia',
+      // ★ 活人感（2026-10-19，从主题页迁来）：话痨程度 + 三个能力开关。
+      //   缺这几个键 = 滑块能拖、点保存没反应（本页保存是按这份白名单挑值的）。
+      'pet_talkativeness', 'pet_idle_beat_enabled', 'pet_quotes_enabled', 'pet_poke_enabled',
     ]
     settingsKeys.forEach(function (k) { if (vals[k] !== undefined) settingsBody[k] = vals[k] })
     // 2) 自动观察 → observe/start or stop

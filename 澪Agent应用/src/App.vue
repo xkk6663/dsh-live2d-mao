@@ -369,7 +369,7 @@ const { handlePetChatKeydown, beginPetChatWindowDrag, resetPetCallCapture, submi
 })
 
 import { useSettings } from './composables/useSettings.js'
-const { focusComposer, openMemoryTab, handleSettingsModelChange, handlePetModelChange, applyDisplayMode, saveAppearanceSettings, loadRuntimeSettings, saveRuntimeSettings, loadMioProfileSettings, saveMioProfileSettings, uploadProfileAvatar, resetProfileAvatar, uploadAppearanceImage, resetAppearanceImage, saveConversationSettings, saveActiveSettings, resetActiveSettings, openSettingsSection } = useSettings({
+const { focusComposer, openMemoryTab, handleSettingsModelChange, handlePetModelChange, applyDisplayMode, saveAppearanceSettings, syncUiThemeToPet, loadRuntimeSettings, saveRuntimeSettings, loadMioProfileSettings, saveMioProfileSettings, uploadProfileAvatar, resetProfileAvatar, uploadAppearanceImage, resetAppearanceImage, saveConversationSettings, saveActiveSettings, resetActiveSettings, openSettingsSection } = useSettings({
   get DISPLAY_MODE_PRESETS() { return DISPLAY_MODE_PRESETS },
   get activeSettingsItem() { return activeSettingsItem },
   get activeSettingsSection() { return activeSettingsSection },
@@ -594,6 +594,11 @@ const THEME_OPTIONS = [
   { id: 'rose', label: '蔷薇', description: '柔粉与葡萄灰', colors: ['#f4edef', '#a66f82', '#658e83'] },
   { id: 'forest', label: '森雨', description: '苔绿与暖白', colors: ['#edf1ed', '#668978', '#b48468'] },
   { id: 'sakura', label: '晚樱', description: '樱粉与暮蓝', colors: ['#f3eef1', '#b7798f', '#687f9b'] },
+  // ★ 2026-10-19 新增两款：与 companion.css 的 .app-shell.theme-celadon/.theme-amber 对应，
+  //   同时后端 ui_theme 白名单、pet-bubble-styles.js 的 UI_THEMES、泡泡面板 UI_THEME_DEFS
+  //   四处必须同 id —— 少一处就会出现"选得到但气泡不跟"的静默失效。
+  { id: 'celadon', label: '青瓷', description: '青釉与墨绿', colors: ['#e9f0ee', '#5f8f80', '#22322e'] },
+  { id: 'amber', label: '琥珀', description: '暖砂与檀褐', colors: ['#f3ede2', '#a8763c', '#3a3128'] },
 ]
 const VALID_THEME_IDS = new Set(THEME_OPTIONS.map((item) => item.id))
 
@@ -1515,6 +1520,7 @@ const companionSettingKeys = {
     'live2d_smart_passthrough', 'live2d_click_through_locked', 'live2d_speech_bubble_enabled',
     'live2d_keep_visible',
     'live2d_always_on_top', 'live2d_disable_gpu', 'live2d_motion_slots', 'live2d_expression_slots',
+    'live2d_phase_slots',
     'pet_chat_model_id', 'pet_chat_reasoning_level',
     'pet_call_asr_engine', 'pet_call_input_language', 'speech_translation_model_id', 'pet_call_silence_ms', 'pet_call_voice_threshold',
     'pet_call_min_speech_ms', 'pet_call_max_turn_seconds',
@@ -2500,6 +2506,10 @@ onMounted(async () => {
   await loadBootstrap()
   await syncActiveViewState()
   markAppReady()
+  // 全局主题单向同步（自愈）：主界面主题存在本机偏好里，桌宠窗口读不到，
+  // 启动时推一次给 ui_theme。换机 / 清缓存 / 后端重置后都能自动对齐，
+  // 不必要求用户"再保存一次外观"。
+  void syncUiThemeToPet(savedAppPreferences.value.theme)
   await loadSharedChatSettings()
   if (!isAgentWorkspace) {
     void loadMioProfileSettings({ quiet: true })

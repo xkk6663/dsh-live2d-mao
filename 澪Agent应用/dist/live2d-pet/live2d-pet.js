@@ -183,10 +183,22 @@
         lipSyncParameters: ['ParamMouthOpenY'], eyeBlinkParameters: ['ParamEyeLOpen', 'ParamEyeROpen'],
         idleGroup: 'idle', tapGroup: 'aidale',
         motionSlots: {
-          idle: 'idle', touch: 'aidale', think: 'idle', speak: 'idle', observe: 'idle',
-          cheerful: 'aidale', concerned: 'idle', alert: 'aidale', attention: 'idle', shy: 'idle',
+          // 2026-10-19：原来 think/observe/attention 全指向 idle，切相位时视觉上等于没动
+          // （semanticMotion 命中槽位就直接 playMotion('idle')，连程序化动作都走不到）。
+          // 现按 manifest.json 里各动作组的语义重新分配：
+          //   bubble=吹泡泡（琢磨） ketchup=挤番茄酱（忙碌） openLid=开盖（轻动作）
+          //   splash=喷水（出错/担心） selfie=自拍（聆听时看向你） selfieQuick=快速摆姿（害羞）
+          idle: 'idle', touch: 'aidale', think: 'bubble', speak: 'idle', observe: 'ketchup',
+          cheerful: 'aidale', concerned: 'splash', alert: 'aidale', attention: 'openLid',
+          shy: 'selfieQuick', listen: 'selfie',
         },
-        unassignedMotions: ['selfie', 'selfieQuick', 'ketchup', 'openLid', 'bubble', 'splash'],
+        unassignedMotions: [],
+        // 2026-10-19：原来没有 expressionSlots，表情只能靠名字正则猜（concerned/serious 猜不到 ⇒ 不打）。
+        // 现按情绪语义显式绑定（名字均在本模型 expressions 清单内）。
+        expressionSlots: {
+          gentle: 'love', cheerful: '开心兴奋', concerned: '悲伤',
+          serious: '生气', shy: '脸红', alert: '感叹号',
+        },
       },
     },
     'da-feiyu': {
@@ -197,7 +209,24 @@
       tapGroup: '',
       source: 'built_in',
       capabilities: {
-        motions: [],
+        // ★ 2026-10-19：这个模型没有 motion3.json（motions 原本为空 ⇒ 界面的「动作」区块直接不渲染，
+        //   只能写死程序化摆头）。它有一整套表情，于是把表情登记成 kind:'expression' 的"动作"，
+        //   选中时由 playMotion() 直接播表情（见 motionIsExpression / playMotion）。
+        //   「11 尾巴消失 / 12 耳朵消失 / 13 水印消除」是外观开关，不当动作暴露。
+        motions: [
+          { name: '01 口型切换', count: 1, kind: 'expression' },
+          { name: '02 3嘴', count: 1, kind: 'expression' },
+          { name: '02 龇牙', count: 1, kind: 'expression' },
+          { name: '03 脸黑', count: 1, kind: 'expression' },
+          { name: '04 脸红', count: 1, kind: 'expression' },
+          { name: '05 O O', count: 1, kind: 'expression' },
+          { name: '05 》《', count: 1, kind: 'expression' },
+          { name: '06 X X', count: 1, kind: 'expression' },
+          { name: '07 流口水', count: 1, kind: 'expression' },
+          { name: '08 O嘴', count: 1, kind: 'expression' },
+          { name: '08 担心嘴', count: 1, kind: 'expression' },
+          { name: '08 栗子嘴', count: 1, kind: 'expression' },
+        ],
         expressions: [
           { Name: '01 口型切换', File: 'EXP/01 口型切换.exp3.json' },
           { Name: '02 3嘴', File: 'EXP/02 3嘴.exp3.json' },
@@ -218,8 +247,34 @@
         physics: true, pose: false,
         lipSyncParameters: [], eyeBlinkParameters: [],
         idleGroup: '', tapGroup: '',
-        motionSlots: {},
-        unassignedMotions: [],
+        motionSlots: {
+          idle: '08 栗子嘴', touch: '04 脸红', think: '08 担心嘴', speak: '01 口型切换',
+          observe: '02 龇牙', cheerful: '02 3嘴', concerned: '05 O O', alert: '05 》《',
+          attention: '08 O嘴', shy: '06 X X', listen: '05 O O',
+        },
+        unassignedMotions: ['03 脸黑', '07 流口水'],
+        // ★ 2026-10-19 M1：补 expressionSlots —— 情绪直达表情（此前只有 motionSlots，
+        //   而 expressionForEmotion() 走的是 expressionSlots/regex，于是 "cheerful/serious/shy"
+        //   在表达式正则 /开心|爱心/、/生气|认真/、/害羞|blush/ 里**一个都匹配不上** ⇒ 只剩
+        //   「08 担心嘴」能撞上 concerned，其余情绪脸上一片空白。
+        //   ⚠ 内置模型的能力以**这里**为准：主进程 modelCatalog() 对内置模型给的是 {}，
+        //   mergeImportedModels 会回落到 builtInModels（见其注释），改 mio-model.json 对
+        //   内置模型运行时**不生效**（那份是给"导入副本"用的，两边已保持同值）。
+        expressionSlots: {
+          shy: '04 脸红', serious: '03 脸黑', cheerful: '02 龇牙', concerned: '08 担心嘴',
+        },
+        // 随机空闲表情白名单（权重越高越常出现）：排除部件开关（尾巴/耳朵/水印/口型切换），
+        // 否则"随机表情"会随机把耳朵弄没。剧烈表情（X X / 脸黑 / 流口水）权重压低。
+        idleExpressions: [
+          { Name: '02 龇牙', weight: 3 },
+          { Name: '08 担心嘴', weight: 2 },
+          { Name: '04 脸红', weight: 2 },
+          { Name: '03 脸黑', weight: 2 },
+          { Name: '07 流口水', weight: 2 },
+          { Name: '05 O O', weight: 1 },
+          { Name: '05 》《', weight: 1 },
+          { Name: '06 X X', weight: 1 },
+        ],
       },
     },
   }
@@ -285,6 +340,14 @@
   let currentEmotion = 'neutral'
   let emotionUntil = 0
   let speakingUntil = 0
+  // 最近一次由「相位」驱动过表情的 agent:phase（同相位 2s 重发不重复打表情）
+  let lastPhaseFaceKey = ''
+  // 挂上了 beforeModelUpdate 参数钩子的 internalModel（null = 走 ticker 兜底路径）
+  let parameterHookModel = null
+  // 钩子最近一次真实触发的时刻（performance.now）：用于识别"挂上但从不触发"的失效钩子
+  let frameHookLastAt = 0
+  // "表情即动作"的回收定时器
+  let expressionMotionTimer = null
   // 表情预览后自动恢复待机表情的定时器（防止预览表情卡住不回待机）
   let expressionPreviewResetTimer = null
   // 动作预览后恢复待机动作的定时器
@@ -548,6 +611,15 @@
       expressionSlots: capabilities.expressionSlots && typeof capabilities.expressionSlots === 'object'
         ? { ...capabilities.expressionSlots }
         : {},
+      // 空闲随机表情白名单（M1）：只有列在这里的表情才会被"随机节拍"挑中。
+      // 目的：把「尾巴消失/耳朵消失/水印消除/口型切换」这类**部件开关**排除在外，
+      // 否则随机触发时看起来像模型坏了。归一化在读取处做，这里只透传。
+      idleExpressions: Array.isArray(capabilities.idleExpressions)
+        ? capabilities.idleExpressions.map((item) => ({
+          name: String(item?.Name || item?.name || ''),
+          weight: Math.max(0.0001, Number(item?.weight) || 1),
+        })).filter((item) => item.name)
+        : [],
       unassignedMotions: Array.isArray(capabilities.unassignedMotions)
         ? capabilities.unassignedMotions.map(String)
         : [],
@@ -590,18 +662,29 @@
     modelDefinitions = { ...builtInModels }
     imported.forEach((entry) => {
       if (!entry?.id || !entry?.modelUrl) return
+      // ★ 2026-10-19 真根因：主进程 modelCatalog() 扫 dist/live2d-pet/models 发现的内置模型，
+      //   capabilities 一律给空对象 {}（main.js:401）。这里早先无脑覆盖 ⇒ 渲染端 builtInModels
+      //   里写死的动作组/表情表/槽位表在 Electron 运行时**全部被清空** ⇒ semanticMotion 恒返空、
+      //   expressionForEmotion 因 names=[] 连配置好的表情槽都校验不过 ⇒ "动作和表情都不动"。
+      //   规则：内置模型以渲染端清单为准（主进程只提供 URL/来源）；导入模型仍用 mio-model.json。
+      const incoming = entry.capabilities && typeof entry.capabilities === 'object' ? entry.capabilities : {}
+      const builtIn = builtInModels[String(entry.id)]
+      const isBuiltIn = String(entry.source || '') === 'built_in'
+      const capabilities = Object.keys(incoming).length
+        ? { ...incoming }
+        : (isBuiltIn && builtIn?.capabilities ? { ...builtIn.capabilities } : {})
       modelDefinitions[String(entry.id)] = {
         id: String(entry.id),
         name: String(entry.name || entry.id),
         url: String(entry.modelUrl),
-        idleGroup: String(entry.capabilities?.idleGroup || ''),
-        tapGroup: String(entry.capabilities?.tapGroup || ''),
+        idleGroup: String(incoming.idleGroup || (isBuiltIn ? builtIn?.idleGroup : '') || ''),
+        tapGroup: String(incoming.tapGroup || (isBuiltIn ? builtIn?.tapGroup : '') || ''),
         // ★ 主进程目录里内置模型也带 modelUrl（source:'built_in'），不能一律当 imported：
         //   switchModel 靠 source 决定「给主进程设覆盖」还是「清掉覆盖」。
         //   早先写死 'imported' ⇒ 内置模型被误判 ⇒ 桌面侧覆盖永远不干净，
         //   而且那时内置分支（写服务端）永远走不到，形象切换后被 5s 轮询弹回。
         source: String(entry.source || '') === 'built_in' ? 'built_in' : 'imported',
-        capabilities: entry.capabilities && typeof entry.capabilities === 'object' ? entry.capabilities : {},
+        capabilities,
         authorization: entry.authorization && typeof entry.authorization === 'object' ? entry.authorization : {},
         renderOptimization: entry.renderOptimization && typeof entry.renderOptimization === 'object'
           ? { ...entry.renderOptimization }
@@ -681,6 +764,13 @@
       // Electron 启动时等窗口虚拟边界修正完成再显示，杜绝"先下方后上方"跳位
       model.visible = windowStable || !electronRuntime
       currentModelId = definition.id
+      // M2：切换模型后重载该模型的台词库（异步、失败静默回退通用池）
+      try {
+        if (window.__mioPetQuotes) window.__mioPetQuotes.load(currentModelId).catch(() => {})
+      } catch (_) {}
+      // 旧模型已销毁：先清掉钩子引用，避免新模型挂载失败时还指向已销毁的 internalModel
+      parameterHookModel = null
+      bindFrameParameterHook(model.internalModel)
       if (lastLoad.gen === generation) lastLoad.done = true
       lastAppliedExpressionEmotion = ''
       // 必须在模型可见前完成水印消除：await 保证第一帧可见时水印参数已生效
@@ -848,13 +938,16 @@
     }
   }
 
-  function startProceduralMotion(hint, importance = 0.5) {
+  function startProceduralMotion(hint, importance = 0.5, { force = false } = {}) {
     if (!model?.internalModel?.coreModel) return false
     const now = Date.now()
     const normalizedHint = String(hint || 'observe')
     if (
-      now - lastMotionPlayedAt < 1200
-      || (lastMotionGroup === `procedural:${normalizedHint}` && now - lastMotionPlayedAt < 3500)
+      !force
+      && (
+        now - lastMotionPlayedAt < 1200
+        || (lastMotionGroup === `procedural:${normalizedHint}` && now - lastMotionPlayedAt < 3500)
+      )
     ) return false
     const duration = {
       celebrate: 2400,
@@ -1046,6 +1139,27 @@
       }
       currentEmotion = 'neutral'
     }
+    // ★ 参数写入已迁到 applyFrameParameters()，由 InternalModel 的 beforeModelUpdate 钩子驱动。
+    //   库的每帧顺序是：motionManager.update → saveParameters → 表情/眨眼/视线/呼吸/物理/pose
+    //   → coreModel.update → loadParameters。在 ticker(-50) 里写的参数要么被 motion 按权重覆盖，
+    //   要么被 saveParameters 吞进下一帧基线（addParameter 型会累积到参数钳位）。
+    //   自愈：钩子挂着却 500ms 没触发（事件名/版本不匹配）⇒ 当它不存在，退回 ticker，
+    //   否则"表情动作全冻住"会变成新的静默故障。
+    if (parameterHookModel && performance.now() - frameHookLastAt > 500) parameterHookModel = null
+    if (!parameterHookModel) applyFrameParameters()
+  }
+
+  // 钩子包装：记"真的被调用过"的时刻，供上面的自愈判据使用
+  function onModelUpdateHook() {
+    frameHookLastAt = performance.now()
+    applyFrameParameters()
+  }
+
+  // ---- 每帧参数写入（唯一入口）----
+  // 必须发生在 beforeModelUpdate：此时 motion/物理已算完，参数写入只影响本帧，
+  // 随后 loadParameters() 会回滚，不会跨帧累积。
+  function applyFrameParameters() {
+    if (!model?.internalModel?.coreModel) return
     const emotion = emotionParameters(currentEmotion)
     setParameter('ParamMouthForm', emotion.mouth, 0.38)
     setParameter('ParamEyeLSmile', emotion.smile, 0.45)
@@ -1082,11 +1196,56 @@
     }
   }
 
+  // 把参数写入挂到 Cubism 的 beforeModelUpdate 钩子上（每次换模型重挂一次）。
+  // 失败时返回 false ⇒ updateModelPerformance 里的 ticker 兜底路径仍然生效。
+  function bindFrameParameterHook(internalModel) {
+    if (!internalModel || typeof internalModel.on !== 'function') return false
+    if (parameterHookModel === internalModel) return true
+    try {
+      internalModel.on('beforeModelUpdate', onModelUpdateHook)
+      parameterHookModel = internalModel
+      frameHookLastAt = performance.now()
+      return true
+    } catch (_) {
+      parameterHookModel = null
+      return false
+    }
+  }
+
+  // 「表情即动作」：大肥鱼这类没有 motion3.json 的模型，能力清单把表情登记成 kind:'expression'，
+  // 选中/命中时直接播放表情（否则界面的「动作」下拉对它永远是空的，只能写死程序化摆头）。
+  function motionIsExpression(name) {
+    const entry = (currentCapabilityPayload().motions || [])
+      .find((item) => String(item?.name || '') === String(name))
+    return String(entry?.kind || '') === 'expression'
+  }
+
   function playMotion(group, index, { force = false } = {}) {
     if (!model || !group) return false
     const now = Date.now()
     const normalizedGroup = String(group)
     if (!force && (now - lastMotionPlayedAt < 1200 || (normalizedGroup === lastMotionGroup && now - lastMotionPlayedAt < 3500))) return false
+    if (motionIsExpression(normalizedGroup)) {
+      try {
+        Promise.resolve(model.expression(normalizedGroup)).catch(() => {})
+        lastMotionGroup = normalizedGroup
+        lastMotionPlayedAt = now
+        lastAppliedExpressionEmotion = normalizedGroup
+        if (expressionMotionTimer) window.clearTimeout(expressionMotionTimer)
+        // 3.8s 后若没有别的表情接手，回自然脸（否则"动作表情"会永久挂在脸上）
+        expressionMotionTimer = window.setTimeout(() => {
+          if (Date.now() - lastMotionPlayedAt < 3800) return
+          if (lastAppliedExpressionEmotion !== normalizedGroup) return
+          resetModelExpression()
+          lastAppliedExpressionEmotion = ''
+          currentEmotion = 'neutral'
+        }, 4000)
+        return true
+      } catch (error) {
+        console.debug('[MioLive2D] expression-as-motion unavailable', normalizedGroup, error)
+        return false
+      }
+    }
     try {
       model.motion(group, Number.isInteger(index) ? index : 0, 2)
       lastMotionGroup = normalizedGroup
@@ -1103,42 +1262,59 @@
     return motions.map((entry) => String(entry?.name || '')).filter(Boolean)
   }
 
-  function semanticMotion(hint) {
+  // 动作槽 → 该槽当前解析到的"动作名"。
+  // ★ 2026-10-19 起两步走：**槽位名先定，再解析动作**。
+  //   原来 semanticMotion(hint) 把「语义提示」直接当判据，导致 listening 只能落到 attention 槽，
+  //   用户无法给"聆听"单独绑动作；现在 listen 是独立槽位，hint 只做别名兼容。
+  const MOTION_SLOT_ALIAS = {
+    celebrate: 'cheerful',
+    concern: 'concerned',
+    alert: 'alert',
+    attention: 'attention',
+    observe: 'observe',
+    thinking: 'think',
+    speaking: 'speak',
+    listening: 'listen',
+    touch: 'touch',
+    shy: 'shy',
+    idle: 'idle',
+  }
+  // 兜底用的名字正则（槽位与模型槽位表都为空时按语义猜）。含中文词干，
+  // 否则中文命名的动作（如大肥鱼「04 脸红」）永远匹配不上。
+  const MOTION_SLOT_PATTERNS = {
+    cheerful: [/happy|joy|cheer|win|victory|success|tap|touch/i, /开心|龇牙|比耶|兴奋/],
+    concerned: [/sad|worry|concern|down|lose|defeat|idle|wait/i, /担心|悲伤|哭|O O/],
+    alert: [/alert|angry|serious|surprise|shock/i, /警觉|生气|》《|感叹/],
+    attention: [/look|attention|curious|question|idle|wait/i, /注意|O嘴|问号/],
+    observe: [/look|watch|observe|idle|wait/i, /观察|龇牙|流口水/],
+    think: [/think|question|ponder|idle|wait/i, /思考|担心|脸黑/],
+    speak: [/speak|talk|voice|mouth|idle|wait/i, /口型/],
+    listen: [/attention|listen|curious|look|idle|wait/i, /聆听|》《|O O/],
+    touch: [/tap|touch|click|body/i, /触碰|脸红/],
+    shy: [/shy|blush|embarrass|idle|wait/i, /害羞|脸红/],
+    idle: [/idle|wait|stand/i, /待机|栗子嘴/],
+  }
+
+  function motionForSlot(slotName) {
     const names = availableMotionNames()
+    if (!names.length) return ''
+    const slot = String(slotName || '').trim()
+    if (!slot) return ''
     const slots = currentCapabilityPayload().motionSlots || {}
-    const slotName = {
-      celebrate: 'cheerful',
-      concern: 'concerned',
-      alert: 'alert',
-      attention: 'attention',
-      observe: 'observe',
-      thinking: 'think',
-      speaking: 'speak',
-      listening: 'attention',
-      touch: 'touch',
-      shy: 'shy',
-      idle: 'idle',
-    }[hint] || hint
-    const configured = settings.live2d_motion_slots?.[currentModelId]?.[slotName]
+    const configured = settings.live2d_motion_slots?.[currentModelId]?.[slot]
     if (configured && names.includes(String(configured))) return String(configured)
-    if (slots[slotName] && names.includes(String(slots[slotName]))) return String(slots[slotName])
-    const patterns = {
-      celebrate: [/happy|joy|cheer|win|victory|success/i, /tap|touch/i],
-      concern: [/sad|worry|concern|down|lose|defeat/i, /idle|wait/i],
-      alert: [/alert|angry|serious|surprise|shock/i, /tap|touch/i],
-      attention: [/look|attention|curious|question/i, /idle|wait/i],
-      observe: [/look|watch|observe|idle|wait/i],
-      thinking: [/think|question|ponder/i, /idle|wait/i],
-      speaking: [/speak|talk|voice|mouth/i, /idle|wait/i],
-      listening: [/attention|listen|curious|look/i, /idle|wait/i],
-      touch: [/tap|touch|click|body/i],
-      shy: [/shy|blush|embarrass/i, /idle|wait/i],
-      idle: [/idle|wait|stand/i],
-    }[hint] || [/idle|wait/i]
+    if (slots[slot] && names.includes(String(slots[slot]))) return String(slots[slot])
+    // 精确动作名直通：老配置/手写绑定可能直接存动作名，先认名字再走正则（避免被 idle 兜底吞掉）
+    if (names.includes(slot)) return slot
+    const patterns = MOTION_SLOT_PATTERNS[slot] || MOTION_SLOT_PATTERNS.idle
     return names.find((name) => patterns.some((pattern) => pattern.test(name)))
       || modelDefinition(currentModelId)?.idleGroup
       || names[0]
       || ''
+  }
+
+  function semanticMotion(hint) {
+    return motionForSlot(MOTION_SLOT_ALIAS[hint] || hint)
   }
 
   function expressionForEmotion(emotion) {
@@ -1282,13 +1458,34 @@
     heartbeat: null,
     idle: 'idle',
   }
-  const PHASE_MOTION_HINT = {
+  // phase → 动作槽（默认值）。槽位名直接对应管理界面「动作」那 11 个下拉，
+  // 用户在「任务状态」区块里改的就是这一层的覆盖值（settings.live2d_phase_slots）。
+  // ★ complete→开心槽 / error→担心槽 / waiting_input→独立的聆听槽（原来是借用 attention）。
+  const PHASE_MOTION_SLOT = {
+    planning: 'think',
+    thinking: 'think',
     executing_tool: 'observe',
-    awaiting_approval: 'attention',
-    thinking: 'thinking',
-    planning: 'thinking',
     streaming: 'attention',
-    waiting_input: 'listening',
+    waiting_input: 'listen',
+    awaiting_approval: 'attention',
+    complete: 'cheerful',
+    error: 'concerned',
+  }
+  // ★ 2026-10-19：phase → 情绪（表情）。此前**完全没有这条链路** —— applyAgentPhase 只改
+  //   currentActivity + 动作，从不调用 applyEmotion，所以状态怎么变表情都停在进入前的样子；
+  //   而 DSH 的 phase_for_facts() 只透传 tool/turn/step/todos/error，state 里也没有 emotion。
+  //   取值必须落在「表情槽位词表」内（neutral/cheerful/serious/gentle/concerned/shy），
+  //   否则 expressionForEmotion 找不到槽位 ⇒ 配好的表情永远不生效。
+  //   voice/complete/error 之外不给值：idle/paused/heartbeat 不做表情动作，避免打断文字情绪。
+  const PHASE_EMOTION = {
+    planning: 'serious',
+    thinking: 'serious',
+    executing_tool: 'serious',
+    streaming: 'gentle',
+    awaiting_approval: 'concerned',
+    waiting_input: 'gentle',
+    complete: 'cheerful',
+    error: 'concerned',
   }
 
   // 徽标开关（菜单可切换，localStorage 持久化）：默认开，仅在状态变化时短暂显示
@@ -1403,20 +1600,92 @@
     return false
   }
 
-  // 空闲自语：长时间无交互时按内容池随机说一句
-  // busy = 当前有 Agent 在工作（决定选哪个内容池，避免"干活时说闲着"）
+  // ---- 空闲表现：随机微表情节拍（M1）+ 模型台词库自语（M2）----
+  // 设计原则（2026-10-19 裁决：默认保守，阈值全部走后端配置）：
+  //   1) 只做"打扰不到人"的事：气泡挂着 / 正在说话 / 非 idle 活动态，一律跳过本轮；
+  //   2) 表情只从模型白名单 idleExpressions 里挑，绝不随机到部件开关
+  //      （尾巴消失/耳朵消失/水印消除/口型切换）——那会让它看起来像坏了；
+  //   3) 复用既有的"表情即动作"通道 playMotion()：它自带 4s 后自动回自然脸，
+  //      不新造一套表情生命周期，避免与 emotionUntil 的状态机打架；
+  //   4) 节奏不均匀：每轮重新摇区间，长期观感是"安静很久 + 偶尔连着动两下"。
   let idleTalkTimer = null
+  let idleBeatTimer = null
   let lastInteractionAt = Date.now()
   let lastActiveAgentId = ''
 
+  function isNightHour() {
+    const h = new Date().getHours()
+    return h >= 23 || h < 6
+  }
+
+  // ---- 话痨程度（0-100）→ 两档节奏 ----
+  // 用户只需要一条滑块，不必理解"四个秒数"。三个锚点之间线性插值：
+  //   0    = 完全安静（不出声；微表情也放到 5~10 分钟一次，别像死机）
+  //   0.45 = 默认（自语 6~15 分钟、微表情 30~90 秒）
+  //   1    = 话痨（自语 1~2.5 分钟、微表情 8~20 秒）
+  // 优先级：滑块 > 显式秒数（pet_idle_talk_*/pet_idle_beat_*，老配置兼容）> 内置默认。
+  const TALK_ANCHORS = [
+    { t: 0, talk: [1800, 2400], beat: [300, 600] },
+    { t: 0.45, talk: [360, 900], beat: [30, 90] },
+    { t: 1, talk: [60, 150], beat: [8, 20] },
+  ]
+
+  function talkativenessProfile() {
+    const raw = Number(settings.pet_talkativeness)
+    const hasSlider = Number.isFinite(raw)
+    const t = hasSlider ? Math.max(0, Math.min(100, raw)) / 100 : 0.45
+    let lo = TALK_ANCHORS[0]
+    let hi = TALK_ANCHORS[TALK_ANCHORS.length - 1]
+    for (let i = 0; i < TALK_ANCHORS.length - 1; i++) {
+      if (t >= TALK_ANCHORS[i].t && t <= TALK_ANCHORS[i + 1].t) {
+        lo = TALK_ANCHORS[i]
+        hi = TALK_ANCHORS[i + 1]
+        break
+      }
+    }
+    const k = hi.t === lo.t ? 0 : (t - lo.t) / (hi.t - lo.t)
+    const mix = (a, b) => Math.round(a + (b - a) * k)
+    return {
+      hasSlider,
+      level: Math.round(t * 100),
+      silent: hasSlider && t <= 0,
+      talkMin: mix(lo.talk[0], hi.talk[0]),
+      talkMax: mix(lo.talk[1], hi.talk[1]),
+      beatMin: mix(lo.beat[0], hi.beat[0]),
+      beatMax: mix(lo.beat[1], hi.beat[1]),
+    }
+  }
+
+  const RHYTHM_KEYS = [
+    'pet_talkativeness',
+    'pet_idle_talk_enabled', 'pet_idle_talk_min_seconds', 'pet_idle_talk_max_seconds',
+    'pet_idle_beat_enabled', 'pet_idle_beat_min_seconds', 'pet_idle_beat_max_seconds',
+  ]
+  let rhythmSignature = null
+
+  /** 节奏类设置真的变了才重排定时器（applySettings 每 5s 整包调用一次）。 */
+  function maybeRescheduleRhythm() {
+    const sig = RHYTHM_KEYS.map((k) => String(settings[k] === undefined ? '' : settings[k])).join('|')
+    if (sig === rhythmSignature) return false
+    rhythmSignature = sig
+    scheduleIdleTalk()
+    scheduleIdleBeat()
+    return true
+  }
+
   function markPetInteraction() {
     lastInteractionAt = Date.now()
-    // 有交互就重置计时，避免"刚点完又被自言自语打断"
+    // 有交互就重置两个计时，避免"刚点完又被自言自语/表情节拍打断"
     if (idleTalkTimer) {
       window.clearTimeout(idleTalkTimer)
       idleTalkTimer = null
     }
+    if (idleBeatTimer) {
+      window.clearTimeout(idleBeatTimer)
+      idleBeatTimer = null
+    }
     scheduleIdleTalk()
+    scheduleIdleBeat()
   }
 
   function anyAgentBusy() {
@@ -1429,27 +1698,198 @@
     return busy
   }
 
+  // 气泡是否"可以拿来用"：只问气泡本身，不问当前活动态。
+  // 长任务提醒 / 连点彩蛋要在 Agent 忙的时候也能说话，所以它们用这个；
+  // 空闲自语才用 idleQuiet()（额外要求 currentActivity === 'idle'）。
+  function bubbleAvailable() {
+    if (settings.live2d_speech_bubble_enabled === false) return false
+    if (!speechBubble?.hidden) return false
+    if (Date.now() < speakingUntil) return false
+    return true
+  }
+
+  // 空闲打扰门控：任一条件成立就跳过本轮（不排队、不补发）
+  function idleQuiet() {
+    if (!bubbleAvailable()) return true
+    if (currentActivity !== 'idle') return true
+    return false
+  }
+
+  // 随机换一个表情（走"表情即动作"通道：playMotion 内部 4s 后自动回自然脸）
+  function playIdleExpressionBeat() {
+    const cap = currentCapabilityPayload()
+    const whitelist = Array.isArray(cap.idleExpressions) ? cap.idleExpressions : []
+    if (!whitelist.length) return false
+    const names = window.MioLive2DExpression.expressionNames(cap.expressions)
+    const usable = whitelist.filter((item) => names.includes(item.name))
+    if (!usable.length) return false
+    let total = 0
+    usable.forEach((item) => { total += item.weight })
+    let roll = Math.random() * total
+    let chosen = usable[usable.length - 1]
+    for (const item of usable) {
+      roll -= item.weight
+      if (roll <= 0) { chosen = item; break }
+    }
+    return playMotion(chosen.name)
+  }
+
+  function scheduleIdleBeat() {
+    if (settings.pet_idle_beat_enabled === false) return
+    if (idleBeatTimer) window.clearTimeout(idleBeatTimer)
+    const prof = talkativenessProfile()
+    const minS = prof.hasSlider
+      ? Math.max(8, prof.beatMin)
+      : Math.max(8, Number(settings.pet_idle_beat_min_seconds) || 30)
+    const maxS = prof.hasSlider
+      ? Math.max(minS, prof.beatMax)
+      : Math.max(minS, Number(settings.pet_idle_beat_max_seconds) || 90)
+    const waitMs = (minS + Math.random() * (maxS - minS)) * 1000
+    idleBeatTimer = window.setTimeout(() => {
+      idleBeatTimer = null
+      try {
+        // 情绪表演未过期时不抢表情：Agent 的"认真/担心"优先于随机表情
+        if (!idleQuiet() && Date.now() >= emotionUntil) playIdleExpressionBeat()
+      } catch (_) {}
+      scheduleIdleBeat()
+    }, waitMs)
+  }
+
+  // 抽一句台词：优先模型专属台词库（quotes/<modelId>.json），失败回退旧内容池
+  // scene 非空时表示"由调用方明确指定场景"（poke 被连点 / grind 长任务），
+  // 台词库会严格只取该场景池；该池为空才退回普通过滤（见 pet-quotes.js pick()）。
+  function pickIdleLine(scene) {
+    const busy = anyAgentBusy()
+    const quotes = window.__mioPetQuotes
+    if (quotes && settings.pet_quotes_enabled !== false) {
+      const item = quotes.pick({
+        busy,
+        night: isNightHour(),
+        hour: new Date().getHours(),
+        scene: scene || '',
+        idleMs: Date.now() - lastInteractionAt,
+        allowExpressions: window.MioLive2DExpression.expressionNames(currentCapabilityPayload().expressions),
+      })
+      if (item) {
+        // 台词自带表情/动作：让"说话"和"脸上"配成一次完整表演
+        if (item.expression && motionIsExpression(item.expression)) playMotion(item.expression)
+        else if (item.motion) {
+          const group = semanticMotion(item.motion)
+          if (group) playMotion(group)
+        }
+        return item.text
+      }
+    }
+    // 明确场景（poke/grind）不走旧内容池：旧池没有这些语义，硬凑只会驴唇不对马嘴
+    if (scene) return ''
+    const legacy = window.__mioPetIdleTalk
+    return legacy ? legacy.pick(busy) : ''
+  }
+
   function scheduleIdleTalk() {
     if (settings.pet_idle_talk_enabled === false) return
     if (idleTalkTimer) window.clearTimeout(idleTalkTimer)
-    const minS = Math.max(30, Number(settings.pet_idle_talk_min_seconds) || 90)
-    const maxS = Math.max(minS, Number(settings.pet_idle_talk_max_seconds) || 240)
+    // 话痨滑块优先；滑块拉到 0 = 完全安静（不排期），比"设一个巨大的秒数"更可预期
+    const prof = talkativenessProfile()
+    if (prof.silent) return
+    // 保守档默认 6~15 分钟（后端 pet_idle_talk_* 可调；此处只是兜底）
+    const minS = prof.hasSlider
+      ? Math.max(30, prof.talkMin)
+      : Math.max(30, Number(settings.pet_idle_talk_min_seconds) || 360)
+    const maxS = prof.hasSlider
+      ? Math.max(minS, prof.talkMax)
+      : Math.max(minS, Number(settings.pet_idle_talk_max_seconds) || 900)
     const waitMs = (minS + Math.random() * (maxS - minS)) * 1000
     idleTalkTimer = window.setTimeout(() => {
       idleTalkTimer = null
       try {
-        // 说话气泡被关掉 / 正在说话 → 本轮跳过，重新排期
-        if (settings.live2d_speech_bubble_enabled === false || !speechBubble?.hidden) {
+        // 说话气泡被关掉 / 正在说话 / 非 idle → 本轮跳过，重新排期
+        if (idleQuiet()) {
           scheduleIdleTalk()
           return
         }
-        const api = window.__mioPetIdleTalk
-        if (!api) { scheduleIdleTalk(); return }
+        const text = pickIdleLine()
         // 空闲自语同样 6s 自动消失（不一直挂着；打字机节奏随 6s 收敛）
-        showSpeechBubble(api.pick(anyAgentBusy()), 6000, `idle-talk-${Date.now()}`)
+        if (text) showSpeechBubble(text, 6000, `idle-talk-${Date.now()}`)
       } catch (_) {}
       scheduleIdleTalk()
     }, waitMs)
+  }
+
+  // ================= L3-b 长任务提醒 =================
+  // 同一个 agent 的同一个 phase 连续超过 LONG_TASK_MS，就提醒一次"该歇口气了"。
+  // 判据用**本地** since（后端 last_phase_at 是 monotonic 秒，跨进程不可比）。
+  // 只提醒一次：key = agentId|phase|since，天然去重；同一轮任务不会反复唠叨。
+  const LONG_TASK_MS = 25 * 60 * 1000
+  let longTaskTimer = null
+  let longTaskNotified = new Set()
+
+  function checkLongTask() {
+    if (settings.pet_quotes_enabled === false) return
+    if (!bubbleAvailable()) return
+    const now = Date.now()
+    let spoke = false
+    agentBadgeStates.forEach((st, id) => {
+      if (spoke || !st || st.enabled === false || st.status === 'offline') return
+      const p = String(st.phase || 'idle')
+      // 和 anyAgentBusy 同口径：idle/complete/heartbeat 不算"在干活"
+      if (!p || p === 'idle' || p === 'complete' || p === 'heartbeat') return
+      const since = Number(st.since) || 0
+      if (!since || now - since < LONG_TASK_MS) return
+      const key = `${id}|${p}|${since}`
+      if (longTaskNotified.has(key)) return
+      longTaskNotified.add(key)
+      const text = pickIdleLine('grind')
+      if (!text) return
+      showSpeechBubble(text, 8000, `long-task-${key}`)
+      spoke = true
+    })
+    // 防止长期运行后 Set 无界增长（任务结束后 since 变化，旧 key 已无用）
+    if (longTaskNotified.size > 64) longTaskNotified = new Set()
+  }
+
+  function startLongTaskWatch() {
+    if (longTaskTimer) window.clearInterval(longTaskTimer)
+    longTaskTimer = window.setInterval(() => {
+      try { checkLongTask() } catch (_) {}
+    }, 30000)
+  }
+
+  // ================= L3-c 连点彩蛋 =================
+  // 3s 窗口内累计点击：第 3 击开始"嫌弃"（脸黑 + poke 台词），
+  // 第 6 击"装死"（X X 眼 + 静音 60s，期间怎么戳都不理）。
+  // 关掉 pet_poke_enabled 就完全回到"每次点击都是害羞+随机一句"。
+  const POKE_WINDOW_MS = 3000
+  const POKE_LEVEL1 = 3
+  const POKE_LEVEL2 = 6
+  const POKE_DEAD_MS = 60000
+  let pokeCount = 0
+  let pokeLastAt = 0
+  let pokeDeadUntil = 0
+
+  /**
+   * 推进连点计数。
+   * @returns {0|1|2} 0=普通点击 1=嫌弃 2=装死中（本次点击不应有任何反馈）
+   */
+  function nextPokeLevel() {
+    if (settings.pet_poke_enabled === false) return 0
+    const now = Date.now()
+    if (now < pokeDeadUntil) return 2
+    if (now - pokeLastAt > POKE_WINDOW_MS) pokeCount = 0
+    pokeLastAt = now
+    pokeCount += 1
+    if (pokeCount >= POKE_LEVEL2) {
+      pokeCount = 0
+      pokeDeadUntil = now + POKE_DEAD_MS
+      return 2
+    }
+    return pokeCount >= POKE_LEVEL1 ? 1 : 0
+  }
+
+  /** 装死表现：X X 眼（模型有就播，没有退回严肃脸），不说话。 */
+  function playPokeDeadReaction() {
+    if (motionIsExpression('06 X X')) playMotion('06 X X')
+    else applyEmotion('serious', POKE_DEAD_MS)
   }
 
   // 按压形变已移除（见 playPressBounce 注释）；保留函数名避免 ticker 报错。
@@ -1574,6 +2014,10 @@
         active,
         // 插件身份色（总线透传，见 agentAccentOf 注释）
         accent: payload.accent || prev.accent || '',
+        // L3-b：同一 phase 的**本地**起始时间（phase 变了就重置）。
+        // 长任务提醒按 (agentId|phase|since) 去重，所以这个字段必须"粘住"——
+        // 每次心跳都刷成 now 的话，25 分钟阈值永远到不了。
+        since: prev.phase === phase ? (Number(prev.since) || Date.now()) : Date.now(),
       })
     }
     renderAgentBadge()
@@ -1603,11 +2047,31 @@
     activityUntil = Date.now() + (activity === 'speaking' ? 4000 : 2600)
     activityIndicator.className = `activity-indicator ${activity}`
     activityIndicator.classList.toggle('active', activity !== 'idle')
-    const hint = PHASE_MOTION_HINT[phase]
-    if (hint && phase !== 'voice') {
-      const group = semanticMotion(hint)
-      if (group) playMotion(group)
-      else startProceduralMotion(hint, 0.5)
+
+    // ★ 「相位真的变了」才算新的一次状态表现。DSH 会按 REEMIT_MS(2s) 重发同一相位，
+    //   若不区分，动作去抖会把每次重发都当成新事件（要么反复重播、要么全被吞掉）。
+    const faceKey = `${agentId}:${phase}`
+    const phaseChanged = faceKey !== lastPhaseFaceKey
+    lastPhaseFaceKey = faceKey
+
+    // 表情：phase → 情绪槽（这条链路 2026-10-19 才补上）。
+    // override 来自管理界面「任务状态」区块：settings.live2d_phase_slots[模型][phase]
+    const phaseOverride = settings.live2d_phase_slots?.[currentModelId]?.[phase] || {}
+    const emotionSlot = String(phaseOverride.expression || PHASE_EMOTION[phase] || '')
+    if (phaseChanged && emotionSlot && phase !== 'voice' && Date.now() >= speakingUntil) {
+      applyEmotion(emotionSlot, 4200)
+    }
+
+    // 动作：槽位 → 动作名。两条判据缺一不可：
+    //   1) 解析结果**等于待机动作就不要播** —— 播 idle 视觉上等于没播（原实现正是把
+    //      think/observe/attention 都映射到 idle，于是 4 种工作态长得一模一样）；
+    //   2) 只在相位变化时允许打断去抖（force），同相位重发一律不重播。
+    const motionSlot = String(phaseOverride.motion || PHASE_MOTION_SLOT[phase] || '')
+    if (motionSlot && phase !== 'voice') {
+      const group = motionForSlot(motionSlot)
+      const idleGroup = semanticMotion('idle')
+      if (group && group !== idleGroup) playMotion(group, undefined, { force: phaseChanged })
+      else startProceduralMotion(MOTION_SLOT_ALIAS[motionSlot] || motionSlot, 0.5, { force: phaseChanged })
     }
   }
 
@@ -1632,6 +2096,8 @@
         phase: prev.phase || 'idle',
         active: prev.active || false,
         accent: prev.accent || '',
+        // 状态变更（online/offline/启用）不该重置长任务计时：phase 没变就沿用 since
+        since: Number(prev.since) || Date.now(),
       })
     }
     renderAgentBadge()
@@ -1652,14 +2118,20 @@
       const next = new Map()
       for (const a of agents) {
         if (!a || !a.agent_id) continue
-        next.set(String(a.agent_id), {
+        const aid = String(a.agent_id)
+        const phase = String(a.phase || 'idle')
+        // ⚠ 全量快照会 clear() 重建 Map，如果这里不主动继承 since，
+        //   每次轮询都会把长任务计时清零（阈值 25min 永远到不了）。
+        const prev = agentBadgeStates.get(aid) || {}
+        next.set(aid, {
           name: String(a.name || a.agent_id),
           status: String(a.status || 'offline'),
           enabled: a.enabled !== false,
-          phase: String(a.phase || 'idle'),
+          phase,
           active: Boolean(a.active),
           // 插件身份色：来自总线快照（插件 register 时自己声明的）
           accent: String(a.accent || ''),
+          since: prev.phase === phase ? (Number(prev.since) || Date.now()) : Date.now(),
         })
       }
       agentBadgeStates.clear()
@@ -1693,26 +2165,70 @@
     }
     const previousModel = selectedModelId()
     settings = { ...settings, ...(nextSettings || {}) }
+    // 节奏类设置（话痨程度/自语/微表情）变了 → 立即按新节奏重排。
+    // ⚠ 必须按**值变化**判重：applySettings 每 5s 被整包调用一次，
+    //   按"键存在"重排会把定时器每 5s 清零一次 ⇒ 永远等不到第一次自语。
+    maybeRescheduleRhythm()
     // 后端设置变更(settings_changed)以 settings.live2d_model_id 为准，清空桌面侧覆盖，避免热切换不触发
     if (nextSettings && Object.prototype.hasOwnProperty.call(nextSettings, 'live2d_model_id')) {
       desktopSelectedModelId = ''
     }
-    // 泡泡工坊：皮肤热应用（配置在 Mio「泡泡」页，settings_changed 下发）
+    // 泡泡工坊：皮肤热应用（配置在 Mio「泡泡」页，settings_changed 下发）。
+    // ★ 2026-10-19：**气泡与横条共用同一个皮肤**——`live2d_bubble_style` 是唯一真源，
+    //   `live2d_strip_style` 降级为历史别名：只有当气泡皮肤还没被用户选过（default/空）、
+    //   而横条当年选过别的皮肤时，才拿它做**一次**迁移，之后不再读写该键。
+    //
+    // ⚠ 2026-10-19 修「切了皮肤气泡横条都没反应」：
+    //   ① 原来这一整块（皮肤 + 横条尺寸 + 音效 + 图片权重）共用一个 `try { } catch (_) {}`，
+    //      任何一处抛错都被静默吞掉 —— 设置页点了没反应、控制台还一片安静。
+    //      现在拆成四段各自 catch 并 console.warn，失败至少看得见。
+    //   ② 真凶是**版本握手**：老缓存的 pet-bubble-styles.js 没有 applyTo，
+    //      对它传数组会抛 `Cannot read properties of undefined (reading 'remove')`
+    //      （数组没有 classList），随后被上面那个 catch 吞掉 ⇒ 皮肤永远套不上。
+    //      故按 typeof applyTo 分支：有数组 API 就一次传两个元素，没有就逐个套。
+    let unifiedSkin = ''
     try {
       const bs = window.__mioPetBubbleStyles
-      if (bs && nextSettings && Object.prototype.hasOwnProperty.call(nextSettings, 'live2d_bubble_style')) {
-        bs.setStyle(nextSettings.live2d_bubble_style, speechBubble)
+      const stripEl = document.getElementById('pet-strip')
+      if (bs && nextSettings) {
+        const hasBubble = Object.prototype.hasOwnProperty.call(nextSettings, 'live2d_bubble_style')
+        const hasStrip = Object.prototype.hasOwnProperty.call(nextSettings, 'live2d_strip_style')
+        unifiedSkin = hasBubble ? String(nextSettings.live2d_bubble_style || '') : ''
+        if ((!unifiedSkin || unifiedSkin === 'default') && hasStrip) {
+          const legacy = String(nextSettings.live2d_strip_style || '')
+          if (legacy && legacy !== 'default') unifiedSkin = legacy
+        }
+        if (unifiedSkin) {
+          try {
+            if (typeof bs.applyTo === 'function') {
+              bs.setStyle(unifiedSkin, [speechBubble, stripEl])
+            } else {
+              // 老缓存模块：只认单个元素，逐个套（气泡 + 横条），别传数组
+              bs.setStyle(unifiedSkin, speechBubble)
+              if (stripEl) bs.setStyle(unifiedSkin, stripEl)
+            }
+          } catch (err) {
+            console.warn('[mio] 皮肤热应用失败（pet-bubble-styles 版本不匹配？）', err)
+          }
+        }
+        // 全局 UI 主题：theme 皮肤据此推导调色板（主界面换主题，气泡跟着换）
+        if (Object.prototype.hasOwnProperty.call(nextSettings, 'ui_theme') && typeof bs.setUiTheme === 'function') {
+          try { bs.setUiTheme(nextSettings.ui_theme, [speechBubble, stripEl]) }
+          catch (err) { console.warn('[mio] 主题联动失败', err) }
+        }
       }
-      // 7.6 横条主题：与泡泡皮肤同一条热应用通路（settings 下发 → 立即套类）。
-      // 键名 `live2d_strip_style`；插件侧契约里的 `pet_strip_style` 是它的**别名**，
-      // 两个键都认，避免插件与设置页各叫一套（历史上有过键名漂移的事故）。
+    } catch (err) {
+      console.warn('[mio] 皮肤段异常', err)
+    }
+    // 横条侧状态（getStyle / localStorage）与统一皮肤对齐：
+    // 独立 try —— 皮肤模块缺席时也不能连带把横条尺寸搞挂。
+    if (unifiedSkin) {
+      try { window.__mioPetStrip?.applyStyle?.(unifiedSkin) } catch (_) {}
+    }
+    // 7.6 横条个性化：默认宽度 / 行数 / 「重新启用横条」token（皮肤已并入上面统一处理）
+    try {
       const stripApi = window.__mioPetStrip
       if (stripApi && nextSettings) {
-        const key = Object.prototype.hasOwnProperty.call(nextSettings, 'live2d_strip_style')
-          ? 'live2d_strip_style'
-          : (Object.prototype.hasOwnProperty.call(nextSettings, 'pet_strip_style') ? 'pet_strip_style' : null)
-        if (key) stripApi.applyStyle(nextSettings[key])
-        // ★ 个性化默认值（2026-10-17 设置页）：默认宽度 / 行数热应用。
         if (Object.prototype.hasOwnProperty.call(nextSettings, 'live2d_strip_width')) {
           stripApi.setDefaultWidth(Number(nextSettings.live2d_strip_width) || 0)
         }
@@ -1730,17 +2246,27 @@
           }
         }
       }
-      // 音效事件配置（每事件开关/音量/自定义片段）
+    } catch (err) {
+      console.warn('[mio] 横条个性化失败', err)
+    }
+    // 音效事件配置（每事件开关/音量/自定义片段）
+    try {
       const snd = window.__mioPetSound
       if (snd && nextSettings && Object.prototype.hasOwnProperty.call(nextSettings, 'pet_sound_events')) {
         snd.setEvents(nextSettings.pet_sound_events)
       }
-      // 图片池权重（点击随机图片按权重抽）
+    } catch (err) {
+      console.warn('[mio] 音效配置失败', err)
+    }
+    // 图片池权重（点击随机图片按权重抽）
+    try {
       const imgApi = window.__mioPetRandomImage
       if (imgApi && nextSettings && Object.prototype.hasOwnProperty.call(nextSettings, 'pet_image_weights')) {
         imgApi.setWeights(nextSettings.pet_image_weights)
       }
-    } catch (_) {}
+    } catch (err) {
+      console.warn('[mio] 图片权重应用失败', err)
+    }
     if (electronRuntime) {
       window.mioDesktop.setAlwaysOnTop(Boolean(settings.live2d_always_on_top ?? true))
       window.mioDesktop.setClickThroughLocked(Boolean(settings.live2d_click_through_locked))
@@ -3298,10 +3824,37 @@
         inertiaRaf = requestAnimationFrame(step)
       }
     } else if (!wasDragged) {
-      if (settings.live2d_click_motion) playMotion(semanticMotion('touch'), undefined, { force: true })
-      sendSocket('clicked', { x: event?.screenX || 0, y: event?.screenY || 0, emotion: 'gentle' })
-      // A组 点击互动：点桌宠 → 随机语句（复用说话气泡）或随机图片（气泡图片模式）
-      if (settings.pet_click_talk_enabled !== false && speechBubble?.hidden) {
+      // 点击桌宠 → 害羞槽（表情 + 动作）。2026-10-19 用户指定：原来走 touch 动作 + gentle 情绪。
+      // emotion 一并改成 shy：后端 set_pet_activity 会用这个值广播 activity，
+      // 若这里仍传 gentle，3 秒内那次广播会把害羞表情盖回去。
+      //
+      // ★ L3-c 连点彩蛋：先问"这是第几下"。
+      //   0 = 普通点击（原有：害羞 + 动作 + 随机一句）
+      //   1 = 嫌弃（脸黑 + poke 台词，气泡顶掉上一句）
+      //   2 = 装死中（X X 眼，60s 内怎么戳都不理）
+      const pokeLevel = nextPokeLevel()
+      const clickEmotion = pokeLevel ? 'serious' : 'shy'
+      if (pokeLevel === 2) {
+        playPokeDeadReaction()
+      } else if (pokeLevel === 1) {
+        applyEmotion('serious', 4000)
+      } else {
+        applyEmotion('shy', 5000)
+        if (settings.live2d_click_motion) {
+          const shyGroup = motionForSlot('shy')
+          const idleGroup = semanticMotion('idle')
+          if (shyGroup && shyGroup !== idleGroup) playMotion(shyGroup, undefined, { force: true })
+          else startProceduralMotion('shy', 0.55, { force: true })
+        }
+      }
+      sendSocket('clicked', { x: event?.screenX || 0, y: event?.screenY || 0, emotion: clickEmotion })
+      if (pokeLevel === 1) {
+        // 连点时上一句还挂着（3s 才消失），showClickTalk 的"气泡隐藏才弹"条件永远不成立，
+        // 所以这里直接顶掉：用新的 responseId 覆盖同一块气泡。
+        const pokeText = pickIdleLine('poke')
+        if (pokeText) showSpeechBubble(pokeText, 3500, `poke-${Date.now()}`)
+      } else if (pokeLevel === 0 && settings.pet_click_talk_enabled !== false && speechBubble?.hidden) {
+        // A组 点击互动：点桌宠 → 随机语句（复用说话气泡）或随机图片（气泡图片模式）
         showClickTalk()
       }
     }
@@ -3812,6 +4365,13 @@
     setInterval(idleTick, 1000)
     // A 档：启动空闲自语排期（设置已由上面的 pollStatus 加载完成）
     scheduleIdleTalk()
+    // M1/M2：随机微表情节拍 + 模型台词库（台词库异步加载，失败自动回退旧内容池）
+    scheduleIdleBeat()
+    // L3-b：长任务提醒巡检（30s 一跳；阈值 25min，不需要更细）
+    startLongTaskWatch()
+    try {
+      if (window.__mioPetQuotes) await window.__mioPetQuotes.load(currentModelId)
+    } catch (_) {}
     // A7：初始化角色图库（数据在首次打开时才拉，不占用启动时间）
     initGallery()
     // A组：随机图片（点击互动素材池）+ 气泡皮肤（配置在 Mio「泡泡」页，settings 下发热应用）
@@ -4100,12 +4660,19 @@
 
     function applyStyle(id) {
       const wanted = String(id || '').trim() || 'default'
-      // 清掉既有 strip 皮肤类再挂新的（与 pet-bubble-styles.js 的 apply 同机制）
-      Array.from(el.classList)
-        .filter((c) => c.indexOf('strip-style-') === 0)
-        .forEach((c) => el.classList.remove(c))
-      if (wanted !== 'default') el.classList.add(`strip-style-${wanted}`)
-      styleId = wanted
+      // ★ 2026-10-19：统一走 pet-bubble-styles —— 横条与气泡**同一个皮肤 id、同一套 class**
+      //   （style-<id>），"跟随主题"的内联调色板也由它算，这里不再自己拼 strip-style-<id>。
+      //   兜底：该模块没加载时退回旧行为，保证横条不裸奔。
+      const bs = window.__mioPetBubbleStyles
+      if (bs && typeof bs.applyTo === 'function') {
+        styleId = bs.applyTo(el, wanted) || wanted
+      } else {
+        Array.from(el.classList)
+          .filter((c) => c.indexOf('strip-style-') === 0)
+          .forEach((c) => el.classList.remove(c))
+        if (wanted !== 'default') el.classList.add(`strip-style-${wanted}`)
+        styleId = wanted
+      }
       safe(() => window.localStorage.setItem(KEY_STYLE, wanted))
       return styleId
     }

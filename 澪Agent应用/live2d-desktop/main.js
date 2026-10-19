@@ -24,27 +24,197 @@ const {
 } = require('./model-discovery')
 
 const API_BASE = String(process.env.MIO_PET_API_BASE || 'http://127.0.0.1:8000').replace(/\/$/, '')
-// 数据目录默认落在项目根 pet-data（ASCII 路径，避开受控目录 MioAgent 的写入限制）
-const defaultStateRoot = path.join(__dirname, '..', '..', 'pet-data')
-const STATE_DIR = path.resolve(process.env.MIO_PET_STATE_DIR || path.join(defaultStateRoot, 'Live2D桌宠'))
+
+// ══════════════════════════════════════════════════════════════════════════
+// 运行时目录自举（2026-10-19 独立性改造 · 方案 B）
+//
+// 目标：**单独 clone / 下载本仓库，不依赖任何其它仓库**，解压即能起。
+// 事实（见 docs/项目独立性-技术分析.md）：
+//   · 历史版本"能跑"靠的是仓库根上一条**从上游复制继承来的** ACL 规则；
+//   · 新机器 / 新目录 clone 没有这条规则 ⇒ 单实例锁写不进去 ⇒ Error code 3 秒退。
+//
+// 本段做两件事：
+//   1) 按**候选链**探测"真的能写"（真写探针文件，不只看 existsSync —— 目录存在
+//      但无权限时 existsSync 仍返回 true，是历史上最大的误判来源）；
+//   2) 全部候选都不可写时，用 dialog.showErrorBox 明确告知修复命令，
+//      **不再静默秒退**（这个函数在 app ready 之前就可用）。
+//
+// 为什么运行期不做 ACL 授权：受限令牌（AppContainer / 宿主沙箱）里 icacls 同样
+// 被拒，改了也没用。授权必须在安装期用**正常用户权限**做 → 见 安装依赖.ps1 第 4 步。
+// ══════════════════════════════════════════════════════════════════════════
+const PROJECT_ROOT = path.resolve(__dirname, '..', '..')
+const LOCAL_ROOT = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local')
+
+/** 目录是否**真的**可写（mkdir + 写探针 + 删探针）。任何一步失败即 false。 */
+function canWriteDir(dir) {
+  return probeDir(dir).ok
+}
+
+/**
+ * 同 canWriteDir，但把失败原因带出来（用于弹窗 / 启动日志定位）。
+ *
+ * ★ 2026-10-19 实测补充：**本探针失败 ≠ DACL 有问题**。
+ *   最常见的原因是目标目录缺 `Low` 完整性标签 —— Electron 被降权到 Low IL 运行时，
+ *   往 Medium 对象写入会被 no-write-up 策略直接挡（EPERM/EACCES），DACL 再宽松也没用。
+ *   所以错误文案必须把底层 code 一起抛出来，否则只能看到"不可写"三个字无从下手。
+ */
+function probeDir(dir) {
+  if (!dir) return { ok: false, error: 'empty path' }
+  try {
+    fs.mkdirSync(dir, { recursive: true })
+    const probe = path.join(dir, `.write-probe-${process.pid}-${Date.now()}.tmp`)
+    fs.writeFileSync(probe, 'ok')
+    fs.unlinkSync(probe)
+    return { ok: true, error: '' }
+  } catch (err) {
+    const code = (err && (err.code || err.errno)) || 'UNKNOWN'
+    return { ok: false, error: `${code}: ${(err && err.message) || err}` }
+  }
+}
+
+/**
+ * 启动日志（惰性决定落点）。
+ *
+ * ⚠ 2026-10-19 实测：Electron 以 Low IL 运行时**写不进 %TEMP%**（那是 Medium 对象，
+ *   同样受 no-write-up 限制）——所以 %TEMP% 只能是首选、不能当保证。
+ *   首选失败就回落到 `pet-data/`（该目录带 Low 标签，Low 进程可写）。
+ *   两个都写不进去时静默放弃，绝不能因为日志把启动搞崩。
+ */
+const BOOT_LOG_CANDIDATES = [
+  path.join(os.tmpdir(), 'mao-pet-boot.log'),
+  path.join(PROJECT_ROOT, 'pet-data', 'mao-pet-boot.log'),
+]
+let _bootLogPath = ''
+function bootLogPath() {
+  if (_bootLogPath) return _bootLogPath
+  for (const candidate of BOOT_LOG_CANDIDATES) {
+    try {
+      fs.appendFileSync(candidate, '')
+      _bootLogPath = candidate
+      return candidate
+    } catch {}
+  }
+  _bootLogPath = BOOT_LOG_CANDIDATES[0]
+  return _bootLogPath
+}
+function bootLog(line) {
+  try {
+    fs.appendFileSync(bootLogPath(), `[${new Date().toISOString()}] ${line}\n`)
+  } catch {}
+}
+
+/**
+ * 解析桌宠数据目录（STATE_DIR，完整指向 "Live2D桌宠" 那一层）。
+ * 优先级：显式环境变量 → 项目内 pet-data → 用户 LOCALAPPDATA → 系统 TEMP。
+ */
+function resolveStateDir() {
+  const explicit = String(process.env.MIO_PET_STATE_DIR || '').trim()
+  if (explicit) {
+    // 显式指定就尊重用户意图（不再偷偷换目录，否则后端与桌面端会各指一处）
+    const dir = path.resolve(explicit)
+    const probe = probeDir(dir)
+    if (!probe.ok) {
+      console.error(`[mao-pet] ⚠ MIO_PET_STATE_DIR 不可写：${dir}（${probe.error}）`)
+      bootLog(`⚠ MIO_PET_STATE_DIR 不可写：${dir}（${probe.error}）`)
+      return { dir, source: `env(不可写: ${probe.error})` }
+    }
+    return { dir, source: 'env:MIO_PET_STATE_DIR' }
+  }
+  const candidates = [
+    [path.join(PROJECT_ROOT, 'pet-data', 'Live2D桌宠'), '项目内 pet-data'],
+    [path.join(LOCAL_ROOT, 'Mao-pet', 'Live2D桌宠'), '用户 LOCALAPPDATA'],
+    [path.join(os.tmpdir(), 'mao-pet-runtime', 'Live2D桌宠'), '系统 TEMP'],
+  ]
+  for (const [dir, source] of candidates) {
+    if (canWriteDir(dir)) return { dir: path.resolve(dir), source }
+  }
+  return { dir: path.resolve(candidates[0][0]), source: '❌ 全部不可写' }
+}
+
+/**
+ * 解析 Electron userData 目录（单实例锁 SingletonLock 所在）。
+ * 必须与 STATE_DIR 同盘同权限层级：优先 `<pet-data>/pet-instance`。
+ *
+ * ★ 2026-10-19：**显式环境变量也要探测**。启动脚本以 Medium 身份探测通过就把它塞进
+ *   MIO_PET_INSTANCE_DIR，但真正跑 Electron 的是 Low IL —— 环境变量指过来也可能写不进去。
+ *   旧写法 `if (explicit) return explicit` 会把这条死路当唯一答案，直接导致秒退。
+ */
+function resolveInstanceDir(stateDir) {
+  if (process.env.MIO_PET_ALLOW_PARALLEL === '1') return path.join(stateDir, 'instance')
+  const explicit = String(process.env.MIO_PET_INSTANCE_DIR || '').trim()
+  const base = path.dirname(stateDir) // pet-data / Mao-pet / mao-pet-runtime
+  const candidates = []
+  if (explicit) candidates.push(path.resolve(explicit))
+  candidates.push(
+    path.join(base, 'pet-instance'),
+    path.join(stateDir, 'instance'),
+    path.join(LOCAL_ROOT, 'Mao-pet', 'pet-instance'),
+    path.join(os.tmpdir(), 'mao-pet-instance'),
+  )
+  for (const dir of candidates) {
+    if (canWriteDir(dir)) return dir
+  }
+  return candidates[0]
+}
+
+const _stateChoice = resolveStateDir()
+const STATE_DIR = _stateChoice.dir
 const MODELS_DIR = path.join(STATE_DIR, 'models')
 const STATE_PATH = path.join(STATE_DIR, 'runtime.json')
 const LOG_PATH = path.join(STATE_DIR, 'desktop-pet.log')
-const INSTANCE_DIR = process.env.MIO_PET_ALLOW_PARALLEL === '1'
-  ? path.join(STATE_DIR, 'instance')
-  : path.resolve(process.env.MIO_PET_INSTANCE_DIR || path.join(path.dirname(STATE_DIR), 'pet-instance'))
+const SESSION_DIR = path.join(STATE_DIR, 'Chromium')
+const INSTANCE_DIR = resolveInstanceDir(STATE_DIR)
+
+// ★ 关键（2026-10-17 真根因）：INSTANCE_DIR 是 electron 的 userData（单实例锁所在）。
+//   目录不存在 ⇒ "单实例锁文件创建失败(Error code 3)" ⇒ 主进程秒退。
+//   必须在 setPath 前先建好。Chromium/sessionData 由 electron 自建，
+//   不要手动 mkdir 子目录（会 EPERM，且与 electron 内部管理冲突）。
+//   这里先探针 + 打日志（放在 setName 之前，保证日志一定先落盘，便于排障）。
+const _instanceProbe = probeDir(INSTANCE_DIR)
+const _sessionProbe = probeDir(SESSION_DIR)
+console.log(`[mao-pet] 数据目录 = ${STATE_DIR}（来源：${_stateChoice.source}）`)
+console.log(`[mao-pet] 锁目录   = ${INSTANCE_DIR}（可写：${_instanceProbe.ok}${_instanceProbe.ok ? '' : ' — ' + _instanceProbe.error}）`)
+console.log(`[mao-pet] 缓存目录 = ${SESSION_DIR}（可写：${_sessionProbe.ok}${_sessionProbe.ok ? '' : ' — ' + _sessionProbe.error}）`)
+console.log(`[mao-pet] 启动日志 = ${bootLogPath()}`)
+bootLog(`---- 启动 pid=${process.pid} ----`)
+bootLog(`数据目录=${STATE_DIR}（${_stateChoice.source}）`)
+bootLog(`锁目录=${INSTANCE_DIR} ok=${_instanceProbe.ok} ${_instanceProbe.error}`)
+bootLog(`缓存目录=${SESSION_DIR} ok=${_sessionProbe.ok} ${_sessionProbe.error}`)
+bootLog(`env: MIO_PET_STATE_DIR=${process.env.MIO_PET_STATE_DIR || '(空)'} MIO_PET_INSTANCE_DIR=${process.env.MIO_PET_INSTANCE_DIR || '(空)'}`)
 
 app.setName('MioLive2D桌宠')
 app.setAppUserModelId('local.mio.live2d.desktop')
-// ★ 关键（2026-10-17 真根因）：INSTANCE_DIR 是 electron 的 userData（单实例锁所在）。
-//   Mao 主仓库有 pet-data/pet-instance，但本仓库 clone 出来没有该目录 ⇒
-//   electron 启动时"单实例锁文件创建失败(Error code 3)"→ 主进程秒退、桌宠起不来。
-//   必须在 setPath 前先建好 INSTANCE_DIR。Chromium/sessionData 由 electron 自建，
-//   不要手动 mkdir（会 EPERM，且与 electron 内部管理冲突）。
-fs.mkdirSync(INSTANCE_DIR, { recursive: true })
+
+if (!_instanceProbe.ok) {
+  // dialog.showErrorBox 在 app ready 之前即可用（同步 MessageBox），
+  // 这是唯一"用户在双击场景下一定看得见"的错误通道。仍然继续尝试启动，
+  // 因为部分受限环境下 mkdir 探针会误报失败、而 electron 自己的锁能建。
+  bootLog(`❌ 锁目录不可写：${_instanceProbe.error}`)
+  try {
+    dialog.showErrorBox(
+      'Mao-pet 启动失败：运行时目录不可写',
+      `无法写入：\n${INSTANCE_DIR}\n\n` +
+        `底层错误：${_instanceProbe.error}\n\n` +
+        '最常见原因：pet-data 缺 **Low 完整性标签**。Electron 以 Low 完整性级别运行时，\n' +
+        '向 Medium 目录写入会被系统直接挡住（DACL 再宽松也没用）。\n\n' +
+        '请在项目根目录运行一次安装脚本（它会补齐权限 + Low 标签）：\n' +
+        '  右键「安装依赖.ps1」→ 使用 PowerShell 运行\n\n' +
+        '或手动执行（普通用户 PowerShell，不要在受限沙箱里）：\n' +
+        `  icacls "${PROJECT_ROOT}\\pet-data" /setintegritylevel (OI)(CI)Low /T\n\n` +
+        `排查日志：${bootLogPath()}\n` +
+        `详细分析见 docs/项目独立性-技术分析.md`,
+    )
+  } catch {}
+  console.error('[mao-pet] ❌ 锁目录不可写，桌宠大概率会秒退（已弹出提示）')
+}
+
 app.setPath('userData', INSTANCE_DIR)
-app.setPath('sessionData', path.join(STATE_DIR, 'Chromium'))
-fs.mkdirSync(MODELS_DIR, { recursive: true })
+app.setPath('sessionData', SESSION_DIR)
+try {
+  fs.mkdirSync(MODELS_DIR, { recursive: true })
+} catch (err) {
+  console.error(`[mao-pet] ⚠ 模型目录创建失败：${MODELS_DIR}（${err.message}）`)
+}
 app.commandLine.appendSwitch('disable-background-timer-throttling')
 app.commandLine.appendSwitch('disable-renderer-backgrounding')
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
@@ -883,7 +1053,7 @@ function createWindow() {
   setMouseInteractive(false)
   try { mainWindow.webContents.session.clearCache() } catch (_e) {}
   try { mainWindow.webContents.session.setCacheSizeLimit(0) } catch (_e) {}
-  mainWindow.loadURL(`${API_BASE}/agent-app/live2d-pet/index.html?runtime=electron&v=20261017-stripbounds`)
+  mainWindow.loadURL(`${API_BASE}/agent-app/live2d-pet/index.html?runtime=electron&v=20261019-alive3`)
   log('window.load', `${API_BASE}/agent-app/live2d-pet/index.html`)
   // 主进程轮询鼠标位置驱动穿透/交互（不依赖渲染层 forward 转发）
   // 60ms ≈ 16Hz：穿透策略与视线跟随共用，兼顾响应度与开销

@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 #  Mio 桌宠 重启后端 + 一键拉起（后端 + Electron 桌宠）
 #
 #  用法: pwsh -NoProfile -ExecutionPolicy Bypass -File restart_mio.ps1
@@ -37,6 +37,34 @@ $ErrorActionPreference = 'Stop'
 #   必须在拉起 electron 前清掉它（只影响本脚本进程树，不动宿主）。
 Remove-Item env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
 $env:ELECTRON_RUN_AS_NODE = $null
+
+# ★ 环境变量大小写去重（2026-10-19 实测踩到）：
+#   Windows PowerShell 5.1 的 Start-Process 在**同一环境变量存在两种大小写写法**时
+#   （例如 Clash/v2ray/系统代理常同时设置 HTTP_PROXY 与 http_proxy）会抛：
+#     Start-Process : 已添加项。字典中的关键字:"HTTPS_PROXY" 所添加的关键字:"https_proxy"
+#   后端因此**根本起不来**，而且报错像是脚本 bug，极难联想到代理环境。
+#   这里在拉起任何子进程前把重复的小写键删掉（保留大写，两者语义等价）。
+function Remove-DuplicateEnvKeys {
+    try {
+        $vars = [Environment]::GetEnvironmentVariables('Process')
+        $seen = @{}
+        foreach ($k in @($vars.Keys)) {
+            $lower = $k.ToLowerInvariant()
+            if ($seen.ContainsKey($lower)) {
+                $prev = $seen[$lower]
+                if ($k -ceq $k.ToUpperInvariant()) {
+                    [Environment]::SetEnvironmentVariable($prev, $null, 'Process')
+                    $seen[$lower] = $k
+                } else {
+                    [Environment]::SetEnvironmentVariable($k, $null, 'Process')
+                }
+            } else {
+                $seen[$lower] = $k
+            }
+        }
+    } catch {}
+}
+Remove-DuplicateEnvKeys
 
 $root = $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($root)) { $root = Split-Path -Parent $MyInvocation.MyCommand.Path }
@@ -98,33 +126,62 @@ if (-not (Test-Path (Join-Path $electronWorkDir 'main.js'))) {
     }
 }
 
-# electron userData 锁目录：**只在本仓库内**（pet-data\pet-instance），不可写则退到用户 Temp。
-# 原实现强制复用同级 Mao 仓库的目录（跨仓库依赖），已删除。
-# 目录存在 ≠ 能写（AppContainer capability 情形会 Error 5），故实际写探测文件确认。
-$stateDir = Join-Path $root 'pet-data\Live2D桌宠'
-$instanceCandidates = @(
-    (Join-Path $root 'pet-data\pet-instance'),
-    (Join-Path $env:TEMP 'mao-pet-instance')
-)
-$env:MIO_PET_INSTANCE_DIR = ''
-foreach ($dir in $instanceCandidates) {
-    if (-not $dir) { continue }
+# ────────────────────────────────────────────────────────────────────────────
+#  运行时目录探测（2026-10-19 独立性改造 · 方案 B）
+#
+#  ★ 原则：单独 clone 本仓库、不依赖任何机器上遗留的 ACL 规则就能跑。
+#    目录存在 ≠ 能写（受限令牌下 mkdir 会 Error 5），必须**真写探针**。
+#    探测链与 澪Agent应用/live2d-desktop/main.js 的 resolveStateDir() 完全一致。
+$stateDir = $null
+$instanceDir = $null
+function Test-DirWritable($dir) {
+    if (-not $dir) { return $false }
     try {
         if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir -ErrorAction Stop | Out-Null }
         $probe = Join-Path $dir ('.write-probe-' + [guid]::NewGuid().ToString('N') + '.tmp')
         Set-Content -Path $probe -Value 'ok' -ErrorAction Stop
         Remove-Item $probe -Force -ErrorAction SilentlyContinue
-        $env:MIO_PET_INSTANCE_DIR = $dir
-        Write-Host "  instance: $dir"
+        return $true
+    } catch { return $false }
+}
+# ★ Low 完整性标签检查（2026-10-19 真根因）：能写 ≠ Electron 能写。
+function Test-LowIntegrityLabel($dir) {
+    if (-not $dir) { return $false }
+    try { return (((& icacls.exe $dir) -join "`n") -match 'Low Mandatory Level') } catch { return $false }
+}
+$runtimeCandidates = @(
+    @{ State = (Join-Path $root 'pet-data\Live2D桌宠');            Instance = (Join-Path $root 'pet-data\pet-instance'); Label = '项目内 pet-data' },
+    @{ State = (Join-Path $env:LOCALAPPDATA 'Mao-pet\Live2D桌宠'); Instance = (Join-Path $env:LOCALAPPDATA 'Mao-pet\pet-instance'); Label = '用户 LOCALAPPDATA' },
+    @{ State = (Join-Path $env:TEMP 'mao-pet-runtime\Live2D桌宠'); Instance = (Join-Path $env:TEMP 'mao-pet-instance'); Label = '系统 TEMP' }
+)
+foreach ($c in $runtimeCandidates) {
+    if ((Test-DirWritable $c.State) -and (Test-DirWritable (Join-Path $c.State 'Chromium')) -and (Test-DirWritable $c.Instance)) {
+        $stateDir = $c.State
+        $instanceDir = $c.Instance
+        Write-Host "  运行时目录: $stateDir（来源：$($c.Label)）" -ForegroundColor DarkGray
         break
-    } catch {
-        Write-Host "  instance 不可写，尝试下一个：$dir"
     }
+    Write-Host "  运行时目录不可写，尝试下一个：$($c.State)" -ForegroundColor DarkGray
 }
-if (-not $env:MIO_PET_INSTANCE_DIR) {
-    Write-Host '  ⚠ 没有可写的 pet-instance 目录，桌宠可能无法启动' -ForegroundColor Yellow
+if (-not $stateDir) {
+    Write-Host '  ❌ 找不到可写的桌宠运行时目录，已中止（不启动，避免窗口秒退）。' -ForegroundColor Red
+    Write-Host '     请用普通用户 PowerShell 运行一次：' -ForegroundColor Yellow
+    Write-Host '       pwsh -NoProfile -ExecutionPolicy Bypass -File 安装依赖.ps1' -ForegroundColor Yellow
+    Write-Host ('     或: icacls "{0}" /grant "{1}:(OI)(CI)F" /T' -f (Join-Path $root 'pet-data'), "$env:USERDOMAIN\$env:USERNAME") -ForegroundColor Yellow
+    exit 1
 }
+
+# Low 标签预检（缺失时明确的失败原因，而不是让用户对着弹窗猜）
+$petDataRoot = Split-Path $stateDir -Parent
+if (-not (Test-LowIntegrityLabel $petDataRoot)) {
+    Write-Host "  ⚠ $petDataRoot 缺少 Low 完整性标签" -ForegroundColor Yellow
+    Write-Host '    Electron 以 Low 完整性级别运行时会写不进去 → 弹「运行时目录不可写」并秒退。' -ForegroundColor Yellow
+    Write-Host ('    修复: icacls "{0}" /setintegritylevel (OI)(CI)Low /T' -f $petDataRoot) -ForegroundColor Yellow
+    Write-Host '    或直接重跑 安装依赖.ps1（第 4 步会补）' -ForegroundColor Yellow
+}
+$env:MIO_PET_INSTANCE_DIR = $instanceDir
 $env:MIO_PET_STATE_DIR = $stateDir
+Write-Host "  instance: $instanceDir"
 
 # 就绪探测用 /api/companion/agents（纯读总线，稳定）；
 # 不用 /api/companion/status —— 它依赖 Live2D 资源与磁盘写入，
@@ -260,7 +317,9 @@ if ($targets.Count -eq 0) {
 }
 
 # ---------- 1) 拉起后端 ----------
-$petStateDir = Join-Path $root 'pet-data\Live2D桌宠'
+# $petStateDir 由上方运行时目录探测得出（与 Electron main.js 同一套规则），
+# 不再写死项目内 pet-data —— 项目目录不可写时会自动落到 LOCALAPPDATA/TEMP。
+$petStateDir = $stateDir
 Write-Step '[2/4] 启动后端 (uvicorn :8000)...'
 
 # 启动前轮转一次日志：旧后端可能已把 out/err 写得很长，

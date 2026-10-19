@@ -1,4 +1,4 @@
-# phys_bounds.ps1 - 枚举真实显示器（含USB副屏）物理边界，供 Electron 桌宠窗口跨屏覆盖
+﻿# phys_bounds.ps1 - 枚举真实显示器（含USB副屏）物理边界，供 Electron 桌宠窗口跨屏覆盖
 # 输出: physL,physT,physR,physB,primaryPhysW  (物理像素，逗号分隔，单行)
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -TypeDefinition @'

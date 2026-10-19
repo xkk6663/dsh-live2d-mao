@@ -65,10 +65,17 @@ const selectedLive2D = computed(() => {
 })
 const motionLabels = {
   idle: '待机', touch: '触碰', think: '思考', speak: '说话', observe: '观察',
-  cheerful: '开心', concerned: '担心', alert: '警觉', attention: '注意', shy: '害羞',
+  cheerful: '开心', concerned: '担心', alert: '警觉', attention: '注意', shy: '害羞', listen: '聆听',
 }
 const expressionLabels = {
-  neutral: '自然', gentle: '温柔', cheerful: '开心', concerned: '担心', serious: '认真', shy: '害羞',
+  neutral: '自然', gentle: '温柔', cheerful: '开心', concerned: '担心', serious: '认真', shy: '害羞', alert: '警觉',
+}
+// 任务状态（phase）→ 表现绑定：每个状态可选「自动 / 某个动作槽 / 某个表情槽」。
+// 存的是**槽名**（不是具体动作名），换模型不用重配。
+const phaseLabels = {
+  idle: '待机', planning: '规划', thinking: '思考', executing_tool: '执行工具',
+  streaming: '回复中', waiting_input: '聆听', voice: '语音', complete: '完成',
+  error: '出错', paused: '暂停', awaiting_approval: '待确认',
 }
 const selectedMotions = computed(() => selectedLive2D.value?.capabilities?.motions || [])
 const selectedExpressions = computed(() => selectedLive2D.value?.capabilities?.expressions || [])
@@ -83,6 +90,23 @@ const currentExpressionSlots = computed(() => {
   settings.value.live2d_expression_slots ||= {}
   settings.value.live2d_expression_slots[selectedLive2D.value.id] ||= {}
   return settings.value.live2d_expression_slots[selectedLive2D.value.id]
+})
+// 任务状态绑定：每个 phase 固定补一个 {motion:'', expression:''} 对象，
+// 否则 v-model 写不进不存在的键（Vue 3 对 undefined 嵌套写入会静默丢）。
+const currentPhaseSlots = computed(() => {
+  if (!selectedLive2D.value) return {}
+  settings.value.live2d_phase_slots ||= {}
+  const perModel = settings.value.live2d_phase_slots[selectedLive2D.value.id] ||= {}
+  Object.keys(phaseLabels).forEach((phase) => {
+    const binding = perModel[phase]
+    if (!binding || typeof binding !== 'object') {
+      perModel[phase] = { motion: '', expression: '' }
+      return
+    }
+    if (typeof binding.motion !== 'string') binding.motion = ''
+    if (typeof binding.expression !== 'string') binding.expression = ''
+  })
+  return perModel
 })
 
 // 实时刷新该桌宠管理界面：面板自己拉一次状态，把结果上抛给父层写回 store。
@@ -159,6 +183,7 @@ function rangeInputStyle(value, minimum, maximum) {
         </div>
         <div class="live2d-resource-grid"><label v-for="(label, slot) in expressionLabels" :key="slot"><span>{{ label }}</span><select v-model="currentExpressionSlots[slot]"><option value="">自动判断</option><option v-for="expression in selectedExpressions" :key="expression.Name || expression.name" :value="expression.Name || expression.name">{{ expression.Name || expression.name }}</option></select><button type="button" title="预览表情" :disabled="!currentExpressionSlots[slot] || busy" @click="emit('preview-expression', currentExpressionSlots[slot])"><Volume2 :size="13" /></button></label></div>
       </div>
+      <div v-if="selectedMotions.length || selectedExpressions.length" class="live2d-resource-section"><h3>任务状态</h3><small class="live2d-resource-tip">选「自动」= 用内置默认（完成→开心 / 出错→担心 / 聆听→聆听）</small><div class="live2d-phase-grid"><label v-for="(label, phase) in phaseLabels" :key="phase"><span>{{ label }}</span><select v-model="currentPhaseSlots[phase].motion" title="动作槽"><option value="">自动动作</option><option v-for="(slotLabel, slot) in motionLabels" :key="'pm-' + slot" :value="slot">{{ slotLabel }}</option></select><select v-model="currentPhaseSlots[phase].expression" title="表情槽"><option value="">自动表情</option><option v-for="(slotLabel, slot) in expressionLabels" :key="'pe-' + slot" :value="slot">{{ slotLabel }}</option></select></label></div></div>
       <p v-if="!selectedMotions.length && !selectedExpressions.length">模型配置中没有登记动作或表情</p>
     </div>
     <div class="pet-quick-controls">

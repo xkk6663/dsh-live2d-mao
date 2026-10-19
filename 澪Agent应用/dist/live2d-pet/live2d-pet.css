@@ -525,56 +525,109 @@ body,
 /* ---- 泡泡皮肤（pet-bubble-styles.js 点选后挂在 #speech-bubble 上）----
    机制与 DSH data-agent-accent 完全一致：只覆盖调色板变量，框/尾巴/投影复用。
    注意：插件身份色（data-agent-accent）优先级更高，气泡跟"谁在说话"走。 */
-.speech-bubble.style-mono {
+/* ★ 2026-10-19 皮肤调色板**单点定义**：气泡与横条并列选择器一次声明。
+   之前两处各抄一份（.speech-bubble.style-X 与 .pet-strip.strip-style-X），
+   加一款皮肤要改两遍、还容易漂移 —— 现在皮肤 id 同名同 class，
+   谁渲染谁生效，新增皮肤只需在下面加一块。
+   皮肤 = 只覆盖 4 个调色板变量（--bubble-bg/border/ink/shadow），
+   框/尾巴/圆角/投影各自复用基础样式。 */
+.speech-bubble.style-mono,
+.pet-strip.style-mono {
   --bubble-bg: rgb(36 48 54 / 96%);
   --bubble-border: rgb(120 150 160 / 35%);
   --bubble-ink: #e8f0f2;
 }
 
-.speech-bubble.style-navy {
+.speech-bubble.style-navy,
+.pet-strip.style-navy {
   --bubble-bg: color-mix(in srgb, #4f6bed 10%, rgb(255 255 255 / 97%));
   --bubble-border: color-mix(in srgb, #4f6bed 52%, transparent);
   --bubble-ink: color-mix(in srgb, #4f6bed 60%, #17202b);
   --bubble-shadow: 0 8px 24px rgb(31 42 96 / 20%), 0 0 0 2px rgb(79 107 237 / 12%);
 }
 
-.speech-bubble.style-peach {
+.speech-bubble.style-peach,
+.pet-strip.style-peach {
   --bubble-bg: color-mix(in srgb, #f7b8c4 22%, rgb(255 255 255 / 96%));
   --bubble-border: color-mix(in srgb, #e8618c 42%, transparent);
   --bubble-ink: color-mix(in srgb, #a13a56 78%, #2d4148);
 }
 
-.speech-bubble.style-matcha {
+.speech-bubble.style-matcha,
+.pet-strip.style-matcha {
   --bubble-bg: color-mix(in srgb, #9db87a 18%, rgb(255 255 255 / 97%));
   --bubble-border: color-mix(in srgb, #5f7a44 45%, transparent);
   --bubble-ink: #33452a;
 }
 
-.speech-bubble.style-note {
+.speech-bubble.style-note,
+.pet-strip.style-note {
   --bubble-bg: #ffe27a;
   --bubble-border: color-mix(in srgb, #c9a83c 55%, transparent);
   --bubble-ink: #4d3f14;
   --bubble-shadow: 0 6px 18px rgb(120 96 20 / 22%);
 }
 
-.speech-bubble.style-terminal {
+.speech-bubble.style-terminal,
+.pet-strip.style-terminal {
   --bubble-bg: #17301f;
   --bubble-border: rgb(94 196 128 / 45%);
   --bubble-ink: #7ee2a0;
   --bubble-shadow: 0 8px 24px rgb(10 30 18 / 40%);
 }
 
-.speech-bubble.style-terminal span {
+.speech-bubble.style-terminal span,
+.pet-strip.style-terminal span {
   font-family: Consolas, 'Courier New', monospace;
 }
 
-.speech-bubble.style-comic {
+.speech-bubble.style-comic,
+.pet-strip.style-comic {
   --bubble-bg: #ffffff;
   --bubble-border: #17202b;
   --bubble-ink: #17202b;
   --bubble-shadow: 3px 3px 0 #17202b;
   border-width: 2px;
 }
+
+/* ---- 新增 4 款（2026-10-19）：玻璃 / 霓虹 / 纸墨 / 夜墨 ----
+   参考 shader-effects-inc/shaders 的 glass 与 bloom 效果清单，
+   但**不引入 WebGPU 依赖**（本机可能 live2d_disable_gpu，且面板是注入式
+   plain JS）：用 backdrop-filter + 多层 box-shadow 复刻观感，零依赖零风险。 */
+.speech-bubble.style-glass,
+.pet-strip.style-glass {
+  --bubble-bg: rgb(255 255 255 / 52%);
+  --bubble-border: rgb(255 255 255 / 74%);
+  --bubble-ink: #22323a;
+  --bubble-shadow: 0 10px 30px rgb(24 43 50 / 22%), inset 0 1px 0 rgb(255 255 255 / 70%);
+  backdrop-filter: blur(12px) saturate(1.5);
+  -webkit-backdrop-filter: blur(12px) saturate(1.5);
+}
+
+.speech-bubble.style-neon,
+.pet-strip.style-neon {
+  --bubble-bg: rgb(9 16 28 / 94%);
+  --bubble-border: rgb(125 249 255 / 55%);
+  --bubble-ink: #9df6ff;
+  --bubble-shadow: 0 0 0 1px rgb(125 249 255 / 25%), 0 0 18px rgb(64 214 255 / 35%), 0 10px 28px rgb(3 8 16 / 55%);
+}
+
+.speech-bubble.style-paper,
+.pet-strip.style-paper {
+  --bubble-bg: linear-gradient(180deg, #fbf7ec 0%, #f5eedd 100%);
+  --bubble-border: rgb(190 172 138 / 70%);
+  --bubble-ink: #3f3527;
+  --bubble-shadow: 0 2px 0 rgb(190 172 138 / 35%), 0 10px 24px rgb(60 48 30 / 18%);
+}
+
+.speech-bubble.style-ink,
+.pet-strip.style-ink {
+  --bubble-bg: rgb(20 22 26 / 96%);
+  --bubble-border: rgb(200 210 220 / 22%);
+  --bubble-ink: #d8e0e8;
+  --bubble-shadow: 0 12px 30px rgb(0 0 0 / 45%);
+}
+
 
 /* ---- 泡泡图库面板（pet-bubble-styles.js）----
    与角色图库同一套面板视觉语言 */
@@ -702,9 +755,9 @@ body,
    泡泡跟"谁在说话"（插件身份色）走、位置锚在角色头侧；横条是**常驻式状态条**，
    需要自己可拖动、可关闭、可换主题，语义不同，混用会让两边都别扭。
 
-   主题：与泡泡皮肤同一套 id（default/mono/navy/peach/matcha/note/terminal/comic），
-   类名用 .pet-strip.strip-style-<id>，调色板变量与 .speech-bubble 保持同名
-   （--bubble-bg/--bubble-border/--bubble-ink/--bubble-shadow），这样皮肤定义可平移复用。
+   主题：★ 2026-10-19 起与泡泡**共用同一个皮肤设置与同一套 class**
+   （.speech-bubble.style-<id> 与 .pet-strip.style-<id> 并列声明，见上方
+   "皮肤调色板单点定义"）。此前的 .pet-strip.strip-style-<id> 双份定义已删除。
    ========================================================================== */
 .pet-strip {
   --bubble-bg: rgb(255 255 255 / 94%);
@@ -824,50 +877,9 @@ body,
   background: color-mix(in srgb, currentColor 14%, transparent);
 }
 
-/* ---- 横条皮肤（与泡泡 8 款同 id；只覆盖调色板变量，框/圆角/投影复用）---- */
-.pet-strip.strip-style-mono {
-  --bubble-bg: rgb(36 48 54 / 96%);
-  --bubble-border: rgb(120 150 160 / 35%);
-  --bubble-ink: #e8f0f2;
-}
-
-.pet-strip.strip-style-navy {
-  --bubble-bg: color-mix(in srgb, #4f6bed 10%, rgb(255 255 255 / 97%));
-  --bubble-border: color-mix(in srgb, #4f6bed 52%, transparent);
-  --bubble-ink: color-mix(in srgb, #4f6bed 60%, #17202b);
-  --bubble-shadow: 0 8px 24px rgb(31 42 96 / 20%), 0 0 0 2px rgb(79 107 237 / 12%);
-}
-
-.pet-strip.strip-style-peach {
-  --bubble-bg: color-mix(in srgb, #f7b8c4 22%, rgb(255 255 255 / 96%));
-  --bubble-border: color-mix(in srgb, #e8618c 42%, transparent);
-  --bubble-ink: color-mix(in srgb, #a13a56 78%, #2d4148);
-}
-
-.pet-strip.strip-style-matcha {
-  --bubble-bg: color-mix(in srgb, #9db87a 18%, rgb(255 255 255 / 97%));
-  --bubble-border: color-mix(in srgb, #5f7a44 45%, transparent);
-  --bubble-ink: #33452a;
-}
-
-.pet-strip.strip-style-note {
-  --bubble-bg: #ffe27a;
-  --bubble-border: color-mix(in srgb, #c9a83c 55%, transparent);
-  --bubble-ink: #4d3f14;
-  --bubble-shadow: 0 6px 18px rgb(120 96 20 / 22%);
-}
-
-.pet-strip.strip-style-terminal {
-  --bubble-bg: #17301f;
-  --bubble-border: rgb(94 196 128 / 45%);
-  --bubble-ink: #7ee2a0;
-  --bubble-shadow: 0 8px 24px rgb(10 30 18 / 40%);
-}
-
-.pet-strip.strip-style-comic {
-  --bubble-border: #1d1d1f;
-  --bubble-shadow: 3px 3px 0 #1d1d1f;
-}
+/* ---- 横条皮肤：已合并到上方"皮肤调色板单点定义"（.pet-strip.style-<id>）。
+   这里保留一个空注释作为改动锚点：旧的 .pet-strip.strip-style-* 双份定义
+   （与泡泡区逐字重复）已删除，新增皮肤只需改一处。 ---- */
 
 /* ---- 横条左右拉伸手柄（用户要求：流式气泡左右大小可手动拉伸）----
    为什么用独立手柄而不是 CSS resize：

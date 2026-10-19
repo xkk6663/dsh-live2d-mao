@@ -430,26 +430,63 @@
   --accent-soft: #f4e6eb;
   --surface-soft: #faf6f8;
 }
+/* ★ 2026-10-19 新增两款主题（青瓷/琥珀）。
+   新增主题必须同步四处，缺一处就是"选得到但气泡不跟"的静默失效：
+   App.vue THEME_OPTIONS / 这里 / 后端 ui_theme 白名单 / pet-bubble-styles.js UI_THEMES。 */
+.app-shell.theme-celadon {
+  --app-bg: #e9f0ee;
+  --sidebar-bg: rgb(246 250 249 / 96%);
+  --sidebar-active: #ddeae5;
+  --ink: #22322e;
+  --muted: #647a72;
+  --line: #d5e2dd;
+  --line-strong: #c0d2cb;
+  --accent: #5f8f80;
+  --accent-dark: #41695c;
+  --accent-soft: #dfece7;
+  --surface-soft: #f2f7f5;
+}
+.app-shell.theme-amber {
+  --app-bg: #f3ede2;
+  --sidebar-bg: rgb(251 247 240 / 96%);
+  --sidebar-active: #ece0c9;
+  --ink: #3a3128;
+  --muted: #7d705f;
+  --line: #e4dbcb;
+  --line-strong: #d3c6b0;
+  --accent: #a8763c;
+  --accent-dark: #815628;
+  --accent-soft: #f1e5d3;
+  --surface-soft: #f9f4ec;
+}
 .app-shell.theme-mist,
 .app-shell.theme-clear,
 .app-shell.theme-rose,
 .app-shell.theme-forest,
-.app-shell.theme-sakura { background-color: var(--app-bg); }
+.app-shell.theme-sakura,
+.app-shell.theme-celadon,
+.app-shell.theme-amber { background-color: var(--app-bg); }
 .app-shell.theme-mist .sidebar,
 .app-shell.theme-clear .sidebar,
 .app-shell.theme-rose .sidebar,
 .app-shell.theme-forest .sidebar,
-.app-shell.theme-sakura .sidebar { background: var(--sidebar-bg); }
+.app-shell.theme-sakura .sidebar,
+.app-shell.theme-celadon .sidebar,
+.app-shell.theme-amber .sidebar { background: var(--sidebar-bg); }
 .app-shell.theme-mist .nav-item.active,
 .app-shell.theme-clear .nav-item.active,
 .app-shell.theme-rose .nav-item.active,
 .app-shell.theme-forest .nav-item.active,
 .app-shell.theme-sakura .nav-item.active,
+.app-shell.theme-celadon .nav-item.active,
+.app-shell.theme-amber .nav-item.active,
 .app-shell.theme-mist .sidebar-list-item.active,
 .app-shell.theme-clear .sidebar-list-item.active,
 .app-shell.theme-rose .sidebar-list-item.active,
 .app-shell.theme-forest .sidebar-list-item.active,
-.app-shell.theme-sakura .sidebar-list-item.active { background: var(--sidebar-active); }
+.app-shell.theme-sakura .sidebar-list-item.active,
+.app-shell.theme-celadon .sidebar-list-item.active,
+.app-shell.theme-amber .sidebar-list-item.active { background: var(--sidebar-active); }
 .app-shell.theme-rose .new-chat-button { background: #40363b; }
 .app-shell.theme-rose .new-chat-button:hover { background: #2f282c; }
 
@@ -635,6 +672,12 @@
 .live2d-resource-grid select { width: 100%; min-width: 0; height: 31px; padding: 0 8px; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 5px; font-size: 11px; }
 .live2d-resource-grid button { display: grid; width: 30px; height: 30px; place-items: center; padding: 0; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 5px; cursor: pointer; }
 .live2d-resource-grid button:disabled { cursor: default; opacity: .45; }
+/* 任务状态绑定：一行 = 状态名 + 动作槽 + 表情槽（两个 select，无预览按钮，列宽单独定） */
+.live2d-phase-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; }
+.live2d-phase-grid label { display: grid; grid-template-columns: 56px minmax(0, 1fr) minmax(0, .85fr); align-items: center; gap: 6px; }
+.live2d-phase-grid label > span { color: var(--muted); font-size: 11px; }
+.live2d-phase-grid select { width: 100%; min-width: 0; height: 31px; padding: 0 6px; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 5px; font-size: 11px; }
+.live2d-resource-tip { color: var(--muted); font-size: 11px; }
 .settings-provider-panel { padding-bottom: 0; }
 .settings-provider-panel .provider-group-heading { background: var(--surface-soft); }
 .app-shell button:focus-visible,
