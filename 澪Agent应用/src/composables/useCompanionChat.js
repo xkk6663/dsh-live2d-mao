@@ -783,15 +783,26 @@ export function useCompanionChat(deps) {
       if (rid && localRequestIds.has(rid)) return false
       return true
     })
-    // 2) 本地消息**一律保留**（除非 id 与某条历史行完全相同 → 视为同一行）
-    const incomingIds = new Set(incoming.map((item) => item.id))
-    const kept = messages.value.filter((item) => !incomingIds.has(item.id))
-    // ⚠️ 注意：**不能按 requestId 去重**！同一轮的 user 与 assistant 共享同一个
-    //   request_id（实测），按它去重会把每条提问都删掉（踩过一次：n 从 200 掉到 100）。
-    //   重复上屏的正确判据是 id（h-<dbid> 唯一），已在上面按 existingIds 处理。
-    const changed = kept.length !== messages.value.length || fresh.length > 0
+    // ★★★ 2026-10-23 修「对话历史每 8 秒消失一次、过会又回来」的**唯一真凶**。
+    //
+    // 上下文：大肥鱼页开着 8 秒轮询（接住微信/QQ 那边说的话），每次轮询调 loadHistory。
+    //
+    // 旧代码在这里写了：
+    //     const incomingIds = new Set(incoming.map(i => i.id))
+    //     const kept = messages.value.filter(i => !incomingIds.has(i.id))   // ← 删掉与历史同 id 的本地消息
+    //     setMessages([...kept, ...fresh])
+    // 两个条件**互相抵消**：
+    //     · 屏幕上已有的 200 条，id 恰好就是历史 id（同一批 h-<dbid>）→ 全被 kept 删掉；
+    //     · fresh 又因为 existingIds 里有同样 id → 全被过滤；
+    //  ⇒ `kept + fresh` = 空数组 ⇒ **每次轮询把列表清空**。
+    //  下一次轮询时列表已空 → existingIds 为空 → 200 条又全进来 → 表现为
+    //  「每 8 秒闪一次空列表，过一会又出现」，周期与轮询间隔完全吻合（实测 8.1/16.1/24.1s…）。
+    //
+    // 正确语义：**已有消息原样保留，只用 fresh 补缺失的**。
+    // 历史行与本地行同 id 时，本地那条就是要显示的那一条，没有任何理由删除它。
+    const changed = fresh.length > 0
     if (!changed) return false
-    setMessages([...kept, ...fresh])
+    setMessages([...messages.value, ...fresh])
     return true
   }
 

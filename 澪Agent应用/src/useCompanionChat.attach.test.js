@@ -132,7 +132,7 @@ test('★ 消息身份只能用 id，绝不能用 role+text（同一句话会重
   assert.doesNotMatch(fn, /localKeys/, '禁止 localKeys 文本去重')
   // 本地消息一律保留，只补 id 没见过且不属于已在屏轮次的历史行
   assert.match(fn, /localRequestIds/, '应按 request_id 避免重复补同一轮')
-  assert.match(fn, /incomingIds\.has\(item\.id\)/, '只移除 id 完全相同的历史行')
+  // 语义：本地消息全部保留，只用 fresh 补缺失的（不再有 incomingIds 过滤这一步）
 })
 
 test('★ 本地缓存只在列表为空或补更早整段时使用（不做文本去重）', () => {
@@ -146,5 +146,15 @@ test('★ 本地缓存只在列表为空或补更早整段时使用（不做文�
 test('★ 带附件的本地消息永远不能被历史覆盖', () => {
   const fn = source.match(/function appendHistoryRows\(rows\)[\s\S]*?\n  \}/)?.[0] || ''
   // 新实现里本地消息一律保留（除非 id 完全相同）
-  assert.match(fn, /const kept = messages\.value\.filter\(\(item\) => !incomingIds\.has\(item\.id\)\)/, '本地消息默认全部保留')
+  assert.match(fn, /setMessages\(\[\.\.\.messages\.value, \.\.\.fresh\]\)/, '本地消息默认全部保留，只追加 fresh')
+})
+
+test('★ 轮询拉历史时绝不能清空已有消息（否则每 8 秒闪一次空列表）', () => {
+  const fn = source.match(/function appendHistoryRows\(rows\)[\s\S]*?\n  \}/)?.[0] || ''
+  assert.ok(fn, 'appendHistoryRows 应存在')
+  // 禁止按 incomingIds 过滤掉已有消息：那会和 fresh 的 existingIds 过滤互相抵消 → 列表清空
+  const code = fn.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  // 必须以"已有 + 新增"的方式写回
+  assert.match(fn, /setMessages\(\[\.\.\.messages\.value, \.\.\.fresh\]\)/, '应保留现有消息，只追加缺失的')
+  assert.doesNotMatch(code, /incomingIds\.has/, '禁止按 incomingIds 过滤（会与 fresh 抵消导致清空）')
 })
