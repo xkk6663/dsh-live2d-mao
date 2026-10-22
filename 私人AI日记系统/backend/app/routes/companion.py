@@ -204,6 +204,11 @@ class CompanionSettingsRequest(BaseModel):
     pet_call_max_turn_seconds: int = Field(default=18, ge=5, le=45)
     voice_volume: int = Field(default=85, ge=0, le=100)
     voice_streaming_enabled: bool = True
+    # ★ 2026-10-23：大肥鱼发来音频（点歌/语音）时是否自动播放。
+    #   **必须在这个请求模型里声明**，否则 Pydantic 会忽略客户端传来的该字段：
+    #   设置页开关能点、config 默认表里也有，但 PATCH 永远写不进去 ——
+    #   表现为"改完点保存就弹回默认值"（用户实拍）。
+    audio_autoplay: bool = True
     pet_speech_language: str = Field(default="zh", pattern="^(zh|ja)$")
     speak_screen_observations: bool = True
     speak_game_observations: bool = True
