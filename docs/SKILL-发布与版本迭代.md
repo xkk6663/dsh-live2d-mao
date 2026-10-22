@@ -35,12 +35,12 @@
 ```powershell
 cd C:\Users\xiao1\Mao-dsh-pet
 
-# ① 插件测试（220 项）
+# ① 插件测试（223 项）
 cd packages\dsh-live2d-mao
 node --test test/architecture.test.js test/bubble-stack.test.js test/entry.test.js `
   test/fence.test.js test/m7-protocol.test.js test/phases.test.js test/push.test.js `
   test/stream.test.js test/strip-remote.test.js test/strip.test.js
-# 期望：tests 220 / pass 220 / fail 0
+# 期望：tests 223 / pass 223 / fail 0
 
 # ② 后端自检（201 + 63 项）
 cd ..\..\私人AI日记系统\backend
@@ -422,7 +422,7 @@ npm version patch && npm publish
 
 ```
 □ 1. 分支确认：git branch --show-current == dsh-only-slim
-□ 2. 门禁全绿：插件 220 / adapter 201 / ingest 63 / guard / E2E 18
+□ 2. 门禁全绿：插件 223 / adapter 201 / ingest 63 / guard / E2E 18
 □ 3. npm pack --dry-run：19~25 文件、无 mock.js、含 screenshots.json
 □ 4. npm 版本号已改（package.json）
 □ 5. CHANGELOG 顶部已加对应版本条目

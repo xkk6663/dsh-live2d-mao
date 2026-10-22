@@ -70,7 +70,7 @@
     fetch('/api/companion/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: text, images: [], client_request_id: clientRequestId() }),
+      body: JSON.stringify({ message: text, images: [], model_id: 'cloud_feiyu', client_request_id: clientRequestId() }),
     })
       .then(function (r) { return r.json() })
       .then(function (j) {
@@ -102,6 +102,7 @@
         body: JSON.stringify({
           message: String(inputEl.value || '').trim(),
           images: [base64],
+          model_id: 'cloud_feiyu',
           client_request_id: clientRequestId(),
         }),
       })

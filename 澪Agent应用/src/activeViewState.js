@@ -6,6 +6,10 @@ const VALID_VIEW_IDS = new Set([
   'memory',
   'tasks',
   'companion',
+  // 大肥鱼对话页（桌宠共享会话 /api/companion/chat*）。它**不是**已删除的 'chat'：
+  // 那页是小智对话（小智插件那套接口，已整体阉割），这页视觉移植自 xiaozhi-chat-ui
+  // 提取包、数据走桌宠自己的接口。不加进白名单 buildActiveViewReport() 会抛错。
+  'feiyu-chat',
   'creation',
   'creation-image',
   'creation-video',

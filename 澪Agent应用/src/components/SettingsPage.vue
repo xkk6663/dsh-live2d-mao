@@ -56,6 +56,17 @@ export default {
     }
   },
   methods: {
+    // 自定义主题取色：直接改 draft（appThemeStyle 在 appearance 预览态读 draft，
+    // 所以拾色即时生效）；正式落盘仍走「保存」按钮（saveAppearanceSettings 会把
+    // theme_custom 一起持久化并镜像到桌宠的 ui_theme_custom_*）。
+    setCustomThemeColor(slot, event) {
+      const value = String(event?.target?.value || '')
+      if (!/^#[0-9a-f]{6}$/i.test(value)) return
+      if (!this.appPreferencesDraft.theme_custom) {
+        this.appPreferencesDraft.theme_custom = { bg: '#e9eef0', accent: '#4c8798', ink: '#20303a' }
+      }
+      this.appPreferencesDraft.theme_custom = { ...this.appPreferencesDraft.theme_custom, [slot]: value }
+    },
     applyRefreshedStatus(data) {
       if (!data) return
       const current = this.companionStatus || {}
@@ -115,7 +126,9 @@ export default {
 
     <section v-else-if="activeSettingsSection === 'appearance'" class="settings-content-section">
       <div class="settings-section-block"><h2>外观</h2><div class="settings-list">
-        <div class="settings-item theme-setting-item"><span><strong>主题</strong><small>点击即时预览，保存后在整个应用生效</small></span><div class="theme-picker-grid"><button v-for="theme in themeOptions" :key="theme.id" type="button" :class="['theme-picker-option', { active: appPreferencesDraft.theme === theme.id }]" @click="appPreferencesDraft.theme = theme.id"><i><b v-for="color in theme.colors" :key="color" :style="{ backgroundColor: color }" /></i><span><strong>{{ theme.label }}</strong><small>{{ theme.description }}</small></span><Check v-if="appPreferencesDraft.theme === theme.id" :size="14" /></button></div></div>
+        <div class="settings-item theme-setting-item"><span><strong>主题</strong><small>点击即时预览，保存后在整个应用生效</small></span><div class="theme-picker-grid"><button v-for="theme in themeOptions" :key="theme.id" type="button" :class="['theme-picker-option', { active: appPreferencesDraft.theme === theme.id }]" @click="appPreferencesDraft.theme = theme.id"><i><b v-for="color in theme.colors" :key="color" :style="{ backgroundColor: color }" /></i><span><strong>{{ theme.label }}</strong><small>{{ theme.description }}</small></span><Check v-if="appPreferencesDraft.theme === theme.id" :size="14" /></button></div>
+          <div v-if="appPreferencesDraft.theme === 'custom'" class="theme-custom-colors"><label v-for="slot in [['bg', '底色'], ['accent', '主色'], ['ink', '文字色']]" :key="slot[0]" class="theme-custom-slot"><input type="color" :value="appPreferencesDraft.theme_custom?.[slot[0]] || '#e9eef0'" @input="setCustomThemeColor(slot[0], $event)" /><span><strong>{{ slot[1] }}</strong><small>{{ appPreferencesDraft.theme_custom?.[slot[0]] || '#e9eef0' }}</small></span></label></div>
+        </div>
         <label class="settings-item"><span><strong>字体大小</strong><small>调整应用正文与控件的整体字号</small></span><select v-model="appPreferencesDraft.font_size"><option value="small">较小</option><option value="medium">标准</option><option value="large">较大</option></select></label>
         <label class="settings-item"><span><strong>轻量动画</strong><small>保留侧栏展开、悬停和状态切换的短动画</small></span><span class="switch-control"><input v-model="appPreferencesDraft.light_animations" type="checkbox" /><i /></span></label>
         <label class="settings-item"><span><strong>专注模式</strong><small>默认收起左右侧栏，让主内容获得更多空间</small></span><span class="switch-control"><input v-model="appPreferencesDraft.focus_mode" type="checkbox" /><i /></span></label>

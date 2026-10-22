@@ -368,6 +368,146 @@ const { handlePetChatKeydown, beginPetChatWindowDrag, resetPetCallCapture, submi
   get request() { return request },
 })
 
+// ★ 这些 ref 必须在 setup 顶部就声明：上面几个 composable 的 deps 是**getter**，
+//   调用时（如 send 里读 feiyuSending）才求值，但 `const` 的 TDZ 在模块求值阶段就会生效，
+//   所以声明位置放在这里统一一眼可见，避免"看起来能用其实抛 ReferenceError"。
+const feiyuDraft = ref('')
+const feiyuSending = ref(false)
+const feiyuError = ref('')
+const feiyuAttachments = ref([])
+const feiyuFileDragging = ref(false)
+/** 大肥鱼对话页点图放大：{ url, name } | null */
+const feiyuPreviewImage = ref(null)
+let feiyuFileDragDepth = 0
+
+// ── 大肥鱼对话页数据层 ─────────────────────────────────────────────────────
+// 只走桌宠自己的接口（/api/companion/chat*）。旧实现（FeiyuChatPage 自带 fetch）有三个真问题：
+//   ① 每次进页面都重新推"欢迎语"到列表里，历史其实没拉过 → 换页面就丢上下文（仅视觉）；
+//   ② 助手回复不走 markdown/多段，长回答挤成一块；
+//   ③ 没有停止、没有附件、没有历史对齐。
+// 这里把"历史 / 发送 / 取消 / 对齐"收拢到 useCompanionChat，组件保持纯 UI。
+import { useCompanionChat } from './composables/useCompanionChat.js'
+const {
+  messages: feiyuMessages,
+  chatModel: feiyuChatModel,
+  scrollEl: feiyuChatScrollEl,
+  loadHistory: loadFeiyuHistory,
+  loadSettings: loadFeiyuSettings,
+  send: sendFeiyuMessageInternal,
+  cancel: cancelFeiyuMessage,
+  startPolling: startFeiyuPolling,
+  stopPolling: stopFeiyuPolling,
+} = useCompanionChat({
+  get sending() { return feiyuSending },
+  get error() { return feiyuError },
+})
+
+// ── 大肥鱼对话页：视图相关的小工具（附件 / 拖拽 / 滚动 / 发送）──────────────
+// 说明：附件这里**不复用 useAttachments**，因为那套把暂存附件存在全局 attachments 上，
+// 与桌宠聊天窗、Agent 对话框共用会互相串（"在对话页贴了图，结果跑到桌宠窗口里"）。
+// 桌宠后端 /api/companion/chat 只吃 images[]{name,data_url}（最多 5 张），所以这里只收图片。
+const FEIYU_MAX_IMAGES = 5
+const feiyuAssistantName = computed(() => mioDisplayName.value || '大肥鱼')
+const feiyuAvatarUrl = computed(() => companionAvatarUrl.value)
+// 桌宠服务在跑 = 大肥鱼可达（连接状态点的语义，和旧版"cloud_feiyu 已配置"等价）
+const feiyuConnected = computed(() => Boolean(companionStatus.value.pet?.running))
+const feiyuVisionSupported = computed(() => activeModelSupportsVision.value || feiyuChatModel.value === 'cloud_feiyu')
+
+function scrollFeiyuToBottom() {
+  const el = feiyuChatScrollEl.value
+  if (el) el.scrollTop = el.scrollHeight
+}
+
+/** 组件把滚动容器交上来（DOM 归组件，这边只拿引用做"新消息滚到底"） */
+function handleFeiyuScrollReady(element) {
+  feiyuChatScrollEl.value = element || null
+}
+
+/** 点图片放大（本地选的图 / 大肥鱼发来的图都走这里） */
+function handleFeiyuPreviewImage(turn) {
+  const url = String(turn?.url || '')
+  if (!url) return
+  feiyuPreviewImage.value = { url, name: turn?.display || turn?.filename || '图片' }
+}
+
+async function sendFeiyuMessage(text, attachments) {
+  // 组件 emit 的第二参是 attachments 快照；清空暂存由这里负责，保证成功失败都不残留
+  const picked = Array.isArray(attachments) ? attachments : feiyuAttachments.value
+  feiyuAttachments.value = []
+  await sendFeiyuMessageInternal(text, picked)
+}
+
+function stopFeiyuMessage() {
+  void cancelFeiyuMessage()
+}
+
+async function addFeiyuImageFiles(files) {
+  const list = [...(files || [])]
+  if (!list.length) return
+  const limit = attachmentLimits.value
+  const room = Math.max(0, FEIYU_MAX_IMAGES - feiyuAttachments.value.length)
+  if (!room) {
+    feiyuError.value = `一次最多带 ${FEIYU_MAX_IMAGES} 张图片`
+    return
+  }
+  try {
+    const next = []
+    for (const file of list.slice(0, room)) {
+      if (!isImageAttachment(file)) {
+        throw new Error(`大肥鱼对话目前只能带图片：${file.name}`)
+      }
+      if (file.size > limit.imageMaxBytes) {
+        throw new Error(`图片超过 ${(limit.imageMaxBytes / 1024 / 1024).toFixed(0)}MB：${file.name}`)
+      }
+      const dataUrl = await readFileAsDataUrl(file)
+      next.push({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        kind: 'image',
+        name: file.name || '粘贴的图片.png',
+        mime_type: file.type || 'image/png',
+        size: file.size,
+        data_url: dataUrl,
+        preview_url: dataUrl,
+      })
+    }
+    feiyuAttachments.value = [...feiyuAttachments.value, ...next]
+    feiyuError.value = ''
+  } catch (error) {
+    feiyuError.value = error.message
+  }
+}
+
+function handleFeiyuFilesSelected(files) {
+  void addFeiyuImageFiles(files)
+}
+
+function removeFeiyuAttachment(id) {
+  feiyuAttachments.value = feiyuAttachments.value.filter((item) => item.id !== id)
+}
+
+/** 拖拽：只认文件；用深度计数避免子元素 dragleave 抖动导致遮罩闪烁 */
+function feiyuDragHasFiles(event) {
+  return [...(event?.dataTransfer?.types || [])].includes('Files')
+}
+function handleFeiyuDragEnter(event) {
+  if (!feiyuDragHasFiles(event)) return
+  feiyuFileDragDepth += 1
+  feiyuFileDragging.value = true
+}
+function handleFeiyuDragOver(event) {
+  if (!feiyuDragHasFiles(event)) return
+  event.dataTransfer.dropEffect = 'copy'
+}
+function handleFeiyuDragLeave() {
+  feiyuFileDragDepth = Math.max(0, feiyuFileDragDepth - 1)
+  if (!feiyuFileDragDepth) feiyuFileDragging.value = false
+}
+function handleFeiyuDrop(event) {
+  feiyuFileDragDepth = 0
+  feiyuFileDragging.value = false
+  void addFeiyuImageFiles([...(event?.dataTransfer?.files || [])])
+}
+
 import { useSettings } from './composables/useSettings.js'
 const { focusComposer, openMemoryTab, handleSettingsModelChange, handlePetModelChange, applyDisplayMode, saveAppearanceSettings, syncUiThemeToPet, loadRuntimeSettings, saveRuntimeSettings, loadMioProfileSettings, saveMioProfileSettings, uploadProfileAvatar, resetProfileAvatar, uploadAppearanceImage, resetAppearanceImage, saveConversationSettings, saveActiveSettings, resetActiveSettings, openSettingsSection } = useSettings({
   get DISPLAY_MODE_PRESETS() { return DISPLAY_MODE_PRESETS },
@@ -444,6 +584,7 @@ const { focusComposer, openMemoryTab, handleSettingsModelChange, handlePetModelC
 })
 
 import { useDesktopNavigation } from './composables/useDesktopNavigation.js'
+
 const { navigatePrimaryView, returnToApp, openCompanionSection, focusDesktopPetChat, toggleLeftSidebar, toggleRightSidebar, toggleLeftSidebarPinned, toggleRightSidebarPinned, applyAgentPreferences, controlDesktopWindow, switchDesktopWorkspace, resizeDesktopWindow } = useDesktopNavigation({
   get activeCompanionSection() { return activeCompanionSection },
   get activeSettingsSection() { return activeSettingsSection },
@@ -477,6 +618,8 @@ import { computed, customRef, defineAsyncComponent, nextTick, onBeforeUnmount, o
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 import AppDialog from './components/AppDialog.vue'
+// 大肥鱼对话页的图片放大（点附图 / 附件图片时用）；组件原本就在仓库里，只是之前没人接它
+import ImagePreview from './components/ImagePreview.vue'
 // DSH 专用化：OnboardingPage 已移除（首次进入不再走六步质检）
 // Load large work surfaces on first use so the initial desktop bundle stays
 // small and the cold-start UI can become interactive sooner.
@@ -484,6 +627,8 @@ import AppDialog from './components/AppDialog.vue'
 // 走小智后端接口与它自己的 WebSocket），随小智插件一并阉割。
 // 真正的对话在**桌宠自己的聊天窗**（standalonePetChat，走 /api/companion/chat）。
 const CompanionPage = defineAsyncComponent(() => import('./components/CompanionPage.vue'))
+// 大肥鱼对话页（视觉移植自 xiaozhi-chat-ui 提取包，数据走桌宠自己的 /api/companion/chat*）
+const FeiyuChatPage = defineAsyncComponent(() => import('./components/FeiyuChatPage.vue'))
 const HomePage = defineAsyncComponent(() => import('./components/HomePage.vue'))
 const AgentHomePage = defineAsyncComponent(() => import('./components/AgentHomePage.vue'))
 const AgentRightRail = defineAsyncComponent(() => import('./components/AgentRightRail.vue'))
@@ -589,21 +734,36 @@ const isAgentWorkspace = workspaceMode === 'agent'
 const conversationStorageKey = isAgentWorkspace ? 'mio_agent_conversation_id' : 'mio_conversation_id'
 
 const THEME_OPTIONS = [
-  { id: 'mist', label: '柔雾', description: '淡粉与雾灰', colors: ['#f2f0f1', '#c7849c', '#4f927b'] },
-  { id: 'clear', label: '清晨', description: '清蓝与浅灰', colors: ['#edf4f5', '#5b8c98', '#d6a26f'] },
-  { id: 'rose', label: '蔷薇', description: '柔粉与葡萄灰', colors: ['#f4edef', '#a66f82', '#658e83'] },
-  { id: 'forest', label: '森雨', description: '苔绿与暖白', colors: ['#edf1ed', '#668978', '#b48468'] },
-  { id: 'sakura', label: '晚樱', description: '樱粉与暮蓝', colors: ['#f3eef1', '#b7798f', '#687f9b'] },
+  // ★ 2026-10-19 老五款 colors 对齐 companion.css / pet-bubble-styles.js 真实生效值
+  //   （历史遗留：预览色板与实际主题变量不一致，探针 .probe-ui-themes.cjs B 系列钉住）
+  { id: 'mist', label: '柔雾', description: '淡粉与雾灰', colors: ['#e9eef0', '#4c8798', '#20303a'] },
+  { id: 'clear', label: '清晨', description: '清蓝与浅灰', colors: ['#f0f4f4', '#5b8c98', '#26363d'] },
+  { id: 'rose', label: '蔷薇', description: '柔粉与葡萄灰', colors: ['#f0eaed', '#9a6f78', '#2d282c'] },
+  { id: 'forest', label: '森雨', description: '苔绿与暖白', colors: ['#edf1ed', '#668978', '#293a34'] },
+  { id: 'sakura', label: '晚樱', description: '樱粉与暮蓝', colors: ['#f3eef1', '#b7798f', '#38323a'] },
   // ★ 2026-10-19 新增两款：与 companion.css 的 .app-shell.theme-celadon/.theme-amber 对应，
   //   同时后端 ui_theme 白名单、pet-bubble-styles.js 的 UI_THEMES、泡泡面板 UI_THEME_DEFS
   //   四处必须同 id —— 少一处就会出现"选得到但气泡不跟"的静默失效。
   { id: 'celadon', label: '青瓷', description: '青釉与墨绿', colors: ['#e9f0ee', '#5f8f80', '#22322e'] },
   { id: 'amber', label: '琥珀', description: '暖砂与檀褐', colors: ['#f3ede2', '#a8763c', '#3a3128'] },
+  // ★ 2026-10-19 AI 娘配色五款（同样多处登记，见上）。取色原则：底色保持浅色系
+  //   （与现有七款一致——暗色会打穿硬编码白底的子组件），主色取各家品牌色并压暗到白字可读。
+  { id: 'whale', label: '溟月鲸歌', description: 'DS鲸鱼娘 · 深海靛蓝', colors: ['#e9eef8', '#3f6ac4', '#1d2b45'] },
+  { id: 'miku', label: '初音葱绿', description: '初音未来 · 葱色夜青', colors: ['#ecf7f5', '#2fbdb3', '#1f3a37'] },
+  { id: 'neuro', label: '粉蓝双生', description: 'Neuro-sama · 粉与蓝', colors: ['#fdf0f6', '#e8659b', '#3d2a34'] },
+  { id: 'qwen', label: '千问星紫', description: '通义千问 · 星紫', colors: ['#f1eefa', '#7a5af5', '#2b2740'] },
+  { id: 'doubao', label: '豆包晴空', description: '豆包 · 晴空蓝', colors: ['#eef4fd', '#4d6bfe', '#1f2c48'] },
+  // 自定义：真色值存 theme_custom（本机偏好，保存时镜像到后端 ui_theme_custom_*）。
+  // CSS 只给 .theme-custom 中性兜底；应用时由 appThemeStyle 以内联 CSS 变量覆盖。
+  { id: 'custom', label: '自定义', description: '自选底色 / 主色 / 文字色', colors: ['#e9eef0', '#4c8798', '#20303a'] },
 ]
 const VALID_THEME_IDS = new Set(THEME_OPTIONS.map((item) => item.id))
 
 const DEFAULT_APP_PREFERENCES = {
   theme: 'mist',
+  // 自定义主题的三色（theme === 'custom' 时生效）。随外观保存一起持久化，
+  // 并由 syncUiThemeToPet 镜像到后端 ui_theme_custom_*（桌宠皮肤「跟随主题」用）。
+  theme_custom: { bg: '#e9eef0', accent: '#4c8798', ink: '#20303a' },
   font_size: 'medium',
   // 产品定位是「桌宠优先」：打开 Mio 默认进桌宠页。用户可在 设置 → 通用 里改回其它页。
   default_open_page: 'companion',
@@ -760,6 +920,7 @@ function readAppPreferences() {
       ...source,
       visibility: { ...DEFAULT_APP_PREFERENCES.visibility, ...(source.visibility || {}) },
       home_widgets: { ...DEFAULT_APP_PREFERENCES.home_widgets, ...(source.home_widgets || {}) },
+      theme_custom: { ...DEFAULT_APP_PREFERENCES.theme_custom, ...(source.theme_custom || {}) },
     }
     if (!VALID_THEME_IDS.has(merged.theme)) merged.theme = 'mist'
     if (!['home', 'diaries', 'memory', 'tasks', 'companion', 'creation', 'creation-image', 'creation-video'].includes(merged.default_open_page)) {
@@ -789,6 +950,7 @@ function cloneAppPreferences(source) {
     ...(source || {}),
     visibility: { ...DEFAULT_APP_PREFERENCES.visibility, ...(source?.visibility || {}) },
     home_widgets: { ...DEFAULT_APP_PREFERENCES.home_widgets, ...(source?.home_widgets || {}) },
+    theme_custom: { ...DEFAULT_APP_PREFERENCES.theme_custom, ...(source?.theme_custom || {}) },
   }
 }
 
@@ -805,7 +967,12 @@ function handleAppPreferencesStorage(event) {
 }
 
 const initialAppPreferences = readAppPreferences()
-const validInitialViews = new Set(['home', 'diaries', 'memory', 'tasks', 'companion'])
+// ★ 大肥鱼对话页('feiyu-chat')必须写进这份白名单：
+//   ① 前端校验：renderCurrentView / returnToApp / activeViewState 都按它判定视图合法性；
+//   ② 后端自报：buildActiveViewReport() 会校验 view_id，不在白名单里会直接 throw（见 syncActiveViewState）。
+//   旧实现漏了这一句 → 点「大肥鱼」虽能渲染（模板 v-else-if 命中了），但心跳上报抛错、
+//   设置页返回也会被弹回 home，属于"能用一半"的隐雷。别再删。
+const validInitialViews = new Set(['home', 'diaries', 'memory', 'tasks', 'companion', FEIYU_CHAT_VIEW_ID])
 const storedAgentView = localStorage.getItem('mio_agent_active_view') || 'home'
 const activeView = ref(isAgentWorkspace
   ? normalizeAgentView(storedAgentView)
@@ -1169,6 +1336,7 @@ const companionStatus = ref({
       live2d_click_through_locked: false,
       live2d_speech_bubble_enabled: true,
       live2d_keep_visible: false,
+      live2d_clamp_to_workarea: false,
     },
   },
   screen: { running: false, preview_available: false, change_percent: 0, title: '主屏幕', error: '', capture_backend: 'imagegrab', capture_backend_error: '', interval_ms: 1000, screen_scope: 'primary' },
@@ -1345,12 +1513,19 @@ function onProviderDialogKeydown(event) {
 // 保留导航项会进入空页面，故不列入。对应页面组件（HomePage / RecordsPage / TasksPage）
 // 仍在源码中，日后功能补齐时把它们加回本数组即可 —— 无需改动路由与模板。
 // 进入应用默认落在 `companion`（桌宠管理页），见 DEFAULT_APP_PREFERENCES.default_open_page。
+//
+// 「大肥鱼」= 桌宠共享会话的对话页（/api/companion/chat*）。注意它**不是**小智对话页：
+// 小智插件那套后端接口在 DSH 专用化里已整体阉割。视觉是移植自
+// xiaozhi-chat-ui 提取包的纯净 UI（src/styles/feiyu-chat.css），数据走桌宠自己的接口。
+const FEIYU_CHAT_VIEW_ID = 'feiyu-chat'
 const mainNavItems = [
   { id: 'companion', label: '桌宠', icon: Gamepad2 },
+  { id: FEIYU_CHAT_VIEW_ID, label: '大肥鱼', icon: MessageSquareText },
   { id: 'settings', label: '设置', icon: Settings },
 ]
 const agentNavItems = [
   { id: 'companion', label: '桌宠', icon: Gamepad2 },
+  { id: FEIYU_CHAT_VIEW_ID, label: '大肥鱼', icon: MessageSquareText },
   { id: 'settings', label: '设置', icon: Settings },
 ]
 const navGroups = [{
@@ -1501,6 +1676,56 @@ const appThemeClass = computed(() => {
     : savedAppPreferences.value.theme
   return `theme-${VALID_THEME_IDS.has(previewTheme) ? previewTheme : 'mist'}`
 })
+// ── 自定义主题：把 theme_custom 三色派生成完整的 11 个主题 CSS 变量 ──
+// 只在 theme === 'custom' 时返回非空对象，绑定到 .app-shell 的 :style 上覆盖
+// .theme-custom 的中性兜底。派生规则与 companion.css 里人工挑的色阶同思路：
+//   accent-dark = 主色压暗 18%；accent-soft = 主色混白 86%；
+//   muted = 文字色混底色 55%；line = 文字色混底色 14%；line-strong = 20%；
+//   sidebar-bg = 底色提亮到近白；sidebar-active = 主色混底色 18%；
+//   surface-soft = 主色混白 93%。
+function hexToRgb(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || '').trim())
+  if (!m) return null
+  const n = parseInt(m[1], 16)
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+}
+function clamp255(v) { return Math.max(0, Math.min(255, Math.round(v))) }
+function mixHex(a, b, ratio) {
+  const ra = hexToRgb(a); const rb = hexToRgb(b)
+  if (!ra || !rb) return a
+  const t = Math.max(0, Math.min(1, Number(ratio) || 0))
+  return '#' + ra.map((c, i) => clamp255(c + (rb[i] - c) * t).toString(16).padStart(2, '0')).join('')
+}
+function shadeHex(hex, factor) {
+  const rgb = hexToRgb(hex)
+  if (!rgb) return hex
+  return '#' + rgb.map((c) => clamp255(c * factor).toString(16).padStart(2, '0')).join('')
+}
+const appThemeStyle = computed(() => {
+  const activeTheme = activeView.value === 'settings' && activeSettingsSection.value === 'appearance'
+    ? appPreferencesDraft.value.theme
+    : savedAppPreferences.value.theme
+  if (activeTheme !== 'custom') return undefined
+  const raw = (activeView.value === 'settings' && activeSettingsSection.value === 'appearance'
+    ? appPreferencesDraft.value.theme_custom
+    : savedAppPreferences.value.theme_custom) || {}
+  const bg = /^#[0-9a-f]{6}$/i.test(String(raw.bg)) ? String(raw.bg) : '#e9eef0'
+  const accent = /^#[0-9a-f]{6}$/i.test(String(raw.accent)) ? String(raw.accent) : '#4c8798'
+  const ink = /^#[0-9a-f]{6}$/i.test(String(raw.ink)) ? String(raw.ink) : '#20303a'
+  return {
+    '--app-bg': bg,
+    '--sidebar-bg': mixHex(bg, '#ffffff', 0.55) + 'f5',
+    '--sidebar-active': mixHex(accent, bg, 0.82),
+    '--ink': ink,
+    '--muted': mixHex(ink, bg, 0.55),
+    '--line': mixHex(ink, bg, 0.86),
+    '--line-strong': mixHex(ink, bg, 0.8),
+    '--accent': accent,
+    '--accent-dark': shadeHex(accent, 0.82),
+    '--accent-soft': mixHex(accent, '#ffffff', 0.86),
+    '--surface-soft': mixHex(accent, '#ffffff', 0.93),
+  }
+})
 const displayVisibility = computed(() => savedAppPreferences.value.visibility || DEFAULT_APP_PREFERENCES.visibility)
 const homeWidgetPreferences = computed(() => savedAppPreferences.value.home_widgets || DEFAULT_APP_PREFERENCES.home_widgets)
 const displayMode = computed(() => savedAppPreferences.value.display_mode || 'full')
@@ -1518,7 +1743,7 @@ const companionSettingKeys = {
     'bubble_seconds', 'pet_size_percent', 'pet_renderer', 'live2d_model_id', 'live2d_scale',
     'live2d_vertical_offset', 'live2d_follow_cursor', 'live2d_idle_motion', 'live2d_click_motion',
     'live2d_smart_passthrough', 'live2d_click_through_locked', 'live2d_speech_bubble_enabled',
-    'live2d_keep_visible',
+    'live2d_keep_visible', 'live2d_clamp_to_workarea',
     'live2d_always_on_top', 'live2d_disable_gpu', 'live2d_motion_slots', 'live2d_expression_slots',
     'live2d_phase_slots',
     'pet_chat_model_id', 'pet_chat_reasoning_level',
@@ -1641,7 +1866,7 @@ function isSettingsSectionDirty(section) {
       || runtimeSettingsSnapshot('general') !== runtimeSettingsSnapshot('general', savedRuntimeSettingsSource())
   }
   if (section === 'appearance') {
-    const keys = ['theme', 'font_size', 'left_sidebar_visible', 'right_sidebar_visible', 'left_sidebar_hover_expand', 'right_sidebar_hover_expand', 'remember_sidebar_state', 'light_animations', 'focus_mode']
+    const keys = ['theme', 'theme_custom', 'font_size', 'left_sidebar_visible', 'right_sidebar_visible', 'left_sidebar_hover_expand', 'right_sidebar_hover_expand', 'remember_sidebar_state', 'light_animations', 'focus_mode']
     return serializeSettings({ values: Object.fromEntries(keys.map((key) => [key, appPreferencesDraft.value[key]])), visibility: appPreferencesDraft.value.visibility })
       !== serializeSettings({ values: Object.fromEntries(keys.map((key) => [key, savedAppPreferences.value[key]])), visibility: savedAppPreferences.value.visibility })
   }
@@ -2509,7 +2734,7 @@ onMounted(async () => {
   // 全局主题单向同步（自愈）：主界面主题存在本机偏好里，桌宠窗口读不到，
   // 启动时推一次给 ui_theme。换机 / 清缓存 / 后端重置后都能自动对齐，
   // 不必要求用户"再保存一次外观"。
-  void syncUiThemeToPet(savedAppPreferences.value.theme)
+  void syncUiThemeToPet(savedAppPreferences.value.theme, savedAppPreferences.value.theme_custom)
   await loadSharedChatSettings()
   if (!isAgentWorkspace) {
     void loadMioProfileSettings({ quiet: true })
@@ -2527,6 +2752,14 @@ onMounted(async () => {
     void requestStartupGreeting()
   }
   if (window.location.hash === '#desktop-pet-chat') focusDesktopPetChat()
+  // 首屏就落在「大肥鱼」时 watch(activeView) 不会触发（初始值不驱动 watcher），
+  // 这里补一次历史加载 —— 否则刷新页面后聊天区会一直是空的。
+  if (activeView.value === FEIYU_CHAT_VIEW_ID) {
+    void loadFeiyuSettings()
+    await loadFeiyuHistory()
+    if (feiyuMessages.value.length) scrollFeiyuToBottom()
+    startFeiyuPolling(8000)
+  }
   pollTimer = window.setInterval(refreshMessages, 5000)
   if (!isAgentWorkspace) {
     dashboardPollTimer = window.setInterval(refreshDayDashboard, 15000)
@@ -2567,6 +2800,17 @@ watch(activeView, async (view) => {
   }
   // DSH 专用化：原来这里还有 `if (view === 'chat') await settleChatScrollToBottom()`，
   // 那是给小智对话页（ChatPage）滚到底用的，随该页一并移除。
+  //
+  // 大肥鱼对话页：进页面拉历史 + 开对齐轮询；离开就停轮询（不吃后台性能）。
+  // 轮询是为了接住"微信/QQ 那边说的话"——桌宠会话是**同一个我**，别的通道插话要能自己浮出来。
+  if (view === FEIYU_CHAT_VIEW_ID) {
+    void loadFeiyuSettings()
+    await loadFeiyuHistory()
+    if (feiyuMessages.value.length && !feiyuSending.value) scrollFeiyuToBottom()
+    startFeiyuPolling(8000)
+  } else {
+    stopFeiyuPolling()
+  }
 })
 
 watch(activeSettingsSection, (section) => {
@@ -2589,6 +2833,7 @@ onBeforeUnmount(() => {
   if (qqStatusPollTimer) window.clearInterval(qqStatusPollTimer)
   if (companionPollTimer) window.clearInterval(companionPollTimer)
   if (activeViewHeartbeatTimer) window.clearInterval(activeViewHeartbeatTimer)
+  stopFeiyuPolling()
   if (diarySearchTimer) window.clearTimeout(diarySearchTimer)
   if (companionBusyRecoveryTimer) window.clearTimeout(companionBusyRecoveryTimer)
   clearQqQrImage()
@@ -2612,7 +2857,7 @@ async function setPetChatWindowState(open) {
 </script>
 
 <template>
-  <main v-if="standalonePetChat" :class="['standalone-pet-chat', appThemeClass]">
+  <main v-if="standalonePetChat" :class="['standalone-pet-chat', appThemeClass]" :style="appThemeStyle">
     <div class="pet-chat-composer standalone-pet-chat-composer">
       <span class="standalone-pet-chat-drag" title="拖动对话框" aria-hidden="true" @mousedown="beginPetChatWindowDrag"></span>
       <textarea
@@ -2642,7 +2887,7 @@ async function setPetChatWindowState(open) {
        故这里直接是 v-else —— 承接上方的 loading/error 判定，进主界面。
        （原来是 v-else-if="bootstrap.onboarding?.completed === false"，删掉后
          必须确认 v-if / v-else-if / v-else 链仍然连续，否则整块不渲染。） -->
-  <div v-else :class="['app-shell', 'integrated-shell', appThemeClass, `font-${savedAppPreferences.font_size || 'medium'}`, `active-view-${activeView}`, `display-mode-${displayMode}`, { 'agent-workspace-shell': isAgentWorkspace, 'left-sidebar-hidden': !leftSidebarVisible, 'right-sidebar-hidden': !rightSidebarVisible, 'reduce-motion': savedAppPreferences.light_animations === false, 'focus-mode': savedAppPreferences.focus_mode }]">
+  <div v-else :class="['app-shell', 'integrated-shell', appThemeClass, `font-${savedAppPreferences.font_size || 'medium'}`, `active-view-${activeView}`, `display-mode-${displayMode}`, { 'agent-workspace-shell': isAgentWorkspace, 'left-sidebar-hidden': !leftSidebarVisible, 'right-sidebar-hidden': !rightSidebarVisible, 'reduce-motion': savedAppPreferences.light_animations === false, 'focus-mode': savedAppPreferences.focus_mode }]" :style="appThemeStyle">
     <UpdateNotice @open="openSettingsSection('general')" />
     <span v-for="direction in ['top', 'right', 'bottom', 'left', 'top-left', 'top-right', 'bottom-right', 'bottom-left']" :key="direction" :class="['window-resize-handle', direction]" aria-hidden="true" @pointerdown="resizeDesktopWindow(direction, $event)"></span>
     <header class="window-titlebar integrated-titlebar">
@@ -2691,6 +2936,8 @@ async function setPetChatWindowState(open) {
 
     <main :class="['workspace', 'integrated-workspace', { 'has-error': errorMessage, 'view-settings': activeView === 'settings' }]">
       <div v-if="errorMessage" class="error-banner"><span>{{ errorMessage }}</span><button type="button" title="关闭" @click="errorMessage = ''"><X :size="16" /></button></div>
+      <!-- 大肥鱼对话页的错误单独一条（不占全局 errorMessage，避免别的页面/轮询把它冲掉） -->
+      <div v-if="activeView === FEIYU_CHAT_VIEW_ID && feiyuError" class="error-banner"><span>{{ feiyuError }}</span><button type="button" title="关闭" @click="feiyuError = ''"><X :size="16" /></button></div>
       <AgentHomePage v-if="isAgentWorkspace && activeView === 'home'" @navigate="navigatePrimaryView" />
       <AgentSettingsPage v-else-if="isAgentWorkspace && activeView === 'settings'" @preferences-change="applyAgentPreferences" @return="returnToApp" />
       <HomePage v-else-if="activeView === 'home'" :logical-date="logicalDate" :today-state="todayState" :today-state-details="todayStateDetails" :diaries="diaries" :memory-data="memoryData" :display-name="mioDisplayName" :user-address="preferredUserAddress" :companion-running="Boolean(companionStatus.pet?.running)" @navigate="activeView = $event" @open-diary="openDiary" />
@@ -2720,6 +2967,36 @@ async function setPetChatWindowState(open) {
           <main class="settings-window-content"><SettingsPage /></main>
         </div>
       </section>
+      <!-- 大肥鱼对话页：纯 UI 组件（移植自 xiaozhi-chat-ui 提取包），数据由 useCompanionChat 提供。
+           注意 v-model:draft 是"受控草稿"，Vue 3 里属性名必须用 kebab-case 写。 -->
+      <FeiyuChatPage
+        v-else-if="activeView === FEIYU_CHAT_VIEW_ID"
+        v-model:draft="feiyuDraft"
+        :messages="feiyuMessages"
+        :attachments="feiyuAttachments"
+        :assistant-name="feiyuAssistantName"
+        :avatar-url="feiyuAvatarUrl"
+        :connected="feiyuConnected"
+        :thinking="feiyuSending"
+        :sending="feiyuSending"
+        :vision-supported="feiyuVisionSupported"
+        :file-dragging="feiyuFileDragging"
+        :background-style="chatBackgroundStyle"
+        :placeholder="`和${feiyuAssistantName}聊点什么...`"
+        :empty-title="`我是${feiyuAssistantName}`"
+        empty-hint="和我的每一次对话，微信这边也记得"
+        @send="sendFeiyuMessage"
+        @stop="stopFeiyuMessage"
+        @update:draft="feiyuDraft = $event"
+        @files-selected="handleFeiyuFilesSelected"
+        @remove-attachment="removeFeiyuAttachment"
+        @drag-enter="handleFeiyuDragEnter"
+        @drag-over="handleFeiyuDragOver"
+        @drag-leave="handleFeiyuDragLeave"
+        @drop="handleFeiyuDrop"
+        @scroll-ready="handleFeiyuScrollReady"
+        @preview-image="handleFeiyuPreviewImage"
+      />
       <CompanionPage v-else />
     </main>
 
@@ -2766,6 +3043,13 @@ async function setPetChatWindowState(open) {
       :multiline="appDialog.multiline"
       @confirm="confirmAppDialog"
       @cancel="cancelAppDialog"
+    />
+
+    <!-- 大肥鱼对话页：点图片放大（含她发来的表情包/图片附件） -->
+    <ImagePreview
+      v-if="feiyuPreviewImage"
+      :attachment="feiyuPreviewImage"
+      @close="feiyuPreviewImage = null"
     />
 
     <Teleport to="body">

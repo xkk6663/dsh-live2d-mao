@@ -156,3 +156,75 @@ _dist-cleanup-safety-*/
 
 # 重启脚本轮转出来的上一份后端日志（backend_out.log.prev / backend_err.log.prev）
 *.log.prev
+
+# ============================================================================
+# --- 临时调试产物（2026-10-23 清理日补充）---
+# 起因：排查「大肥鱼气泡/图片/顺序」问题时在仓库根目录和 澪Agent应用/ 里
+#       留下了大量一次性探针脚本、浏览器截图、从服务器抓下来的配置样本。
+#       其中 4 个 config/*.json 里含**真实 API key / 密码 / Cookie**，
+#       虽然从未提交进历史，但裸放在工作区里迟早会被 git add -A 误收。
+# 原则：探针与抓包一律不入库；需要的结论写进 docs/。
+# ============================================================================
+
+# --- 一次性探针脚本（Playwright / Python）---
+**/.probe-*.mjs
+**/.probe-*.py
+probe-*.py
+probe_*.py
+_probe*.py
+**/probe-*.mjs
+# 根目录散落的一次性抓取/探测脚本（排查 AstrBot 时产生）
+/agent_request.py
+/check_astrbot_db.py
+/check_conversations.py
+/context_manager.py
+/conversation_mgr.py
+/internal_agent.py
+/music_base.py
+/music_main.py
+/music_sender.py
+/ncm_nodejs.py
+/open_api_service.py
+/persona_mgr.py
+/process_stage.py
+/respond_stage.py
+/update_astrbot_config.py
+/webchat_adapter.py
+/webchat_message_parts.py
+/test_*.py
+/find_persona.py
+/read_persona.py
+/setup_qqmusic.py
+/update_persona.py
+/test_device.py
+/test_env.py
+/test_qqmusic.py
+/test_xianyu*.py
+
+# --- 抓包/配置样本（**含真实凭据，绝不允许入库**）---
+/astrbot_config.json
+/astrbot_config_full.json
+/music_config.json
+/music_config_check.json
+/netease_status.json
+/config_head.txt
+/**/*.txt
+!/docs/**/*.txt
+!/**/requirements*.txt
+!/**/package*.txt
+!**/SRC-MAP*.txt
+
+# --- 浏览器截图探针产物（根目录与模块内）---
+/*.png
+/*.jpg
+/*.webp
+/澪Agent应用/*.png
+/.bubble-*.png
+/.dedup-*.png
+/.final-*.png
+/.fix*.png
+/.order-*.png
+/.persist-*.png
+
+# --- 本地运行时数据 ---
+/pet-data/

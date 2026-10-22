@@ -1,6 +1,6 @@
 # AGENTS.md · 工程纪律权威出处
 
-> 本文件是 Mao-pet（DSH 专用桌宠）仓库的**工程纪律权威出处**。
+> 本文件是 **dsh-live2d-mao**（DSH 专用 Live2D 桌宠，2026-10-17 起从 Mao 桌宠 fork 后专用化）仓库的**工程纪律权威出处**。
 > 改任何代码前先读本文件；本文件与其它文档冲突时，**以本文件为准**。
 
 ---
@@ -21,7 +21,7 @@ DSH 专用 Live2D 桌宠：桌宠本体只认统一状态总线上的 12 态 pha
 |---|---|---|---|
 | **R1** | **插件不碰核心 DOM**：`packages/dsh-live2d-mao/lib/**` 不得出现 `#speech-bubble` / `#activity-indicator` / `#pet-strip` 等核心元素选择器 | 扫描 lib 源码字符串 | 核心 UI 归桌宠主体；插件只能经 `window.__mioPetStrip` / `__mioPetBubble` 说话。踩过真实回归：插件越界改核心 DOM → 关掉插件泡泡就没了 |
 | **R2** | **12 态词汇不删不改**：`phases.js` 的 `PHASES` 必须恰为 12 态，含 `voice`（D1 预留态） | 断言数组内容 | 12 态是总线契约；`voice` 虽无 TTS 也要留（未来 DSH 语音的插座） |
-| **R3** | **D5 命名**：npm 名与 cordis id 必须全小写 `mao-pet`，显示名 `Mao-pet` | 断言 package.json / cordis.patch.yml / pusher.js | npm 禁大写；id 与包名不一致会导致插件装不上 |
+| **R3** | **D5 命名**：npm 名与 cordis id 必须全小写 `dsh-live2d-mao`，显示名 `DSH-Live2D-Mao` | 断言 package.json / cordis.patch.yml / pusher.js | npm 禁大写；id 与包名不一致会导致插件装不上 |
 
 ---
 
@@ -47,6 +47,9 @@ DSH 专用 Live2D 桌宠：桌宠本体只认统一状态总线上的 12 态 pha
 | 设置页 / 泡泡页 | `settings-panel-inject.js` / `bubble-panel-inject.js` 头部注释 |
 | **要发版 / 上架市场** | ★ **`docs/SKILL-发布与版本迭代.md`**（门禁 → 版本号同步 → npm publish → 实机验证 → 市场 PR 全流程 + 故障速查） |
 | 项目独立性 / Electron 权限 | `docs/项目独立性-技术分析.md`（AppContainer 沙箱、ACL 继承、方案 B） |
+| **大肥鱼对话页** `FeiyuChatPage.vue` / `useCompanionChat.js` | ★ **`docs/大肥鱼功能总览.md`**（消息模型、排序铁律、去重规则）+ `docs/大肥鱼多模态桥接-协议与修复.md`（协议与踩过的坑） |
+| **大肥鱼后端** `app/cloud_feiyu/**`、`routes/companion.py` | `docs/大肥鱼聊天-后端契约审计.md`（**契约陷阱**：chat-settings 不存在 / cancel 无效 / 一轮问答共用 request_id） |
+| 气泡 & 状态徽标配色 | `docs/大肥鱼功能总览.md` §5（**身份色与状态色必须并存**；曾用 `!important` 把 12 态色全盖掉） |
 
 ---
 
@@ -56,7 +59,7 @@ DSH 专用 Live2D 桌宠：桌宠本体只认统一状态总线上的 12 态 pha
 |---|---|
 | **D1** | 不引入 TTS 依赖；`voice` phase 保留为预留态，将来 DSH 语音走新通路，**不复活 `pet-xz-audio.js`** |
 | **D4** | 桌宠主体（独立 Electron 壳）不动；插件只推事件 |
-| **D5** | npm 名 + cordis id 全小写 `mao-pet` |
+| **D5** | npm 名 + cordis id 全小写 `dsh-live2d-mao`（v1.0.0 改名；总线 agent_id 是 `dsh`，见 CHANGELOG v1.0.0「合并身份」） |
 | **三通道独立** | 说话气泡 / 流式横条 / 状态徽标 各自菜单开关独立显示隐藏 |
 | **横条=流式正文** | 流式正文走横条，气泡只显示工具状态（用户二次对齐） |
 | **两仓库隔离** | 本仓库 `Mao-dsh-pet` 独立；`C:\Users\xiao1\Mao` 保持 v4.2.1 原样，绝不污染 |

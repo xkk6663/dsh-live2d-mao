@@ -149,6 +149,32 @@ function rangeInputStyle(value, minimum, maximum) {
   const percent = max > min ? Math.max(0, Math.min(100, ((current - min) / (max - min)) * 100)) : 0
   return { '--range-progress': `${percent}%` }
 }
+
+// ★ B3 任务状态联动试演（2026-10-19）：合成一条 agent_phase 走既有 WS 广播，
+// 桌宠端 applyAgentPhase 原样消费——动作/表情/徽标音效全链路真实联动，零额外链路。
+const phasePreviewBusy = ref(false)
+const phasePreviewTip = ref('')
+async function previewPhase(phase) {
+  if (phasePreviewBusy.value) return
+  phasePreviewBusy.value = true
+  try {
+    const response = await fetch('/api/companion/live2d/phase/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phase }),
+    })
+    if (!response.ok) {
+      const detail = await response.json().catch(() => ({}))
+      throw new Error(String(detail.detail || `HTTP ${response.status}`))
+    }
+    phasePreviewTip.value = '✓ 已试演'
+  } catch (error) {
+    phasePreviewTip.value = `✗ ${error?.message || error}`
+  } finally {
+    phasePreviewBusy.value = false
+    setTimeout(() => { phasePreviewTip.value = '' }, 2500)
+  }
+}
 </script>
 
 <template>
@@ -183,12 +209,12 @@ function rangeInputStyle(value, minimum, maximum) {
         </div>
         <div class="live2d-resource-grid"><label v-for="(label, slot) in expressionLabels" :key="slot"><span>{{ label }}</span><select v-model="currentExpressionSlots[slot]"><option value="">自动判断</option><option v-for="expression in selectedExpressions" :key="expression.Name || expression.name" :value="expression.Name || expression.name">{{ expression.Name || expression.name }}</option></select><button type="button" title="预览表情" :disabled="!currentExpressionSlots[slot] || busy" @click="emit('preview-expression', currentExpressionSlots[slot])"><Volume2 :size="13" /></button></label></div>
       </div>
-      <div v-if="selectedMotions.length || selectedExpressions.length" class="live2d-resource-section"><h3>任务状态</h3><small class="live2d-resource-tip">选「自动」= 用内置默认（完成→开心 / 出错→担心 / 聆听→聆听）</small><div class="live2d-phase-grid"><label v-for="(label, phase) in phaseLabels" :key="phase"><span>{{ label }}</span><select v-model="currentPhaseSlots[phase].motion" title="动作槽"><option value="">自动动作</option><option v-for="(slotLabel, slot) in motionLabels" :key="'pm-' + slot" :value="slot">{{ slotLabel }}</option></select><select v-model="currentPhaseSlots[phase].expression" title="表情槽"><option value="">自动表情</option><option v-for="(slotLabel, slot) in expressionLabels" :key="'pe-' + slot" :value="slot">{{ slotLabel }}</option></select></label></div></div>
+      <div v-if="selectedMotions.length || selectedExpressions.length" class="live2d-resource-section"><h3>任务状态</h3><small class="live2d-resource-tip">选「自动」= 用内置默认（完成→开心 / 出错→担心 / 聆听→聆听）。点「试演」桌宠会立刻按该状态真实联动一次（动作+表情+音效），不落库不影响配置</small><div class="live2d-phase-grid"><label v-for="(label, phase) in phaseLabels" :key="phase"><span>{{ label }}</span><select v-model="currentPhaseSlots[phase].motion" title="动作槽"><option value="">自动动作</option><option v-for="(slotLabel, slot) in motionLabels" :key="'pm-' + slot" :value="slot">{{ slotLabel }}</option></select><select v-model="currentPhaseSlots[phase].expression" title="表情槽"><option value="">自动表情</option><option v-for="(slotLabel, slot) in expressionLabels" :key="'pe-' + slot" :value="slot">{{ slotLabel }}</option></select><button type="button" class="phase-preview-btn" :title="`按当前绑定试演「${label}」`" :disabled="phasePreviewBusy" @click.prevent="previewPhase(phase)">试演</button></label></div><small v-if="phasePreviewTip" class="live2d-resource-tip">{{ phasePreviewTip }}</small></div>
       <p v-if="!selectedMotions.length && !selectedExpressions.length">模型配置中没有登记动作或表情</p>
     </div>
     <div class="pet-quick-controls">
       <div class="settings-row settings-range-row"><div><strong>桌宠大小</strong><small>保存后同步到桌面</small></div><input v-model.number="settings.pet_size_percent" type="range" min="80" max="240" step="1" :style="rangeInputStyle(settings.pet_size_percent, 80, 240)" @change="emit('save-size')" /><b>{{ settings.pet_size_percent }}%</b></div>
-      <div class="pet-toggle-grid"><label><span>固定并穿透</span><span class="switch-control"><input v-model="settings.live2d_click_through_locked" type="checkbox" /><i /></span></label><label><span>始终置顶</span><span class="switch-control"><input v-model="settings.live2d_always_on_top" type="checkbox" /><i /></span></label><label><span>说话气泡</span><span class="switch-control"><input v-model="settings.live2d_speech_bubble_enabled" type="checkbox" /><i /></span></label></div>
+      <div class="pet-toggle-grid"><label><span>固定并穿透</span><span class="switch-control"><input v-model="settings.live2d_click_through_locked" type="checkbox" /><i /></span></label><label><span>始终置顶</span><span class="switch-control"><input v-model="settings.live2d_always_on_top" type="checkbox" /><i /></span></label><label><span>说话气泡</span><span class="switch-control"><input v-model="settings.live2d_speech_bubble_enabled" type="checkbox" /><i /></span></label><label><span>拖拽限位</span><span class="switch-control"><input v-model="settings.live2d_clamp_to_workarea" type="checkbox" /><i /></span></label></div>
     </div>
     <div class="pet-runtime-actions">
       <button class="primary-button" type="button" :disabled="busy" @click="emit('save')"><Check :size="15" />保存</button>

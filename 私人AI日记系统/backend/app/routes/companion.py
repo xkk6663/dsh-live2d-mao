@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import base64
 from difflib import SequenceMatcher
 import logging
@@ -8,6 +9,7 @@ import os
 import random
 import re
 import subprocess
+import uuid
 import tempfile
 import time
 from pathlib import Path
@@ -37,6 +39,9 @@ from ..chat.chat_idempotency import (
 from ..kernel.agent_loop_service import abandon_deferred_final_response
 from ..chat.chat_service import chat_with_ai, persist_generated_chat_result
 from ..chat.conversation_runtime import ChatRunCancelledError, chat_run_coordinator
+from ..cloud_feiyu import get_client as get_feiyu_client
+from ..cloud_feiyu.client import attachment_media_kind, strip_device_prefix, strip_tool_payload
+from ..cloud_feiyu.device import build_device_context
 from ..config import settings
 from ..llm import ModelRequestError, resolve_model_id
 from ..image_service import image_attachment_from_data_url
@@ -44,6 +49,38 @@ from ..image_service import image_attachment_from_data_url
 
 router = APIRouter(prefix="/api/companion")
 DESKTOP_PET_CONVERSATION_ID = "desktop_pet"
+
+# 云端大肥鱼（鲸鱼娘）在桌宠气泡 / 横条上的**专属身份色**。
+# 深蓝（鲸鱼蓝），与 DSH 的靛蓝 #4F6BED、Mio 本体默认青蓝都不同，
+# 一眼就能分清"这句是谁说的"。前端渲染层不硬编码任何身份，只吃这个 accent。
+FEIYU_BUBBLE_ACCENT = "#2B6CB0"
+FEIYU_AGENT_ID = "cloud_feiyu"
+FEIYU_AGENT_NAME = "大肥鱼"
+
+
+def _register_feiyu_agent() -> None:
+    """把云端大肥鱼注册进跨 Agent 总线，让她的气泡/徽标拿到**专属身份色**。
+
+    为什么必须注册而不是只在 payload 里塞 accent：
+      · 渲染端 `applyBubbleAgentAccent()` 的取值顺序是 payload.accent > 插件注册表；
+        但**徽标**（agent-badge）和 `/api/companion/agents` 快照只认总线里的 accent。
+      · DSH 插件当初也踩过同样的坑（没注册 → 气泡不变蓝），注释写在 dsh_adapter.py:972。
+    幂等：总线 register 对已存在的 agent 只会更新字段，重复调用安全。
+    """
+    try:
+        from ..kernel import agent_bus_service
+        agent_bus_service.register(
+            FEIYU_AGENT_ID,
+            FEIYU_AGENT_NAME,
+            "cloud_feiyu",
+            capabilities={"voice": True, "text": True, "screen": False, "mcp": False, "observe": False},
+            accent=FEIYU_BUBBLE_ACCENT,
+        )
+    except Exception:  # 总线不可用不该影响聊天
+        pass
+
+
+_register_feiyu_agent()
 _pet_call_started_observer = False
 _pet_call_previous_audio_model = ""
 _pet_call_previous_audio_engine = ""
@@ -246,6 +283,10 @@ class CompanionSettingsRequest(BaseModel):
     #   关掉即退回"每次点击都是害羞+随机一句"的老行为。
     pet_poke_enabled: bool = True
     ui_theme: str = ''
+    # ★ 自定义主题三色（ui_theme === 'custom' 时生效；configuration.py 做 #rrggbb 校验）
+    ui_theme_custom_bg: str = ''
+    ui_theme_custom_accent: str = ''
+    ui_theme_custom_ink: str = ''
     pet_press_bounce_enabled: bool = True
 
 
@@ -340,6 +381,14 @@ class Live2DExpressionPreviewRequest(BaseModel):
     expression: str = Field(min_length=1, max_length=120)
 
 
+class Live2DPhasePreviewRequest(BaseModel):
+    phase: str = Field(min_length=1, max_length=60)
+
+
+# B3 试演 nonce：每次试演 +1，桌宠端用它区分"同一相位的重播请求"
+_phase_preview_nonce = 0
+
+
 class GameWindowRequest(BaseModel):
     hwnd: int
 
@@ -384,6 +433,41 @@ def _primary_conversation_id() -> str:
 
 def _desktop_pet_conversation_id() -> str:
     return DESKTOP_PET_CONVERSATION_ID
+
+
+def _parse_attachments_json(raw: str) -> list[dict[str, Any]]:
+    """把库里存的 attachments_json 解析成前端能直接渲染的附件数组。
+
+    存的形状（落库时写入）：`[{"media","kind","url","display","filename","mime_type","size"}]`
+    老数据可能是 `[{"kind","name"}]`（没有 url）—— 这种没有地址，渲染不出图，
+    直接过滤掉，避免前端显示"加载失败的破图占位"。
+    """
+    try:
+        parsed = json.loads(raw or "[]")
+    except Exception:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "")
+        display = str(item.get("display") or item.get("name") or item.get("filename") or "")
+        # 没有 url 的老数据无法渲染，跳过
+        if not url:
+            continue
+        media = str(item.get("media") or item.get("kind") or "")
+        out.append({
+            "media": media,
+            "kind": media,
+            "url": url,
+            "display": display,
+            "filename": str(item.get("filename") or ""),
+            "mime_type": str(item.get("mime_type") or ""),
+            "size": int(item.get("size") or 0),
+        })
+    return out
 
 
 def _pet_call_screen_context() -> str:
@@ -1033,6 +1117,111 @@ async def companion_sound_delete(name: str):
     return {"ok": True}
 
 
+# ---- Agent 音频（点歌 / 语音）落盘与回传 ----
+# 为什么不把音频塞进 WS：WebSocket 单帧上限 1MB（实测 11MB 的 base64 歌直接把连接
+# 以 1009 message too big 踢掉）。所以音频一律落盘 → WS 只推短 URL →
+# 渲染端用 HTTP 拉（还能 Range 拖动进度）。
+_AGENT_MEDIA_MAX_BYTES = 24 * 1024 * 1024
+_AGENT_MEDIA_KEEP = 24          # 只保留最近 N 个，避免无限堆积
+_AGENT_MEDIA_EXT = {
+    ".mp3", ".wav", ".ogg", ".opus", ".m4a", ".aac", ".flac", ".webm",       # 音频
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp",                          # 图片
+}
+
+
+def _agent_media_dir() -> Path:
+    directory = companion_service.live2d_state_dir() / "agent_media"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def _safe_agent_media_path(name: str) -> Path:
+    if not name or "/" in name or "\\" in name or name in {".", ".."}:
+        raise HTTPException(status_code=400, detail="文件名无效。")
+    if Path(name).suffix.lower() not in _AGENT_MEDIA_EXT:
+        raise HTTPException(status_code=400, detail="不支持的媒体格式。")
+    root = _agent_media_dir().resolve()
+    path = (root / name).resolve()
+    if not path.is_relative_to(root):
+        raise HTTPException(status_code=400, detail="文件名无效。")
+    return path
+
+
+_IMAGE_MIME_TO_EXT = {
+    "image/png": ".png", "image/jpeg": ".jpg", "image/jpg": ".jpg",
+    "image/gif": ".gif", "image/webp": ".webp", "image/bmp": ".bmp",
+}
+
+
+def _save_agent_media(item: dict[str, Any], media_kind: str) -> dict[str, Any] | None:
+    """把一条附件（图片/音频，带 data: URL）落盘，返回可回传给前端的短 URL 元信息。
+
+    为什么音频和图片都要落盘（2026-10-22 实测）：
+      云端表情包 3.6MB → base64 后 **14.2MB** 一帧；歌曲 10.6MB → 更大。
+      WebSocket 单帧上限 1MB，这种帧会把连接直接 1009 掉线（连聊天一起断）。
+      落盘 + HTTP URL 还能让 <audio> 支持 Range 拖动进度。
+    """
+    import base64
+    import hashlib
+
+    data_url = str(item.get("data_url") or "")
+    if not data_url.startswith("data:"):
+        return None
+    header, _, payload = data_url.partition(",")
+    if not payload:
+        return None
+    mime = header[5:].split(";")[0] or ("image/png" if media_kind == "image" else "audio/mpeg")
+    try:
+        blob = base64.b64decode(payload, validate=False)
+    except Exception:
+        return None
+    if not blob or len(blob) > _AGENT_MEDIA_MAX_BYTES:
+        return None
+
+    display = str(item.get("display") or item.get("filename") or "").strip()
+    if not display:
+        display = "图片" if media_kind == "image" else "音频"
+    ext = Path(display).suffix.lower()
+    if ext not in _AGENT_MEDIA_EXT:
+        ext = _IMAGE_MIME_TO_EXT.get(mime) if media_kind == "image" else None
+        if not ext or ext not in _AGENT_MEDIA_EXT:
+            ext = ".png" if media_kind == "image" else ".mp3"
+    # 用内容哈希做文件名：同一首歌/同一张图重复发不会重复落盘，也避免中文名做路径参数。
+    # （2026-10-22 曾一度加过唯一后缀，因为误解题意成了"要能连发同一张图"；
+    #   实际需求是"云端表情库能重复选同一张"，与落盘去重无关 —— 已改回。）
+    digest = hashlib.sha256(blob).hexdigest()[:16]
+    safe_name = f"{digest}{ext}"
+    target = _agent_media_dir() / safe_name
+    try:
+        if not target.is_file() or target.stat().st_size != len(blob):
+            target.write_bytes(blob)
+    except OSError:
+        # 落盘失败不影响这一轮（前端拿不到图而已），不要让整条回复 500
+        pass
+    try:
+        files = sorted(_agent_media_dir().glob("*"), key=lambda p: p.stat().st_mtime, reverse=True)
+        for stale in files[_AGENT_MEDIA_KEEP:]:
+            stale.unlink(missing_ok=True)
+    except Exception:
+        pass
+    return {
+        "url": f"/api/companion/agent-media/{quote(safe_name)}",
+        "filename": safe_name,
+        "display": display,
+        "mime_type": mime,
+        "size": len(blob),
+    }
+
+
+@router.get("/agent-media/{name}")
+async def companion_agent_media(name: str):
+    """Agent 发来的图片/音频文件（渲染端 <img>/<audio> 直接拉这个 URL，支持 Range）。"""
+    path = _safe_agent_media_path(name)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="媒体不存在。")
+    return FileResponse(path)
+
+
 # ---- Live2D 模型定时自动更换 ----
 _model_schedule_task: asyncio.Task | None = None
 _model_schedule_lock = asyncio.Lock()
@@ -1250,6 +1439,29 @@ async def companion_live2d_expression_preview(payload: Live2DExpressionPreviewRe
     return {"ok": True, **event}
 
 
+@router.post("/live2d/phase/preview")
+async def companion_live2d_phase_preview(payload: Live2DPhasePreviewRequest):
+    """★ B3 任务状态联动试演（2026-10-19）：管理页点「试演」→ 合成一条 agent_phase
+    走既有 WS 广播，桌宠端 applyAgentPhase 原样消费（动作/表情/徽标/音效全链路真实联动）。
+    agent_id 固定 'phase-preview'、nonce 逐次递增——桌宠端 faceKey 含 nonce，
+    连点同一状态也会重播表现（否则同相位重发会被去抖吞掉）。"""
+    global _phase_preview_nonce
+    if not pet_event_service.has_desktop_renderer():
+        raise HTTPException(status_code=409, detail="请先启动 Live2D 桌宠。")
+    _phase_preview_nonce += 1
+    event = {
+        "agent_id": "phase-preview",
+        "agent_name": "试演",
+        "phase": payload.phase.strip(),
+        "active": True,
+        "nonce": _phase_preview_nonce,
+    }
+    _preview_diag_log("phase_preview REQUEST", event)
+    pet_event_service.publish("agent_phase", event)
+    _preview_diag_log("phase_preview PUBLISHED", event)
+    return {"ok": True, **event}
+
+
 @router.post("/preview-feedback")
 async def companion_preview_feedback(payload: dict):
     """桌宠端播放回执（临时诊断：确认预览消息是否到达桌宠并播放）。"""
@@ -1322,6 +1534,16 @@ async def companion_sprite_sheet_save(payload: SpriteSheetRequest):
 async def companion_chat(payload: CompanionChatRequest):
     message = payload.message.strip()
     conversation_id = _desktop_pet_conversation_id()
+    # 多模态回执（只有 cloud_feiyu 分支会填）：
+    #   attached_meta   结构化附件元信息（给前端判断类型/占位）
+    #   collected_images 图片的真实 data: URL（给前端直接渲染）
+    # 在函数入口初始化，保证任何分支走到 response 组装处都一定有这两个名字。
+    attached_meta: list[dict] = []
+    collected_images: list[str] = []
+    # 气泡需要"文字 + 图片"按顺序呈现：这里按收到顺序记 (kind, data)，
+    # 流结束后用一条 agent_bubble 事件交给桌宠渲染端（agent_bubble 只认文本，
+    # 图片另走 agent_image；两者都由前端按同一 response_id 归到同一条气泡）。
+    collected_bubble_items: list[tuple[str, str]] = []
     try:
         claim = claim_request(
             payload.client_request_id,
@@ -1410,7 +1632,11 @@ async def companion_chat(payload: CompanionChatRequest):
                 selected_model = route.model_id
                 selected_reasoning = route.reasoning_level
             else:
-                selected_model = resolve_model_id(requested_model)
+                # 云端大肥鱼直通模式：跳过 resolve，直接用
+                if requested_model == "cloud_feiyu":
+                    selected_model = "cloud_feiyu"
+                else:
+                    selected_model = resolve_model_id(requested_model)
                 selected_reasoning = requested_reasoning
             use_fast_chat = bool(
                 not task_profile.requires_tools
@@ -1419,21 +1645,327 @@ async def companion_chat(payload: CompanionChatRequest):
             )
             if use_fast_chat and selected_reasoning in {"", "auto", "off", "low"}:
                 selected_reasoning = "off"
-            result = await chat_with_ai(
-                message,
-                conversation_id=conversation_id,
-                source="desktop_pet",
-                image_attachments=images,
-                reasoning_level=selected_reasoning,
-                model_id=selected_model,
-                fallback_model_id=str(getattr(route, "fallback_model_id", "") or ""),
-                fallback_reasoning_level=str(getattr(route, "fallback_reasoning_level", "") or ""),
-                capture_follow_ups=True,
-                request_id=claim.client_request_id,
-                agent_tools_enabled=False,
-                fast_path=use_fast_chat,
-                handoff_enabled=True,
-            )
+
+            # 云端大肥鱼直通模式：不走本地 LLM，直接调 AstrBot Open API
+            if selected_model == "cloud_feiyu":
+                selected_reasoning = "off"
+                feiyu = get_feiyu_client()
+                # ⚠ 不要在这里打印 api_key（哪怕只打前几位）：
+                #   以前有一行 `logger.warning(f"[DEBUG] feiyu api_key: {feiyu.api_key[:20]}...")`，
+                #   每轮对话都把密钥前缀写进日志文件（实测已被写入）。日志会被收集/上报，
+                #   等于把凭据泄漏到文件系统之外。这里只记录"有没有配"。
+                if not feiyu.is_configured:
+                    raise RuntimeError("云端大肥鱼未配置：请在 .env 里设置 ASTRBOT_API_KEY（不要写进源码）")
+                # 注入设备上下文，让大肥鱼知道自己在桌宠上
+                device_ctx = build_device_context()
+                # 加设备前缀，让大肥鱼能分清当前是哪个设备在说话
+                #
+                # ★ 2026-10-22：设备上下文**只进上下文、不进气泡**（用户诉求：「气泡里不要出现我的提问」）。
+                #   现实问题：同一会话里每条消息都带一长串 `[电脑桌宠] [设备上下文] 当前你在桌宠设备上…`，
+                #   她偶尔会把这串前缀"复述"出来，看着就像把用户的话又念了一遍。
+                #   处理：
+                #     1) 前缀缩短，只保留识别设备所需的最少信息（能力清单挪到 system 侧，不每轮重复）；
+                #     2) 万一她真的复述了，出气泡前用 strip_device_prefix 把整段剥掉。
+                full_message = f"[电脑桌宠] {device_ctx}\n\n用户说：{message}"
+                # 把图片转成 data URL 列表传给大肥鱼
+                # ── 出站多模态：图片必须先上传换 attachment_id ──
+                # AstrBot 的 message 字段收的是**消息段数组**（{"type":"image","attachment_id":..}），
+                # 不接受 data URL。旧实现把 data URL 塞进 `images=`，而 client 的 _build_payload
+                # 当时根本没把它写进请求体 → 桌面端发的图**从来没到过云端**。这里补上传环节。
+                feiyu_attachment_ids: list[str] = []
+                feiyu_upload_errors: list[str] = []
+                for img in images:
+                    data_url = getattr(img, "data_url", "") or ""
+                    if not data_url:
+                        continue
+                    try:
+                        feiyu_attachment_ids.append(
+                            await feiyu.upload_attachment(
+                                data_url,
+                                filename=getattr(img, "name", "") or "image.png",
+                            )
+                        )
+                    except Exception as exc:  # 单张图失败不阻断整轮对话
+                        feiyu_upload_errors.append(str(exc))
+                if feiyu_upload_errors:
+                    logger.warning("[feiyu] 图片上传失败 %d 张：%s", len(feiyu_upload_errors), feiyu_upload_errors[0])
+
+                # 流式接收：边收边推 WS 到桌宠气泡（和 DSH 横条分开）
+                # 注意：collected_images / attached_meta 用**函数入口已初始化**的那两个，
+                # 这里不再重复 `x: list = []`，否则会遮蔽外层变量导致回执永远是空列表。
+                from ..companion import pet_event_service
+                stream_side: dict = {}
+                collected: list[str] = []
+                async for chunk, imgs in feiyu.chat_stream_full(
+                    full_message,
+                    session_id=feiyu.session_id,
+                    images=feiyu_attachment_ids or None,
+                    session_out=stream_side,
+                ):
+                    if chunk:
+                        collected.append(chunk)
+                        # 保留 agent_stream：DSH 横条那条通路仍可复用（不回归）。
+                        pet_event_service.publish("agent_stream", {
+                            "text": chunk,
+                            "agent_id": "cloud_feiyu",
+                            "accent": FEIYU_BUBBLE_ACCENT,
+                        })
+                    if imgs:
+                        # ★ 这里 imgs 是**真实图片字节的 data: URL**（客户端按 [IMAGE]xxx.png
+                        #   占位符去 /api/v1/files/content 下载回来的）。
+                        #
+                        # ⚠️ 2026-10-22 移除了一段**旧的分支**，它在这里直接 `publish("agent_image",
+                        #   {"url": img_url})` 把 base64 推给渲染端。两个严重后果：
+                        #     ① 一张 3.6MB 的图 base64 后 ~14MB，**超过 WS 1MB 单帧上限**，
+                        #        直接把连接踢掉（sent 1009 message too big，实测过一次）；
+                        #     ② 同一张图会被推**两次** —— 一次是这里的 base64（没有 response_id），
+                        #        一次是下面落盘后的短 URL → 前端看到"图片反复出现"（用户实拍）。
+                        #   正确做法：图片只走下面"落盘 → 短 URL"那一条通道。
+                        #   这里只保留 collected_images（HTTP 响应里给前端的 data URL）供气泡回落用。
+                        collected_images.extend(imgs)
+                        collected_bubble_items.extend(("image", url) for url in imgs)
+                attached_meta = list(stream_side.get("attachments") or [])
+
+                feiyu_content = "".join(collected)
+                # ★ 流式期间推给气泡的是**逐 token 原文**，英文思考也一起推过去了。
+                #   client 在收尾时做了行级清洗（strip_reasoning_prefix），并用
+                #   session_out["text"] 给出干净全文。这里以干净全文为准。
+                cleaned_stream = str(stream_side.get("text") or "")
+                if cleaned_stream:
+                    feiyu_content = cleaned_stream
+                # 解析表情标记
+                feiyu_emotion = ""
+                for m in re.finditer(r"&&(\w+)&&", feiyu_content):
+                    feiyu_emotion = m.group(1)
+                    break
+                clean_content = re.sub(r"&&\w+&&", "", feiyu_content).strip()
+                # 去掉 ⟦MODE:xxx⟧ 这类标记
+                clean_content = re.sub(r"⟦[^⟧]*⟧", "", clean_content).strip()
+                # 去掉开头的英文思考过程/指令（直到遇到中文为止）
+                lines = clean_content.split("\n")
+                while lines:
+                    first = lines[0].strip()
+                    # 如果第一行是空的，跳过
+                    if not first:
+                        lines.pop(0)
+                        continue
+                    # 如果第一行包含中文，就停
+                    if re.search(r"[\u4e00-\u9fff]", first):
+                        break
+                    # 否则删掉这行
+                    lines.pop(0)
+                clean_content = "\n".join(lines).strip()
+                # ★ 工具调用载荷清理（2026-10-22）：她调工具那一轮，complete.data 会把
+                #   {"id":"call_…","name":"send_message_to_user","args":{…}} 和回执直接混进正文。
+                #   client 层已剥过一次，这里对**最终正文**再兜一次（两条落库/展示路径都要干净）。
+                clean_content = strip_tool_payload(clean_content).strip()
+
+                # ★★ 让大肥鱼的话真正出现在**桌宠气泡**里（2026-10-22 用户反馈"气泡显示不出文字和图片"）。
+                #
+                # 之前为什么是空的：渲染端把 `agent_stream` 定向到 **横条 #pet-strip**（用户 10-17 裁决：
+                # 流式正文走横条），而这条链只发 agent_stream → 气泡永远收不到正文；
+                # `agent_image` 又被前端 `showImageInBubble()` 当"点击互动的随机图"处理，3 秒后自动消失。
+                # 现在改成发 `agent_bubble`（气泡专用通路）：
+                #   · 文字整段进气泡（适合一句话对白，不需要逐字铺开）；
+                #   · 图片用 agent_image，但带上 accent + response_id，按"大肥鱼自己的图"处理；
+                #   · agent_stream 仍然保留，横条那条通路不受影响。
+                bubble_text = strip_device_prefix(clean_content.strip())
+                # 点歌/语音回来的是音频附件（AstrBot 点歌发 `[FILE]xxx.mp3`）。
+                # ★ 图片和音频**都不走 WS 内联**（2026-10-22 实测）：
+                #   云端表情包 3.6MB → base64 后 14.2MB 一帧；歌曲 10.6MB → 更大。
+                #   WebSocket 单帧上限 1MB，这种帧会把连接直接 1009 掉线（连聊天一起断）。
+                #   所以先落盘到 pet 状态目录下的 agent_media/，WS 只推短 URL，
+                #   渲染端用 <img>/<audio> 走 HTTP 拉（音频还支持 Range 拖动进度）。
+                raw_items = list(stream_side.get("_raw_attachments", []))
+                saved_images: list[dict[str, Any]] = []
+                songs: list[dict[str, Any]] = []
+                for item in raw_items:
+                    if item.error or not item.data_url:
+                        continue
+                    kind = attachment_media_kind(item.kind, item.mime_type, item.filename)
+                    if kind not in ("image", "audio"):
+                        continue
+                    saved = await asyncio.to_thread(
+                        _save_agent_media,
+                        {
+                            "data_url": item.data_url,
+                            "display": item.display,
+                            "filename": item.filename,
+                            "mime_type": item.mime_type,
+                        },
+                        kind,
+                    )
+                    if not saved:
+                        continue
+                    if kind == "image":
+                        saved_images.append(saved)
+                    else:
+                        songs.append(saved)
+                # ★ 把落盘后的 URL **合并回 attached_meta**（2026-10-22 修）。
+                #   之前只把 URL 放进了 saved_images、推给 WS 用，而 HTTP 响应的
+                #   `attachments` 仍然是 client 那份**没有 url 的元信息**（data_url 还是空串）
+                #   → 前端既拿不到图片地址，也只能显示"没有可显示的内容"。
+                #
+                #   注意**不能按 filename 匹配**：落盘用的是内容哈希名（`<sha16>.jpg`），
+                #   而 meta 里是云端原名（`2026102221xxxx.jpg`），两边永远对不上。
+                #   改为按顺序对齐：被落盘的条目顺序 == saved_images/songs 的顺序。
+                _saved_queue = list(saved_images) + list(songs)
+                for meta in attached_meta:
+                    meta.setdefault("url", "")
+                for meta in attached_meta:
+                    if str(meta.get("media") or "") not in ("image", "audio"):
+                        continue
+                    if not _saved_queue:
+                        break
+                    saved = _saved_queue.pop(0)
+                    meta["url"] = saved.get("url") or ""
+                    meta["size"] = saved.get("size") or meta.get("size") or 0
+                    meta["filename"] = saved.get("filename") or meta.get("filename") or ""
+                # 非图片非音频的普通文件：只给前端一个下载卡片，不进播放器
+                other_media = [
+                    item for item in attached_meta
+                    if str(item.get("media") or "") not in ("image", "audio")
+                ]
+                if bubble_text or collected_bubble_items or saved_images:
+                    pet_event_service.publish("agent_bubble", {
+                        "text": bubble_text,
+                        "agent_id": FEIYU_AGENT_ID,
+                        "accent": FEIYU_BUBBLE_ACCENT,
+                        # 气泡停留 3 秒后自动消失（2026-10-22 用户裁决）。
+                        # 以前按字数给 4~30s，长句子会一直挂在桌上挡视线。
+                        "duration_ms": 3000,
+                    })
+                    # 图片：用落盘后的短 URL（不是 base64），帧只有几百字节
+                    for image in saved_images:
+                        pet_event_service.publish("agent_image", {
+                            "url": image["url"],
+                            "agent_id": FEIYU_AGENT_ID,
+                            "accent": FEIYU_BUBBLE_ACCENT,
+                            # 带 response_id → 渲染端不把它当"点击随机图"
+                            "response_id": claim.client_request_id,
+                            # 图也 3 秒收起，和文字气泡一致（用户裁决：气泡别一直挂着）
+                            "hold_ms": 3000,
+                            # 本轮正文：图展示完由渲染端接着把这句话说出来
+                            # （否则"文字+表情包"的回复会卡在图上、话永远不出现）
+                            "text": bubble_text,
+                        })
+                # ★ 音频：点歌/发语音 → 桌宠真正播出来（这是用户要的"点歌功能"）。
+                #   走独立的 agent_audio 事件 + 短 URL，不塞进气泡也不塞进帧。
+                for song in songs:
+                    pet_event_service.publish("agent_audio", {
+                        "url": song["url"],
+                        "filename": song["filename"],
+                        "display": song["display"],
+                        "mime_type": song["mime_type"],
+                        "size": song["size"],
+                        "agent_id": FEIYU_AGENT_ID,
+                        "accent": FEIYU_BUBBLE_ACCENT,
+                        "response_id": claim.client_request_id,
+                        "text": bubble_text,
+                    })
+                for item in other_media:
+                    pet_event_service.publish("agent_file", {
+                        "display": item.get("display") or item.get("filename") or "文件",
+                        "filename": item.get("filename") or "",
+                        "mime_type": item.get("mime_type") or "",
+                        "size": item.get("size") or 0,
+                        "agent_id": FEIYU_AGENT_ID,
+                        "accent": FEIYU_BUBBLE_ACCENT,
+                    })
+
+                import types as _types
+                result = _types.SimpleNamespace(
+                    reply=clean_content,
+                    replies=[clean_content],
+                    request_id=claim.client_request_id,
+                    model_id="cloud_feiyu",
+                    reasoning_level="off",
+                    provider_id="astrbot",
+                    provider_name="云端大肥鱼",
+                    provider_model=f"persona:{feiyu.persona_id}",
+                    speech_emotion=feiyu_emotion,
+                    tool_receipts=[],
+                    agent_run_id="",
+                    agent_run_status="",
+                    route_candidate_model_ids=[],
+                    route_escalated_from_model_id="",
+                    task_handoff={},
+                    http_status=200,
+                )
+                # ★★ 落库（2026-10-22 用户要求「历史写进本地数据库」）。
+                #
+                # 背景：cloud_feiyu 是**直通 AstrBot** 的分支，不经过本地 chat_with_ai，
+                # 所以历史上它**从来不写本地消息表** —— 这直接导致：
+                #   · 桌面端 /api/companion/chat/history 永远拿不到她的回复；
+                #   · 换设备/清缓存就"历史全没了"（此前只能靠前端 localStorage 兜底）。
+                # 现在把这一轮的问与答都写进 desktop_pet 会话，历史接口就能正常返回，
+                # 前端也就不再依赖本地缓存。
+                #
+                # 只记**最终正文**（clean_content），不记思考过程、不记设备上下文前缀。
+                try:
+                    db.save_message(
+                        "user",
+                        message or ("[图片]" if images else "发送了附件"),
+                        source="desktop_pet",
+                        conversation_id=conversation_id,
+                        request_id=claim.client_request_id,
+                        model_id="cloud_feiyu",
+                        reasoning_level="off",
+                        attachments_json=(
+                            '[{"kind":"image"}]' if images else "[]"
+                        ),
+                    )
+                    db.save_message(
+                        "assistant",
+                        clean_content,
+                        source="desktop_pet",
+                        conversation_id=conversation_id,
+                        request_id=claim.client_request_id,
+                        model_id="cloud_feiyu",
+                        provider_model=f"persona:{feiyu.persona_id}",
+                        reasoning_level="off",
+                        emotion=feiyu_emotion,
+                        # ★★ 2026-10-22 修「刷新后图片消失」：
+                        #   以前只存了 {"kind","name"}，**没存 url** ——
+                        #   刷新后历史接口拿到的附件没有地址，前端渲染不出图片，
+                        #   用户看到的就是"图片那条消息整个没了，只剩文字"。
+                        #   现在存完整信息（url/media/display/filename/mime/size），
+                        #   历史接口原样回给前端，配合 mapHistoryRow 就能恢复图片。
+                        attachments_json=json.dumps(
+                            [
+                                {
+                                    "media": a.get("media") or a.get("kind") or "",
+                                    "kind": a.get("media") or a.get("kind") or "",
+                                    "url": a.get("url") or "",
+                                    "display": a.get("display") or a.get("filename") or "",
+                                    "filename": a.get("filename") or "",
+                                    "mime_type": a.get("mime_type") or "",
+                                    "size": a.get("size") or 0,
+                                }
+                                for a in (attached_meta or [])
+                                if a and not a.get("error") and (a.get("url") or a.get("display"))
+                            ],
+                            ensure_ascii=False,
+                        ),
+                    )
+                except Exception as exc:  # 落库失败不能影响这一轮回复
+                    logger.warning("[feiyu] 消息落库失败：%s", exc)
+            else:
+                result = await chat_with_ai(
+                    message,
+                    conversation_id=conversation_id,
+                    source="desktop_pet",
+                    image_attachments=images,
+                    reasoning_level=selected_reasoning,
+                    model_id=selected_model,
+                    fallback_model_id=str(getattr(route, "fallback_model_id", "") or ""),
+                    fallback_reasoning_level=str(getattr(route, "fallback_reasoning_level", "") or ""),
+                    capture_follow_ups=True,
+                    request_id=claim.client_request_id,
+                    agent_tools_enabled=False,
+                    fast_path=use_fast_chat,
+                    handoff_enabled=True,
+                )
     except ValueError as exc:
         detail = normalize_error_detail(
             str(exc),
@@ -1521,6 +2053,12 @@ async def companion_chat(payload: CompanionChatRequest):
     response = {
         "reply": result.reply,
         "replies": result.replies,
+        # ★ 多模态回执：大肥鱼这一轮发来的附件（图片/语音/文件/视频）。
+        #   图片条目带 data_url（真实字节），前端可直接 <img src>；
+        #   其它类型只带元信息（filename/display/mime/size），前端按类型给占位。
+        #   非 cloud_feiyu 走本地模型时恒为空列表，保持字段形状稳定。
+        "attachments": attached_meta,
+        "images": collected_images,
         "voice_attempted": voice_attempted,
         "spoken": spoken,
         "voice_delegated": voice_delegated,
@@ -1916,23 +2454,46 @@ async def companion_call_turn(payload: CompanionCallTurnRequest):
 async def companion_chat_history(limit: int = Query(default=120, ge=1, le=500)):
     conversation_id = _desktop_pet_conversation_id()
     rows = db.get_recent_messages(limit=limit, conversation_id=conversation_id)
-    return {
-        "conversation_id": conversation_id,
-        "messages": [
+    # ★ 过滤空正文（2026-10-22）：清洗（思考/工具载荷/设备前缀）之后有些历史行只剩空串，
+    #   前端会把它们渲染成一条空白的「（这条回复没有可显示的内容）」——
+    #   对话里看着像她"说了话但内容是空的"。这里直接不返回这些行。
+    #   注意：附件轮次（attachments_json 非空的）即使正文为空也要保留，
+    #   否则"只发了一张图"的回复会整条消失在历史里。
+    messages = []
+    for row in rows:
+        raw_content = str(row["content"] or "")
+        # ★ 历史也要清洗（2026-10-22）：改造前落库的回复里混着工具调用 JSON
+        #   （{"id":"call_…","name":"…","args":{…}}），前端拿到后整段剥成空串，
+        #   于是历史里出现一条条「（这条回复没有可显示的内容）」。
+        #   读的时候统一过一遍清洗，旧数据不用手工修也能正常显示。
+        content = strip_tool_payload(strip_device_prefix(raw_content)).strip()
+        # sqlite3.Row 没有 .get()，用 keys() 安全判断
+        attachments_json = "[]"
+        try:
+            if "attachments_json" in row.keys():
+                attachments_json = str(row["attachments_json"] or "[]")
+        except Exception:
+            attachments_json = "[]"
+        has_attachment = attachments_json not in ("", "[]", "null")
+        # 清洗后彻底没内容、也没有附件 → 不返回（否则又是一条空占位）
+        if not content and not has_attachment:
+            continue
+        messages.append(
             {
                 "id": int(row["id"]),
                 "role": str(row["role"] or ""),
-                "content": str(row["content"] or ""),
+                "content": content,
                 "source": str(row["source"] or ""),
                 "created_at": str(row["created_at"] or ""),
                 "request_id": str(row["request_id"] or ""),
                 "model_id": str(row["model_id"] or ""),
                 "provider_model": str(row["provider_model"] or ""),
                 "reasoning_level": str(row["reasoning_level"] or ""),
+                # ★ 附件必须一起回给前端（带 url），否则刷新后图片那条就没了
+                "attachments": _parse_attachments_json(attachments_json),
             }
-            for row in rows
-        ],
-    }
+        )
+    return {"conversation_id": conversation_id, "messages": messages}
 
 
 

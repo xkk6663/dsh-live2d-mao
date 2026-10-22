@@ -4,6 +4,8 @@ from __future__ import annotations
 from typing import Any, Callable
 from pathlib import Path
 import json
+import re
+import time
 
 
 class ConfigurationService:
@@ -67,9 +69,17 @@ class ConfigurationService:
         """
         allowed = {
             "mist", "clear", "rose", "forest", "sakura", "celadon", "amber",
+            # ★ 2026-10-19 AI 娘配色五款 + 自定义（与 App.vue THEME_OPTIONS 同步）
+            "whale", "miku", "neuro", "qwen", "doubao", "custom",
         }
         theme = str(value or "").strip().lower()
         return theme if theme in allowed else "mist"
+
+    @staticmethod
+    def _normalize_hex_color(value: object, fallback: str) -> str:
+        """自定义主题三色的十六进制校验（#rrggbb）。脏值回落默认，不让前端挂上非法 CSS。"""
+        text = str(value or "").strip()
+        return text if re.fullmatch(r"#[0-9a-fA-F]{6}", text) else fallback
 
     def _normalize_live2d_expression_slots(self, value: object) -> dict[str, dict[str, str]]:
         if not isinstance(value, dict):
@@ -184,6 +194,7 @@ class ConfigurationService:
         data["live2d_click_through_locked"] = bool(data.get("live2d_click_through_locked", False))
         data["live2d_speech_bubble_enabled"] = bool(data.get("live2d_speech_bubble_enabled", True))
         data["live2d_keep_visible"] = bool(data.get("live2d_keep_visible", False))
+        data["live2d_clamp_to_workarea"] = bool(data.get("live2d_clamp_to_workarea", False))
         data["live2d_always_on_top"] = bool(data.get("live2d_always_on_top", True))
         data["live2d_disable_gpu"] = bool(data.get("live2d_disable_gpu", False))
         data["live2d_motion_slots"] = self._normalize_live2d_motion_slots(data.get("live2d_motion_slots"))
@@ -202,6 +213,10 @@ class ConfigurationService:
         data["pet_talkativeness"] = max(0, min(100, int(data.get("pet_talkativeness", 45))))
         data["pet_poke_enabled"] = bool(data.get("pet_poke_enabled", True))
         data["ui_theme"] = self._normalize_ui_theme(data.get("ui_theme"))
+        # 自定义主题三色（theme === 'custom' 时桌宠皮肤「跟随主题」的取色来源）
+        data["ui_theme_custom_bg"] = self._normalize_hex_color(data.get("ui_theme_custom_bg"), "#e9eef0")
+        data["ui_theme_custom_accent"] = self._normalize_hex_color(data.get("ui_theme_custom_accent"), "#4c8798")
+        data["ui_theme_custom_ink"] = self._normalize_hex_color(data.get("ui_theme_custom_ink"), "#20303a")
         # 上下限防倒挂：max 必须 >= min，否则随机区间会抛错
         if data["pet_idle_talk_max_seconds"] < data["pet_idle_talk_min_seconds"]:
             data["pet_idle_talk_max_seconds"] = data["pet_idle_talk_min_seconds"]
@@ -233,9 +248,40 @@ class ConfigurationService:
             if key in known_keys or key in extra_keys
         }
         self._dep_settings().companion_dir.mkdir(parents=True, exist_ok=True)
-        temporary = self._dep_settings().companion_config_path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        temporary.replace(self._dep_settings().companion_config_path)
+        target = self._dep_settings().companion_config_path
+        payload = json.dumps(data, ensure_ascii=False, indent=2)
+
+        # ★ Windows 文件占用问题（2026-10-22 后端日志两轮踩到）：
+        #   ① `temporary.write_text(...)`  → PermissionError [Errno 13] Permission denied
+        #   ② `temporary.replace(target)`   → PermissionError [WinError 32] 另一个程序正在使用此文件
+        #   杀毒/搜索索引器/编辑器持有句柄时都会这样，且**随机出现**，
+        #   表现为"改设置偶尔失败 500"，界面上完全看不出是文件锁。
+        #   所以：**写入、替换、回退直写 三步全部带重试**，任何一步都能扛过一次瞬时占用。
+        def _retry(fn, attempts: int = 8):
+            last: Exception | None = None
+            for i in range(attempts):
+                try:
+                    return fn()
+                except OSError as exc:  # PermissionError 是 OSError 子类
+                    last = exc
+                    time.sleep(0.04 * (i + 1))
+            raise last  # type: ignore[misc]
+
+        def _atomic_write() -> None:
+            temporary = target.with_suffix(".tmp")
+            # 写临时文件也要重试（否则一次占用就整条保存失败）
+            _retry(lambda: temporary.write_text(payload, encoding="utf-8"))
+            # 替换：仍被占用就删掉临时文件直接写目标（牺牲原子性，但必须能存下）
+            try:
+                _retry(lambda: temporary.replace(target))
+            except OSError:
+                _retry(lambda: target.write_text(payload, encoding="utf-8"))
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+        _atomic_write()
         # 域分层后 pet_event_service 与配置同属 companion 域，
         # 旧的 `from .. import pet_event_service`（按"还在 app/ 顶层"写的）会
         # ImportError —— 表现为**所有设置写入都 500**，但读取正常，很难一眼看出。
@@ -299,6 +345,7 @@ class ConfigurationService:
         normalized["live2d_click_through_locked"] = bool(normalized.get("live2d_click_through_locked", False))
         normalized["live2d_speech_bubble_enabled"] = bool(normalized.get("live2d_speech_bubble_enabled", True))
         normalized["live2d_keep_visible"] = bool(normalized.get("live2d_keep_visible", False))
+        normalized["live2d_clamp_to_workarea"] = bool(normalized.get("live2d_clamp_to_workarea", False))
         normalized["live2d_always_on_top"] = bool(normalized.get("live2d_always_on_top", True))
         normalized["live2d_disable_gpu"] = bool(normalized.get("live2d_disable_gpu", False))
         normalized["live2d_motion_slots"] = self._normalize_live2d_motion_slots(normalized.get("live2d_motion_slots"))
@@ -316,6 +363,9 @@ class ConfigurationService:
         normalized["pet_talkativeness"] = max(0, min(100, int(normalized.get("pet_talkativeness", 45))))
         normalized["pet_poke_enabled"] = bool(normalized.get("pet_poke_enabled", True))
         normalized["ui_theme"] = self._normalize_ui_theme(normalized.get("ui_theme"))
+        normalized["ui_theme_custom_bg"] = self._normalize_hex_color(normalized.get("ui_theme_custom_bg"), "#e9eef0")
+        normalized["ui_theme_custom_accent"] = self._normalize_hex_color(normalized.get("ui_theme_custom_accent"), "#4c8798")
+        normalized["ui_theme_custom_ink"] = self._normalize_hex_color(normalized.get("ui_theme_custom_ink"), "#20303a")
         if normalized["pet_idle_talk_max_seconds"] < normalized["pet_idle_talk_min_seconds"]:
             normalized["pet_idle_talk_max_seconds"] = normalized["pet_idle_talk_min_seconds"]
         if normalized["pet_idle_beat_max_seconds"] < normalized["pet_idle_beat_min_seconds"]:

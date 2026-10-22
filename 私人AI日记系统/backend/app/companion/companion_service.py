@@ -158,9 +158,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # 连点彩蛋（L3-c）：短时间内反复戳桌宠 → 给"嫌弃→装死"的分级反应。
     # 每一级都复用现成的点击气泡通道（pet_click_bubbles），关掉即退回"每次都是害羞"。
     "pet_poke_enabled": True,
-    # 全局 UI 主题 id（mist/clear/rose/forest/sakura/celadon/amber）：
+    # 全局 UI 主题 id（mist/clear/rose/forest/sakura/celadon/amber +
+    # whale/miku/neuro/qwen/doubao（2026-10-19 AI 娘配色）/custom）：
     # 主界面与外层窗共用一套调色板；气泡/横条皮肤选 "theme" 时跟随它。
     "ui_theme": "mist",
+    # 自定义主题三色（ui_theme === 'custom' 时桌宠皮肤跟随取色；configuration.py 校验 #rrggbb）
+    "ui_theme_custom_bg": "#e9eef0",
+    "ui_theme_custom_accent": "#4c8798",
+    "ui_theme_custom_ink": "#20303a",
     # 按压 Q 弹反馈
     "pet_press_bounce_enabled": True,
     "position_x": 80,

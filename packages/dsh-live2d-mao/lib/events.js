@@ -13,6 +13,7 @@
 import { emptyFacts, foldEvent } from './facts.js'
 import { phaseForFacts, pausedState, heartbeatState } from './phase-map.js'
 import { isWorkPhase, PHASES } from './phases.js'
+import { readProjection, summarizeContextPressure } from './projections.js'
 import { safeCall } from './util.js'
 
 /**
@@ -43,6 +44,16 @@ export function createConnector(opts = {}) {
   const logger = opts.logger || console
   const reemitMs = Number(opts.reemitMs) > 0 ? Number(opts.reemitMs) : REEMIT_MS
   const heartbeatMs = Number(opts.heartbeatMs) > 0 ? Number(opts.heartbeatMs) : HEARTBEAT_MS
+
+  // ── A2 上下文压力（2026-10-19）：宿主投影服务的获取方式 ──
+  // 三种形态都收：
+  //   function → 惰性 getter（index.js 传 `() => ctx.get('sessionProjections')`，
+  //              因为 connector 创建时服务可能还没就绪）；
+  //   object   → 直接是服务实例（测试注入 mock 最方便）；
+  //   缺省     → 功能关闭（老宿主没有该服务也不影响主链路）。
+  const projectionSource = typeof opts.projectionService === 'function'
+    ? opts.projectionService
+    : (opts.projectionService ? () => opts.projectionService : null)
 
   // 按 sessionId 分桶：多 session 并发时**不能串账**（M7 7.4 的基础）。
   // 主会话由 delegationDepth===0 / 无 parentSessionId 识别（见 M7 协议测绘 §5）。
@@ -133,6 +144,20 @@ export function createConnector(opts = {}) {
 
     // 补上会话标识，便于桌宠侧区分（与后端 `state["session"]` 对齐）
     if (bucket.sid && bucket.sid !== '__default__') state.session = bucket.sid
+
+    // ── A2 上下文压力：读宿主 `contextPressure` 投影，塞进 state 一起推 ──
+    // 后端 `_sanitize_state` 白名单只收**整数**（ingest.py `("turn","step",
+    // "tool_calls","todos","ctx_pressure")` 那个循环），故这里取整。
+    // 读不到（服务缺失 / key 未注册 / 抛异常）→ 不放字段，绝不拖垮主链路。
+    if (projectionSource && bucket.session) {
+      const pct = safeCall(() => {
+        const service = projectionSource()
+        const summary = summarizeContextPressure(readProjection(service, bucket.session, 'contextPressure'))
+        const p = summary && summary.percent
+        return typeof p === 'number' && Number.isFinite(p) ? Math.max(0, Math.round(p)) : null
+      }, null)
+      if (pct !== null) state.ctx_pressure = pct
+    }
 
     const seqAtSend = ++seq
     bucket.lastPhase = phase

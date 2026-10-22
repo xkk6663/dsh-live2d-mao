@@ -130,7 +130,14 @@ export default {
       // ── 推送层：传输无关（HTTP 优先；WS 为可选降级，见 transports/ws.js 注释）──
       const transport = createHttpTransport({})
       const pusher = createPusher({ transport, logger })
-      const connector = createConnector({ pusher, logger })
+      // A2 上下文压力：投影服务用**惰性 getter** 传入——connector 创建时
+      // sessionProjections 可能还没就绪，每次推送前现取（取不到则不带 ctx_pressure）。
+      const connector = createConnector({
+        pusher,
+        logger,
+        projectionService: () => safeCall(
+          () => ctx.get?.('sessionProjections') || ctx.sessionProjections, null),
+      })
 
       // ── 6.2 事件订阅：DSH session 事件 → facts → phase ──
       // ⚠ 首参是 session、第二个才是 event（源码三处一致，见 docs/M7-协议测绘-源码级.md §1）。

@@ -56,14 +56,23 @@ export function useSettings(deps) {
    * 从不反向读取（避免两边互相覆盖产生抖动）。
    * 失败静默：主题是纯视觉偏好，不该因为后端一时不通就打断保存流程。
    */
-  function syncUiThemeToPet(theme) {
+  function syncUiThemeToPet(theme, themeCustom) {
     const id = String(theme || '').trim()
     if (!id) return
+    const body = { ui_theme: id }
+    // 自定义主题：三色一并镜像（后端 CompanionSettingsRequest 白名单 + configuration.py
+    // 归一化各自把关；桌宠皮肤「跟随主题」靠这三个键推导调色板）。
+    if (id === 'custom' && themeCustom && typeof themeCustom === 'object') {
+      const hex = (v, fallback) => (/^#[0-9a-f]{6}$/i.test(String(v || '')) ? String(v) : fallback)
+      body.ui_theme_custom_bg = hex(themeCustom.bg, '#e9eef0')
+      body.ui_theme_custom_accent = hex(themeCustom.accent, '#4c8798')
+      body.ui_theme_custom_ink = hex(themeCustom.ink, '#20303a')
+    }
     try {
       fetch('/api/companion/settings', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ui_theme: id }),
+        body: JSON.stringify(body),
       }).catch(() => {})
     } catch (_) {}
   }
@@ -76,6 +85,7 @@ export function useSettings(deps) {
       : deps.cloneAppPreferences({
           ...current,
           theme: draft.theme,
+          theme_custom: draft.theme_custom,
           font_size: draft.font_size,
           left_sidebar_visible: draft.left_sidebar_visible,
           right_sidebar_visible: draft.right_sidebar_visible,
@@ -94,8 +104,14 @@ export function useSettings(deps) {
     localStorage.setItem('mio_left_sidebar_visible', String(deps.leftSidebarVisible.value))
     localStorage.setItem('mio_right_sidebar_visible', String(deps.rightSidebarVisible.value))
     deps.showSettingsFeedback(section, 'success', section === 'general' ? '基础设置已保存' : '外观与界面设置已保存并生效')
-    // 主题变了才镜像（避免每次保存外观都写一遍桌宠设置）
-    if (section !== 'general' && saved.theme !== current.theme) syncUiThemeToPet(saved.theme)
+    // 主题变了才镜像（避免每次保存外观都写一遍桌宠设置）；
+    // 自定义主题时三色跟随一起镜像（颜色变了主题没变也要推）。
+    if (section !== 'general' && saved.theme !== current.theme) {
+      syncUiThemeToPet(saved.theme, saved.theme_custom)
+    } else if (section !== 'general' && saved.theme === 'custom'
+      && JSON.stringify(saved.theme_custom) !== JSON.stringify(current.theme_custom)) {
+      syncUiThemeToPet(saved.theme, saved.theme_custom)
+    }
   }
   async function loadRuntimeSettings({ quiet = false } = {}) {
     if (deps.runtimeSettingsBusy.value) return

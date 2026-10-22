@@ -197,14 +197,17 @@ export function useConversations(deps) {
     }
   }
   async function selectConversation(conversationId) {
-    // DSH 专用化：原先把 activeView 设为 'chat'（小智对话页）。该页已移除，
-    // 且 'chat' 不再是合法视图（activeViewState 会抛错），故改指 'companion'（桌宠管理页）。
-    if (!conversationId || conversationId === deps.selectedConversationId.value) {
-      deps.activeView.value = 'companion'
+    // ★ 切会话**只切数据，不动视图**。两层历史教训（都踩过）：
+    //   ① 最初写 activeView = 'chat'（小智对话页）—— 该页在 DSH 专用化里已删除，
+    //      activeViewState 白名单里也没有它，直接抛错；
+    //   ② 后来改写成硬编码 'companion'（桌宠管理页）—— 于是任何一次选会话都会把用户
+    //      从当前页面弹回桌宠页（表现为"点会话就跳页"）。
+    // 需要"切完跳到对话页"的调用方自己切视图（见 useDesktopNavigation.focusDesktopPetChat）。
+    if (!conversationId) return
+    if (conversationId === deps.selectedConversationId.value) {
       await deps.settleChatScrollToBottom()
       return
     }
-    deps.activeView.value = 'companion'
     deps.loading.value = true
     deps.errorMessage.value = ''
     deps.selectedConversationId.value = conversationId
@@ -229,8 +232,7 @@ export function useConversations(deps) {
     await deps.settleChatScrollToBottom()
   }
   async function createNewConversation() {
-    // DSH 专用化：'chat' 视图已移除 → 'companion'
-    deps.activeView.value = 'companion'
+    // 新建会话同样**不切视图**（同 selectConversation 的理由）。
     deps.errorMessage.value = ''
     try {
       const conversation = await chatApi.createConversation(

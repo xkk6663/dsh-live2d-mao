@@ -162,6 +162,16 @@ async def app_lifespan(app: FastAPI):
     try:
         yield
     finally:
+        # 通知云端大肥鱼：桌宠下线了
+        try:
+            from .cloud_feiyu import get_client as get_feiyu_client
+            from .cloud_feiyu.devices import notify_device_offline
+            feiyu = get_feiyu_client()
+            if feiyu.is_configured:
+                await notify_device_offline(feiyu)
+                logger.info("已通知云端大肥鱼：桌宠下线")
+        except Exception:
+            logger.debug("通知云端下线失败", exc_info=True)
         await model_runtime.cancel_operations(reason="shutdown")
         await _stop_background_tasks(app)
         await creation_service.shutdown()
@@ -251,6 +261,19 @@ def create_app() -> FastAPI:
     # 插件包自带的 HTTP 面（装配职责留在 kernel/main，插件自己不抢装配权）。
     # 每个插件包对外只暴露自己的前缀，互不 import。
     app.include_router(dsh_plugin_routes.router)
+    # 云端大肥鱼 MCP 工具端点
+    from .cloud_feiyu.mcp_routes import router as feiyu_mcp_router
+    app.include_router(feiyu_mcp_router)
+
+    # 启动时上报桌宠设备在线
+    async def _notify_feiyu_online():
+        from .cloud_feiyu import get_client, notify_device_online
+        client = get_client()
+        if client.is_configured:
+            await notify_device_online(client, "mao-pet")
+            logger.info("已通知云端大肥鱼：桌宠设备上线")
+
+    asyncio.create_task(_notify_feiyu_online())
 
     if settings.agent_frontend_dir.exists():
         agent_frontend_root = settings.agent_frontend_dir.resolve()

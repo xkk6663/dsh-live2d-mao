@@ -944,8 +944,19 @@ def test_stream_frontend_contract() -> None:
     check("实现追加式渲染 applyAgentStream", "function applyAgentStream" in src)
     check("有可取消的流会话（新消息/隐藏时中断旧流）", "cancelAgentStream" in src)
     check("用最终文本校正（零丢字/零重复）", "finishAgentStream" in src)
-    check("气泡被其他来源占用时会中断流", "cancelAgentStream()" in src.split("function showSpeechBubble")[1][:600]
-          if "function showSpeechBubble" in src else False)
+    # ★ 2026-10-23 修测试本身：原来只看 showSpeechBubble 之后 **600 字符**。
+    #   为让"DSH 工具播报不抢大肥鱼的话"而加的占位保护注释约 900 字符，
+    #   把 cancelAgentStream() 推到了偏移 ~954 处 → 这条**误报失败**（功能其实完好）。
+    #   判据改为"在**函数体范围内**出现"：从函数起始到下一个顶层 `  function ` 之间，
+    #   与注释长度无关，仍守住"别的来源要用气泡时先中断流式"的语义。
+    _sb_start = src.find("function showSpeechBubble")
+    if _sb_start >= 0:
+        _sb_rest = src[_sb_start:]
+        _next_fn = _sb_rest.find("\n  function ", 10)
+        _sb_body = _sb_rest if _next_fn < 0 else _sb_rest[:_next_fn]
+        check("气泡被其他来源占用时会中断流", "cancelAgentStream()" in _sb_body)
+    else:
+        check("气泡被其他来源占用时会中断流", False)
     check("流式受其自己的开关约束（live2d_stream_text_enabled）",
           "live2d_stream_text_enabled" in src)
     # ★ 2026-10-16 用户裁决：**三条通路独立管理**

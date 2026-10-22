@@ -296,6 +296,8 @@
   const stripButton = contextMenu.querySelector('[data-action="strip"]')
   // DSH 专用化：原 `speechLanguageButton`（右键菜单「截图提问」按钮引用）已随该功能移除
   const agentBadgeButton = contextMenu.querySelector('[data-action="agent-badge"]')
+  // A2 上下文占用药丸开关（2026-10-20；老 index.html 没有这个按钮时为 null，全部按可选处理）
+  const ctxMeterButton = contextMenu.querySelector('[data-action="ctx-meter"]')
   const speechBubble = document.getElementById('speech-bubble')
   const speechBubbleText = document.getElementById('speech-bubble-text')
   const modelSelect = document.getElementById('model-select')
@@ -383,6 +385,9 @@
   let analyser = null
   let analyserData = null
   let currentAudio = null
+  // 正在播放的 Agent 音频（点歌/语音）：{ title, agentId } | null。
+  // 只用于状态显示与"别让自语/工具播报打断它"，不参与播放控制（播放器还是 currentAudio）。
+  let agentAudioPlaying = null
   let currentAudioUrl = ''
   let currentSpeechAbort = null
   let streamGain = null
@@ -829,9 +834,8 @@
       const vh = Number(virtual.height) || window.innerHeight
       const marginX = Math.min(72, Math.max(32, vw * 0.08))
       const marginY = Math.min(96, Math.max(48, vh * 0.1))
-      // 位置原样恢复，不做任何限位（用户自由拖拽）
-      posX = posX
-      posY = posY
+      // 位置原样恢复，不做任何限位（用户自由拖拽）；B2 开关开启时才夹回 workArea 并集
+      ;({ x: posX, y: posY } = clampPositionToWorkarea(posX, posY))
       model.x = posX - Number(virtual.x || 0) + target.width / 2
       model.y = posY - Number(virtual.y || 0) + target.height / 2
         + target.height * Number(settings.live2d_vertical_offset || 0)
@@ -850,6 +854,21 @@
   function visibleBottomLimit() {
     const vh = Number(window.screen?.availHeight) || window.innerHeight
     return Math.round(Math.min(window.innerHeight, vh) * 0.65)
+  }
+
+  // ★ B2 多屏 workArea clamp（2026-10-19，默认关）：
+  //   settings.live2d_clamp_to_workarea 开启时，把模型位置（左上角语义，见 fitModel）
+  //   夹回多显示器 workArea **并集**内（主进程 get-state 现算，已剔除任务栏）。
+  //   默认关 = 保持用户裁决的"完全自由拖拽"；开启 = 拖不进任务栏/屏幕外。
+  //   拔掉副屏后恢复位置越界同样会被拉回来（fitModel 恢复路径也走这里）。
+  function clampPositionToWorkarea(x, y) {
+    if (settings.live2d_clamp_to_workarea !== true) return { x, y }   // 默认关（undefined/缺键都放行）
+    const wa = desktopState && desktopState.workArea
+    if (!wa || !(Number(wa.width) > 0) || !(Number(wa.height) > 0)) return { x, y }
+    const m = 8
+    const cx = Math.round(Math.max(wa.x + m, Math.min(wa.x + wa.width - m, Number(x) || 0)))
+    const cy = Math.round(Math.max(wa.y + m, Math.min(wa.y + wa.height - m, Number(y) || 0)))
+    return { x: cx, y: cy }
   }
 
   function clampModelToViewport() {
@@ -1535,6 +1554,12 @@
   let lastAgentBadgePos = null
   let lastBadgePosAt = 0
   let badgeDragging = false
+  // A2 小球：位置节流时间戳 + **最后一次拿到的百分比**。
+  // 后者是"偶发丢失"的兜底：chip 因 offline/断线瞬间清空时 chips 里没有 ctx，
+  // 但球应继续显示上一次的值（而不是跟着消失）。
+  let lastCtxOrbPosAt = 0
+  let lastCtxPct = null
+  let lastCtxOrbPos = null
 
   // ---- 多 Agent 状态栏：每个 agent 一个状态 chip，实时并排显示 ----
   // 即插即用：注册/上线即出现；停用(enabled=false)或离线(offline)即移除。
@@ -1543,19 +1568,47 @@
   const AGENT_STATUS_LABELS = { online: '在线', connecting: '连接中', error: '异常', offline: '离线' }
 
   // ---- 插件身份色 ----
-  // 优先级：**总线透传的 payload.accent** > 插件注册表 manifest.bubble.accent > 无（回落默认配色）
+  // 优先级：**总线透传的 payload.accent** > 已见身份色缓存 > 插件注册表 manifest.bubble.accent
+  // > 内置身份色表 > 无（回落默认配色）
+  //
   // 为什么总线透传优先：桌宠窗口与管理页是**两个不同的 HTML 页面**，桌宠这边
   // 并没有加载 kernel/plugin-registry.js 与各插件 manifest，所以早先"从注册表
   // 读色值"的做法在桌宠窗口里永远拿到空串——气泡明明是 DSH 发的却不变蓝（实测踩过）。
-  // 现在由插件在 register() 时声明自己的色值，经 agent_phase / agent_bubble
-  // 透传下来，桌宠零额外依赖即可着色。
+  //
+  // 为什么还要"已见缓存 + 内置表"（2026-10-22 补）：
+  //   · 云端大肥鱼（cloud_feiyu）不是 Cordis 插件，注册表里根本没有它；
+  //   · 而 **agent_image 帧不带 accent**（图上色靠 agentId 反查），
+  //     所以图片气泡曾经拿不到色 → 显示成默认色而不是鲸鱼蓝。
+  //   现在：任何一帧带过 accent 就记进 SEEN_AGENT_ACCENTS；
+  //   纯颜色信息用内置表兜底，保证"图先到、字后到"也能立刻是鲸鱼蓝。
+  const BUILTIN_AGENT_ACCENTS = {
+    // 与后端 FEIYU_BUBBLE_ACCENT 同值（鲸鱼蓝），改色两边一起改
+    cloud_feiyu: '#2B6CB0',
+    dsh: '#4F6BED',
+  }
+  const SEEN_AGENT_ACCENTS = {}
+
+  function rememberAgentAccent(agentId, accent) {
+    const id = String(agentId || '')
+    const color = String(accent || '')
+    if (!id || !color) return
+    SEEN_AGENT_ACCENTS[id] = color
+  }
+
   function agentAccentOf(agentId, payloadAccent) {
-    if (payloadAccent) return String(payloadAccent)
+    if (payloadAccent) {
+      rememberAgentAccent(agentId, payloadAccent)
+      return String(payloadAccent)
+    }
+    const cached = SEEN_AGENT_ACCENTS[String(agentId || '')]
+    if (cached) return cached
     try {
       const reg = window.__mioPluginRegistry
       const m = reg && reg.get ? reg.get(String(agentId)) : null
       if (m && m.bubble && m.bubble.accent) return String(m.bubble.accent)
     } catch (_) {}
+    const builtin = BUILTIN_AGENT_ACCENTS[String(agentId || '')]
+    if (builtin) return builtin
     return ''
   }
   // 每次 render 时刷新（插件可能晚于桌宠注册）
@@ -1895,6 +1948,114 @@
   // 按压形变已移除（见 playPressBounce 注释）；保留函数名避免 ticker 报错。
   function updatePressBounce() { /* no-op：视觉反馈交给模型动作系统 */ }
 
+  // ★ A2 上下文压力可视化（2026-10-20）：开关 + 分档。
+  //   开关默认开；右键菜单「上下文占用」可关（渲染端独有，不进后端设置——
+  //   与状态徽标开关同属"本机显示偏好"，存在桌宠窗口的 localStorage 里）。
+  const ctxMeterEnabled = () => localStorage.getItem('mio_ctx_meter_enabled') !== '0'
+  /** 0=宽裕(绿) 1=偏紧(琥珀) 2=紧张(红)：45% / 70% 两条阈值与面板提示一致。 */
+  function ctxPressureLevel(pct) {
+    const v = Number(pct)
+    if (!Number.isFinite(v)) return 0
+    if (v >= 70) return 2
+    if (v >= 45) return 1
+    return 0
+  }
+
+  /**
+   * ★ A2 上下文占用小球（2026-10-20 三修）：**独立于 chip 的常驻元素**。
+   *
+   * 为什么彻底解耦（用户报障"工作状态变化时小球偶发丢失"）：
+   *   前两版把小球挂在 `#agent-badge` 里、由 `renderAgentBadge()` 逐次重建，
+   *   而那个函数会在多种情况下整条清空/隐藏：
+   *     ① `status === 'offline'` 直接 return（网络抖一下、后端 30s 心跳判定超时、
+   *        WS 重连窗口、或 `agent_status` 广播晚到）⇒ chips 为空 ⇒ 球跟着消失；
+   *     ② `renderAgentBadge()` 里 `badge.replaceChildren()` 全量重建；
+   *     ③ `applyAgentStatus()` 重建 state 时**没继承** `ctx_pressure` ⇒ 球也丢。
+   *   现在小球是 `#ctx-orb` 这个**独立 DOM 节点**，只由本函数更新，与 chip 的增删/显隐
+   *   完全无关。小球在 updateAgentBadgePosition 里跟随徽标定位，徽标整体不可见时才隐藏。
+   *
+   * @param {number|null} pct 上下文占用百分比；null = 没数据（保持现状或隐藏）
+   */
+  function renderCtxOrb(pct) {
+    let orb = document.getElementById('ctx-orb')
+    const show = ctxMeterEnabled() && typeof pct === 'number' && Number.isFinite(pct)
+    if (!show) {
+      if (orb) orb.hidden = true
+      return
+    }
+    const box = document.getElementById('agent-badge')
+    if (!orb) {
+      orb = document.createElement('div')
+      orb.id = 'ctx-orb'
+      orb.className = 'ctx-orb'
+      const num = document.createElement('b')
+      num.className = 'ctx-orb-num'
+      orb.appendChild(num)
+      // 与徽标同一层：徽标手动拖动/自动跟随都同步（见 updateAgentBadgePosition）
+      orb.style.cssText = 'position:fixed;left:0;top:0;z-index:9999;'
+      orb.addEventListener('pointerdown', (e) => {
+        // 不能阻塞徽标拖动：球只是展示，点它等同点徽标空白（真拖动走徽标）
+        e.stopPropagation()
+      })
+      document.body.appendChild(orb)
+    }
+    orb.hidden = false
+    const lvl = ctxPressureLevel(pct)
+    orb.className = `ctx-orb lv-${lvl}`
+    const clamped = Math.max(0, Math.min(100, pct))
+    orb.style.setProperty('--pct', String(clamped))
+    // ★ 球心百分比数字（2026-10-20 用户四修：球里要有数字）。
+    //   两位/三位字号不同（见 CSS [data-long]），100% 时收一档防溢出。
+    if (pct >= 100) orb.dataset.full = '1'
+    else delete orb.dataset.full
+    if (String(Math.round(clamped)).length >= 3) orb.dataset.long = '1'
+    else delete orb.dataset.long
+    const num = orb.querySelector('.ctx-orb-num')
+    if (num) num.textContent = `${Math.round(clamped)}%`
+    orb.title = `DSH 上下文占用 ${pct}%` +
+      (pct >= 70 ? '（快满了，建议 /compact 压缩上下文）' : '')
+    orb.setAttribute('aria-label', `DSH 上下文占用 ${pct}%`)
+    // 徽标本体若被用户关掉了，球也别单独飘着（它是徽标的附属信息）
+    if (box && box.style.opacity === '0') orb.style.display = 'none'
+    else orb.style.display = ''
+    updateCtxOrbPosition(true)
+  }
+
+  /** 小球跟随徽标右缘：徽标在头顶居中、球贴它右侧，gap 6px。 */
+  function updateCtxOrbPosition(force = false) {
+    const orb = document.getElementById('ctx-orb')
+    const badge = document.getElementById('agent-badge')
+    if (!orb || orb.hidden || !badge) return
+    const now = performance.now()
+    if (!force && now - lastCtxOrbPosAt < 80) return
+    lastCtxOrbPosAt = now
+    // 徽标本体被关掉 / 不在 DOM 里 → 球一起收起来
+    if (badge.style.opacity === '0' || !badge.isConnected) { orb.style.display = 'none'; return }
+    orb.style.display = ''
+    const r = badge.getBoundingClientRect()
+    // ★ chip 全空时徽标宽高为 0（offline 瞬间）：此时**沿用上次算好的位置**，
+    //   既不跳回左上角也不重新排列，球原地不动 —— 这是"偶发丢失"里最隐蔽的一条。
+    if (!r.width || !r.height) {
+      if (lastCtxOrbPos) {
+        orb.style.left = `${lastCtxOrbPos.left}px`
+        orb.style.top = `${lastCtxOrbPos.top}px`
+      }
+      return
+    }
+    const size = 26   // ⚠ 必须与 CSS .ctx-orb 的 width/height 一致（改一处记得改另一处）
+    const gap = 6
+    const margin = 4
+    let left = r.right + gap
+    let top = r.top + (r.height - size) / 2
+    // 右边贴屏幕时翻到徽标左侧，避免球被裁掉
+    if (left + size > window.innerWidth - margin) left = r.left - gap - size
+    left = Math.max(margin, Math.min(window.innerWidth - size - margin, left))
+    top = Math.max(margin, Math.min(window.innerHeight - size - margin, top))
+    lastCtxOrbPos = { left: Math.round(left), top: Math.round(top) }
+    orb.style.left = `${lastCtxOrbPos.left}px`
+    orb.style.top = `${lastCtxOrbPos.top}px`
+  }
+
   function renderAgentBadge() {
     if (!agentBadgeEnabled()) {
       const badge = document.getElementById('agent-badge')
@@ -1920,7 +2081,11 @@
       } else {
         label = PHASE_LABELS[phase] || phase
       }
-      chips.push({ id, name: String(st.name || id), label, phase, accent: st.accent || '' })
+      chips.push({
+        id, name: String(st.name || id), label, phase, accent: st.accent || '',
+        // A2 上下文压力（仅进 tooltip，不占横条/徽标文字）
+        ctx: typeof st.ctx_pressure === 'number' ? st.ctx_pressure : null,
+      })
     })
     badge.replaceChildren()
     for (const chip of chips) {
@@ -1936,12 +2101,29 @@
         el.style.borderColor = accent + '66'
       }
       el.textContent = `${chip.name} · ${chip.label}`
-      el.title = `${chip.name} · ${chip.label}`
+      el.title = `${chip.name} · ${chip.label}` +
+        (chip.ctx !== null ? `｜上下文 ${chip.ctx}%` : '')
       badge.appendChild(el)
     }
+    // ★ A2 上下文占用小球：**已解耦**成独立节点（见 renderCtxOrb 注释）。
+    //   这里只负责把最新数值喂给它；chips 为空/离线时球也不会被连带清掉。
+    const ctxPct = (() => {
+      let best = null
+      for (const c of chips) {
+        if (c.ctx === null) continue
+        if (best === null || c.ctx > best) best = c.ctx
+      }
+      return best
+    })()
+    // 有值才更新；没值则**沿用上一次**（lastCtxPct），不让球因瞬时空值消失
+    if (ctxPct !== null) lastCtxPct = ctxPct
+    if (lastCtxPct !== null) renderCtxOrb(lastCtxPct)
     const visible = chips.length > 0
     badge.style.opacity = visible ? '1' : '0'
     if (visible) updateAgentBadgePosition(true)
+    // ★ chip 全没了（offline/断线瞬间）但小球仍在 → 用徽标最后已知位置继续贴边，
+    //   不能因为 `if (visible)` 跳过定位而让球停在旧坐标或消失（用户报的"偶发丢失"之一）。
+    updateCtxOrbPosition(true)
     // 兼容旧引用（右键菜单重新开启徽标时恢复展示）
     window.__lastAgentBadgeText = chips.map((c) => `${c.name} · ${c.label}`).join('，')
   }
@@ -1988,6 +2170,8 @@
     }
     badge.style.left = `${lastAgentBadgePos.left}px`
     badge.style.top = `${lastAgentBadgePos.top}px`
+    // ★ 徽标动了 → 小球同步（它是独立节点，不随徽标 DOM 一起移动）
+    updateCtxOrbPosition()
   }
 
   // 只展示"工作中"的细分状态；连接/断连/待机/完成等不打扰
@@ -1998,12 +2182,15 @@
   function applyAgentPhase(payload) {
     if (!payload) return
     const agentId = String(payload.agent_id || '')
+    // B3 试演事件：只驱动身体（动作/表情/音效），**不进**徽标状态表、不污染
+    // lastActiveAgentId（否则会留一个常驻「试演」徽标、下次真 agent 心跳误响"换人"音）。
+    const previewOnly = agentId === 'phase-preview'
     const phase = String(payload.phase || 'idle')
     const agentName = String(payload.agent_name || payload.agent_id || 'Agent')
     const active = Boolean(payload.active)
     // 实时刷新对应 agent 的状态 chip（多 agent 各自更新，互不覆盖）
     let prevPhaseBefore = ''
-    if (agentId) {
+    if (agentId && !previewOnly) {
       const prev = agentBadgeStates.get(agentId) || {}
       prevPhaseBefore = String(prev.phase || '')
       agentBadgeStates.set(agentId, {
@@ -2018,6 +2205,11 @@
         // 长任务提醒按 (agentId|phase|since) 去重，所以这个字段必须"粘住"——
         // 每次心跳都刷成 now 的话，25 分钟阈值永远到不了。
         since: prev.phase === phase ? (Number(prev.since) || Date.now()) : Date.now(),
+        // A2 上下文压力：总线 state.ctx_pressure（后端 _sanitize_state 收整数百分比）。
+        // 没带（老后端/边车驱动/读不到投影）→ 继承旧值，不让 tooltip 忽有忽无。
+        ctx_pressure: Number.isFinite(Number(payload.state && payload.state.ctx_pressure))
+          ? Number(payload.state.ctx_pressure)
+          : (typeof prev.ctx_pressure === 'number' ? prev.ctx_pressure : null),
       })
     }
     renderAgentBadge()
@@ -2025,8 +2217,8 @@
     if (active) {
       activityIndicator.title = `${agentName} · ${label}`
     }
-    // A 档音效：Agent 交接（活跃者换人）时给一声"换人了"，只在真的换手时响
-    if (active && lastActiveAgentId && agentId && lastActiveAgentId !== agentId) {
+    // A 档音效：Agent 交接（活跃者换人）时给一声"换人了"，只在真的换手时响（试演不算）
+    if (active && !previewOnly && lastActiveAgentId && agentId && lastActiveAgentId !== agentId) {
       petSound('switch')
     }
     // 音效事件：提问 / 授权 / 任务结束 / 异常（只在**相位真的变化**时响，避免重复轰炸）
@@ -2038,7 +2230,7 @@
       else if (phase === 'error' && prevPhase !== 'error') petSound('error')
       else if ((phase === 'complete' || phase === 'idle') && workPhases.includes(prevPhase)) petSound('task_end')
     }
-    if (active && agentId) lastActiveAgentId = agentId
+    if (active && agentId && !previewOnly) lastActiveAgentId = agentId
     // 多 agent 并行时，只有当前活跃者驱动桌宠"身体"（表情/动作），互不抢占
     if (!active) return
     const activity = PHASE_TO_ACTIVITY[phase]
@@ -2050,7 +2242,8 @@
 
     // ★ 「相位真的变了」才算新的一次状态表现。DSH 会按 REEMIT_MS(2s) 重发同一相位，
     //   若不区分，动作去抖会把每次重发都当成新事件（要么反复重播、要么全被吞掉）。
-    const faceKey = `${agentId}:${phase}`
+    //   B3 试演（管理页「试演」按钮）带逐次递增的 nonce → 连点同一状态也重播。
+    const faceKey = `${agentId}:${phase}:${Number(payload.nonce) || 0}`
     const phaseChanged = faceKey !== lastPhaseFaceKey
     lastPhaseFaceKey = faceKey
 
@@ -2098,6 +2291,11 @@
         accent: prev.accent || '',
         // 状态变更（online/offline/启用）不该重置长任务计时：phase 没变就沿用 since
         since: Number(prev.since) || Date.now(),
+        // ★ A2（2026-10-20 三修）：**必须继承** ctx_pressure。
+        //   漏了这一行 ⇒ 任何一次 agent_status 广播（上线/离线/启停/WS 重连）
+        //   都会把已拿到的上下文压力抹掉，小球随即消失 —— 正是用户报的"偶发丢失"。
+        //   agent_status 载荷里没有该字段，所以只能从 prev 继承。
+        ctx_pressure: typeof prev.ctx_pressure === 'number' ? prev.ctx_pressure : null,
       })
     }
     renderAgentBadge()
@@ -2132,6 +2330,10 @@
           // 插件身份色：来自总线快照（插件 register 时自己声明的）
           accent: String(a.accent || ''),
           since: prev.phase === phase ? (Number(prev.since) || Date.now()) : Date.now(),
+          // A2：快照的 to_dict() 带 state，同路继承 ctx_pressure（拿不到沿用本地旧值）
+          ctx_pressure: Number.isFinite(Number(a.state && a.state.ctx_pressure))
+            ? Number(a.state.ctx_pressure)
+            : (typeof prev.ctx_pressure === 'number' ? prev.ctx_pressure : null),
         })
       }
       agentBadgeStates.clear()
@@ -2212,8 +2414,18 @@
           }
         }
         // 全局 UI 主题：theme 皮肤据此推导调色板（主界面换主题，气泡跟着换）
-        if (Object.prototype.hasOwnProperty.call(nextSettings, 'ui_theme') && typeof bs.setUiTheme === 'function') {
-          try { bs.setUiTheme(nextSettings.ui_theme, [speechBubble, stripEl]) }
+        if ((Object.prototype.hasOwnProperty.call(nextSettings, 'ui_theme')
+          || Object.prototype.hasOwnProperty.call(nextSettings, 'ui_theme_custom_bg')
+          || Object.prototype.hasOwnProperty.call(nextSettings, 'ui_theme_custom_accent')
+          || Object.prototype.hasOwnProperty.call(nextSettings, 'ui_theme_custom_ink')) && typeof bs.setUiTheme === 'function') {
+          // 自定义主题：把三色一并传给皮肤模块（pet-bubble-styles 里并入 UI_THEMES.custom）；
+          // 脏值由皮肤模块的 hex 校验兜底，这里不做二次校验。
+          const customPalette = {
+            bg: nextSettings.ui_theme_custom_bg,
+            ink: nextSettings.ui_theme_custom_ink,
+            accent: nextSettings.ui_theme_custom_accent,
+          }
+          try { bs.setUiTheme(nextSettings.ui_theme, [speechBubble, stripEl], customPalette) }
           catch (err) { console.warn('[mio] 主题联动失败', err) }
         }
       }
@@ -2494,6 +2706,89 @@
     return true
   }
 
+  /**
+   * 播放 Agent 发来的音频（点歌的 mp3 / 语音片段）。
+   *
+   * 设计取舍：
+   *   · **不经过 TTS 通路**：这是"已经合成好的音频"，直接播原文件，不走 /voice/stream。
+   *     （顺带说明：本仓库按裁决 D1 没有 TTS 服务，`/api/companion/voice/stream` 在后端
+   *      根本不存在；语音播放链路目前是断的。点歌走这条新通路，不依赖不存在的接口。）
+   *   · 复用 currentAudio / voice_volume / analyser：音量设置、口型取频谱都跟说话一致。
+   *   · 播放期间气泡显示"正在播放：<歌名>"，用身份色，且**不会**被 DSH 的工具播报顶掉
+   *     （跨身份抢占保护已经在 showSpeechBubble 里做了）。
+   *   · `audio_autoplay: false` 时不自动出声，只在气泡里提示一句 —— 尊重"别突然放歌"。
+   */
+  function playAgentAudio(payload) {
+    const url = String(payload?.url || '')
+    const agentId = String(payload?.agent_id || '')
+    const accent = String(payload?.accent || '')
+    const title = String(payload?.display || payload?.filename || '音频')
+    const label = `♪ 正在播放：${title}`
+    if (!url) return false
+
+    applyBubbleAgentAccent(agentId, accent)
+
+    if (settings.audio_autoplay === false) {
+      showSpeechBubble(`${label}（自动播放已关闭）`, 5000, String(payload?.response_id || ''), agentId, accent)
+      return false
+    }
+
+    try {
+      // 先把上一段（说话 or 上一首歌）停掉，避免两路同时出声
+      if (voiceLifecycleActive || currentAudio || streamPlaybackActive) stopSpeech('interrupted')
+    } catch (_) {}
+
+    // 用 AudioContext 播放，才能接 analyser 做口型；失败时退回普通 <audio>
+    const finish = () => {
+      currentActivity = 'idle'
+      agentAudioPlaying = null
+      if (!speechBubble.hidden) {
+        window.clearTimeout(speechBubbleHideTimer)
+        speechBubbleHideTimer = window.setTimeout(hideSpeechBubble, 2200)
+      }
+    }
+    try {
+      const audio = new Audio(url)
+      audio.volume = Math.max(0, Math.min(1, Number(settings.voice_volume || 85) / 100))
+      audioContext = audioContext || new AudioContext()
+      if (audioContext.state === 'suspended') void audioContext.resume()
+      analyser = audioContext.createAnalyser()
+      analyser.fftSize = 256
+      analyser.smoothingTimeConstant = 0.42
+      analyserData = new Uint8Array(analyser.fftSize)
+      const source = audioContext.createMediaElementSource(audio)
+      source.connect(analyser)
+      analyser.connect(audioContext.destination)
+      currentAudio = audio
+      currentAudioUrl = ''
+      agentAudioPlaying = { title, agentId }
+      currentActivity = 'speaking'
+      audio.onended = finish
+      audio.onerror = () => {
+        lastSpeechError = '点歌音频播放失败'
+        finish()
+      }
+      showSpeechBubble(label, 0, String(payload?.response_id || ''), agentId, accent)
+      void audio.play().catch(() => finish())
+      return true
+    } catch (error) {
+      // AudioContext 不可用（无音频设备/被策略拦）→ 退回最朴素的播放
+      try {
+        const audio = new Audio(url)
+        audio.volume = Math.max(0, Math.min(1, Number(settings.voice_volume || 85) / 100))
+        currentAudio = audio
+        agentAudioPlaying = { title, agentId }
+        audio.onended = finish
+        showSpeechBubble(label, 0, String(payload?.response_id || ''), agentId, accent)
+        void audio.play().catch(() => finish())
+        return true
+      } catch (_) {
+        showSpeechBubble(`音频播放失败：${title}`, 5000, '', agentId, accent)
+        return false
+      }
+    }
+  }
+
   function clearStreamingAudio() {
     for (const source of streamSources) {
       source.onended = null
@@ -2543,11 +2838,11 @@
     activeSpeechPriority = -1
     activeSpeechText = ''
     if (['finished', 'error'].includes(reason) && !speechBubble.hidden) {
+      // ★ 2026-10-22 用户裁决：气泡**统一 3 秒后消失**。
+      //   这里以前按 settings.bubble_seconds（默认 9s）重设计时器，
+      //   于是"说完话"之后气泡又续命 9 秒 —— 这就是"3 秒没有自行消失"的来源。
       window.clearTimeout(speechBubbleHideTimer)
-      speechBubbleHideTimer = window.setTimeout(
-        hideSpeechBubble,
-        Math.max(1000, Math.min(30000, Number(settings.bubble_seconds || 9) * 1000)),
-      )
+      speechBubbleHideTimer = window.setTimeout(hideSpeechBubble, 3000)
     } else {
       hideSpeechBubble()
     }
@@ -3021,6 +3316,38 @@
         // 与 agent_bubble 的分工：agent_bubble = "说一句完整的话"（气泡自己按字均速
         // 打字机）；agent_stream = "把上游逐块交来的正文按上游节奏铺开"。
         applyAgentStream(payload)
+      } else if (message.type === 'agent_image') {
+        // Agent 发来的图片（大肥鱼表情包等）：显示在气泡里。
+        // ★ 2026-10-22 修正：以前无条件走 showImageInBubble()，而那个函数是给
+        //   "点击互动的随机图"用的 —— 它会固定 3 秒后自动消失、且沿用点击互动的身份色。
+        //   结果是大肥鱼发的表情包**3 秒就没了**、颜色也不对。
+        //   现在"带 agent_id 的图片"= 某位 Agent 说的话的一部分：
+        //   走气泡身份色 + 用 payload.hold_ms 决定停留时长，不再 3 秒自毁。
+        const imgAgentId = String(payload.agent_id || '')
+        const imgAccent = String(payload.accent || '')
+        const imgHold = Number(payload.hold_ms) || 0
+        if (imgAgentId) {
+          applyBubbleAgentAccent(imgAgentId, imgAccent)
+          showImageInBubble({
+            url: payload.url,
+            mtime: Date.now(),
+            responseId: String(payload.response_id || messageResponseId(payload) || ''),
+            holdMs: imgHold > 0 ? imgHold : 8000,
+            fallbackText: String(payload.text || ''),
+            fallbackAccent: imgAccent,
+            fallbackAgentId: imgAgentId,
+          })
+        } else {
+          // 无身份的图片 = 旧的点击互动通路，行为保持不变
+          showImageInBubble({ url: payload.url, mtime: Date.now() })
+        }
+      } else if (message.type === 'agent_audio') {
+        // ★ 点歌 / 语音：大肥鱼把音频发过来了，桌宠**直接播出来**。
+        //   来源：AstrBot 的 astrbot_plugin_music 在"单曲模式"下会把歌当 `[FILE]xxx.mp3` 发回，
+        //   后端下载成 data: URL 后经 agent_audio 推过来（见 companion.py 的 audio_attachments）。
+        //   播放器复用桌宠自己那套（currentAudio + 音量设置），所以"关掉语音"时不会突然出声；
+        //   口型/波形分析也一并接上，和正常说话一样有嘴型。
+        playAgentAudio(payload)
       } else if (message.type === 'agent_strip') {
         // 7.6 横条（DSH 流式提示专用窗位）——**独立于气泡的第三条通路**。
         // 走核心 API `window.__mioPetStrip`，渲染端不直接改 DOM。
@@ -3138,6 +3465,11 @@
     if (agentBadgeButton) {
       agentBadgeButton.textContent = agentBadgeEnabled() ? '隐藏状态徽标' : '显示状态徽标'
     }
+    // A2 上下文占用药丸：只控制"压力数字"，与整块状态徽标分开开关
+    if (ctxMeterButton) {
+      ctxMeterButton.textContent = ctxMeterEnabled() ? '隐藏上下文占用' : '显示上下文占用'
+      ctxMeterButton.hidden = !agentBadgeEnabled()   // 徽标本体都隐藏时，这个子项没有意义
+    }
   }
 
   let lastBubblePos = null
@@ -3164,10 +3496,34 @@
         margin,
         Math.min(window.innerWidth - bubbleBounds.width - margin, useLeftSide ? fallbackLeft : preferredLeft),
       )
-      const top = Math.max(
+      let top = Math.max(
         margin,
         Math.min(window.innerHeight - bubbleBounds.height - margin, bounds.y + bounds.height * 0.1 - bubbleBounds.height),
       )
+      // ★ 避让 Agent 徽标（2026-10-22 实测：气泡盖住了「DSH · 执行工具」这枚 chip）。
+      //   徽标默认钉在模型头顶上方，气泡默认钉在模型 10% 高度处，两者在"模型被缩小/
+      //   图片气泡较高"时会重叠。这里检测矩形相交，把气泡**上移**到徽标之上；
+      //   上面放不下就下移到徽标之下，都放不下才保持原位（宁可重叠也别跑到屏幕外）。
+      const badgeEl = document.getElementById('agent-badge')
+      if (badgeEl && badgeEl.style.opacity !== '0') {
+        const badgeRect = badgeEl.getBoundingClientRect()
+        const bubbleRect = { left, top, right: left + bubbleBounds.width, bottom: top + bubbleBounds.height }
+        const overlaps = !(
+          bubbleRect.right <= badgeRect.left
+          || bubbleRect.left >= badgeRect.right
+          || bubbleRect.bottom <= badgeRect.top
+          || bubbleRect.top >= badgeRect.bottom
+        )
+        if (overlaps) {
+          const above = badgeRect.top - bubbleBounds.height - 6
+          const below = badgeRect.bottom + 6
+          if (above >= margin) {
+            top = above
+          } else if (below + bubbleBounds.height <= window.innerHeight - margin) {
+            top = below
+          }
+        }
+      }
       lastBubblePos = { left: Math.round(left), top: Math.round(top), useLeftSide }
     }
     speechBubble.style.left = `${lastBubblePos.left}px`
@@ -3193,9 +3549,43 @@
     }
   }
 
+  /**
+   * 当前气泡是否正在"说一句完整的话"（用来决定要不要让位给别的身份）。
+   * 判据很保守，只拦"正在打字 / 打完了还在停留"这两种：
+   *   · 正在打字机输出（还有字没铺完）→ 被顶掉会看到半句话；
+   *   · 打完了但还挂着（有停留计时器）→ 是刚说的一句话，别立刻顶。
+   * 图片气泡（image-mode）**不算**：它已经展示够久了，允许被文字顶掉。
+   */
+  function bubbleIsSpeakingNowFor(agentId) {
+    if (!speechBubble || speechBubble.hidden) return false
+    if (String(speechBubble.dataset.agentId || '') !== String(agentId || '')) return false
+    if (speechBubble.classList.contains('image-mode')) return false
+    const typing = speechBubbleVisibleCount < speechBubbleCharacterCount
+    const holding = Boolean(speechBubbleHideTimer)
+    return typing || holding
+  }
+
   function showSpeechBubble(text, durationMs = 0, responseId = '', agentId = '', accent = '') {
     if (settings.live2d_speech_bubble_enabled === false || !String(text || '').trim()) {
       hideSpeechBubble()
+      return
+    }
+    // ★ 气泡抢占保护（2026-10-22 实测踩到）：DSH 会在工具执行期间每 2 秒播报一次
+    //   「正在用 pwsh 干活…」，而同一时刻大肥鱼可能正在说一句**重要的话**
+    //   （她的回复 / 图片附件的说明）。工具播报把她的文字瞬间顶掉后，
+    //   界面上就只剩"正在用 pwsh 干活…"——用户以为她的话没显示出来。
+    //   规则：**同一身份**可以互相打断（她说新话当然要顶掉旧的）；
+    //         **跨身份**时，若当前气泡正在说一句完整的话，就不让工具播报抢。
+    //   注意不能用"谁更重要"的等级表：这里只有一个判据——对方是不是工具播报。
+    const incomingAgent = String(agentId || '')
+    const currentAgent = String(speechBubble.dataset.agentId || '')
+    if (
+      !speechBubble.hidden
+      && incomingAgent
+      && currentAgent
+      && incomingAgent !== currentAgent
+      && bubbleIsSpeakingNowFor(currentAgent)
+    ) {
       return
     }
     // 别的来源（插件气泡/点击互动/唤醒词）要用这个框了：先中断流式会话，
@@ -3225,12 +3615,58 @@
     speechBubble.style.width = `${Math.max(72, Math.min(260, measuredWidth))}px`
     speechBubbleText.textContent = ''
     speechBubble.style.visibility = ''
+    // ★ 气泡文字**整段直接出现**（2026-10-22 用户裁决，第三次调整）。
+    //   演进：180ms/字（太慢，40 字要 7 秒）→ 28ms + 每次 2~6 字（仍能看到"爬字"）
+    //         → **取消打字机，一次性铺满**。
+    //   理由：气泡是"看一眼就走"的界面，逐字动画只会拖慢阅读；
+    //   真正的打字质感由流式（agent_stream）提供，不该把已经完整的文本再慢慢吐一遍。
+    speechBubbleText.textContent = characters.join('')
+    speechBubbleText.scrollTop = speechBubbleText.scrollHeight
+    speechBubbleVisibleCount = characters.length
+    speechBubbleCharacterCount = characters.length
+    updateSpeechBubblePosition(true)
+    // 停留时长（2026-10-22 用户裁决：**3 秒后自动消失**）。
+    // 以前：有 duration_ms 才定时、没有就常驻等调用方来收 ——
+    // 结果长回复会一直挂在桌面上挡视线。现在**必须有上限**：
+    //   · 调用方给了 duration_ms → 用它（后端现在给 3000）
+    //   · 没给 → 兜底 3 秒
+    const holdMs = Number(durationMs) > 0 ? Number(durationMs) : 3000
+    speechBubbleHideTimer = window.setTimeout(hideSpeechBubble, Math.max(1200, holdMs))
+  }
+
+  function _legacyTypingBubble(text, durationMs, responseId, agentId, accent) {
+    if (settings.live2d_speech_bubble_enabled === false || !String(text || '').trim()) {
+      hideSpeechBubble()
+      return
+    }
+    cancelAgentStream()
+    applyBubbleAgentAccent(agentId, accent)
+    speechBubble.classList.remove('image-mode')
+    const normalizedResponseId = String(responseId || '')
+    const normalizedText = String(text).trim()
+    speechBubbleResponseId = normalizedResponseId
+    window.clearTimeout(speechBubbleTimer)
+    window.clearTimeout(speechBubbleHideTimer)
+    speechBubbleHideTimer = null
+    const characters = Array.from(normalizedText)
+    speechBubbleCharacterCount = characters.length
+    speechBubbleVisibleCount = 0
+    speechBubble.style.width = ''
+    speechBubble.style.visibility = 'hidden'
+    speechBubbleText.textContent = characters.join('')
+    speechBubble.hidden = false
+    const measuredWidth = Math.ceil(speechBubble.getBoundingClientRect().width)
+    speechBubble.style.width = `${Math.max(72, Math.min(260, measuredWidth))}px`
+    speechBubbleText.textContent = ''
+    speechBubble.style.visibility = ''
+    const perTick = characters.length <= 12 ? 2 : characters.length <= 40 ? 3 : characters.length <= 90 ? 5 : 6
     const intervalMs = Number(durationMs) > 0
-      ? Math.max(55, Math.min(240, Number(durationMs) * 0.92 / Math.max(1, characters.length)))
-      : 180
+      ? Math.max(16, Math.min(90, (Number(durationMs) * 0.92) / Math.max(1, characters.length / perTick)))
+      : 28
     const revealNext = () => {
       if (speechBubble.hidden || settings.live2d_speech_bubble_enabled === false) return
-      speechBubbleVisibleCount += 1
+      // 每次多吐几个字（上面算好的 perTick）
+      speechBubbleVisibleCount = Math.min(characters.length, speechBubbleVisibleCount + perTick)
       speechBubbleText.textContent = characters.slice(0, speechBubbleVisibleCount).join('')
       speechBubbleText.scrollTop = speechBubbleText.scrollHeight
       updateSpeechBubblePosition(true)
@@ -3257,6 +3693,14 @@
     speechBubble.style.width = ''
     speechBubble.classList.remove('image-mode')
     speechBubbleText.textContent = ''
+    // ★ 必须清掉图片的 src（2026-10-22 修）：以前只移除 image-mode 类、不清 src，
+    //   一旦显示过图片，气泡里就一直挂着**上一张图**；下次来文字时 image-mode 被加回去，
+    //   文字气泡会突然变成旧图 —— 用户看到的就是"说明明在说话却显示上一张表情包"。
+    const bubbleImg = document.getElementById('speech-bubble-img')
+    if (bubbleImg) {
+      bubbleImg.removeAttribute('src')
+      bubbleImg.hidden = true
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -3468,14 +3912,42 @@
     window.clearTimeout(speechBubbleTimer)
     window.clearTimeout(speechBubbleHideTimer)
     speechBubbleHideTimer = null
-    speechBubbleResponseId = `click-image-${Date.now()}`
+    // entry.responseId 存在 = 这条图属于某位 Agent 的回复（不是点击互动），
+    // 用它的 id 归到同一条气泡，避免和该 Agent 的文字气泡互相打断。
+    const isAgentImage = Boolean(String(entry.responseId || ''))
+    speechBubbleResponseId = isAgentImage
+      ? String(entry.responseId)
+      : `click-image-${Date.now()}`
     speechBubble.classList.add('image-mode')
-    imgEl.src = entry.url + '?v=' + String(entry.mtime || Date.now())
+    // ★ 2026-10-22 修「图片显示、文字气泡消失」的第二步：
+    //   entry.fallbackText 是"这一轮她说的那句话"，以前**传进来了却完全没用**
+    //   （showSpeechBubble 已经先显示过文字，这里再切图就把文字覆盖成空）。
+    //   现在把文字写回气泡，与图片**同时显示**（CSS 那边也已放开通配）。
+    const imgText = String(entry.fallbackText || '').trim()
+    if (imgText) {
+      speechBubbleText.textContent = imgText
+      speechBubbleCharacterCount = Array.from(imgText).length
+      speechBubbleVisibleCount = Array.from(imgText).length
+      speechBubble.removeAttribute('data-empty-text')
+    } else {
+      // 纯图（点击互动 / 她只发图不说话）：把文字清空，让 CSS 收掉那一行
+      speechBubbleText.textContent = ''
+      speechBubble.setAttribute('data-empty-text', '1')
+    }
+    // data: URL / blob: 不能再拼 ?v=，否则 src 直接失效（大肥鱼发的图就是 data: URL）
+    const rawUrl = String(entry.url)
+    const cacheSafe = /^(data:|blob:)/i.test(rawUrl)
+    imgEl.src = cacheSafe ? rawUrl : rawUrl + '?v=' + String(entry.mtime || Date.now())
     speechBubble.style.width = '232px'
     speechBubble.hidden = false
     updateSpeechBubblePosition(true)
-    // 点击触发的图片 3s 自动消失（用户裁决：不要一直挂着）
-    speechBubbleHideTimer = window.setTimeout(hideSpeechBubble, 3000)
+    // 气泡停留（2026-10-22 用户裁决最终版：**显示完 3 秒就消失**）。
+    // 演进：点击图 3s → Agent 图按 holdMs(6~30s) → 图3s后切文字再停3s（共6s）
+    //      → **现在统一 3 秒收掉，不再做"图→文字"的接力**。
+    // 为什么去掉接力：用户要的是"看一眼就走"，一段 6 秒的连环展示反而要等两轮；
+    // 文字本身已经在对话界面完整保留，不需要在气泡里再念一遍。
+    const baseHold = isAgentImage ? (Number(entry.holdMs) > 0 ? Number(entry.holdMs) : 3000) : 3000
+    speechBubbleHideTimer = window.setTimeout(hideSpeechBubble, Math.max(1200, baseHold))
   }
 
   async function showClickTalk() {
@@ -3775,9 +4247,24 @@
       const vh = Number(virtual.height) || window.innerHeight
       const marginX = Math.min(72, Math.max(32, vw * 0.08))
       const marginY = Math.min(96, Math.max(48, vh * 0.1))
-      // 完全放开上下与水平限位：位置原样保存，不做任何回弹
-      const nextX = Math.round(interaction.positionX + dx)
-      const nextY = Math.round(interaction.positionY + dy)
+      // 完全放开上下与水平限位：位置原样保存，不做任何回弹（B2 开关开启时夹回 workArea 并集）
+      //
+      // ⚠ 2026-10-20 修「桌宠拖走一会儿自己弹回默认位置」：
+      //   这里原写法是 `;({ x: nextX, y: nextY } = clampPositionToWorkarea(...))`，
+      //   但外层作用域**没有**声明 nextX/nextY —— 严格模式下抛
+      //   `ReferenceError: nextX is not defined`，落在 async 函数里就是一条 unhandled rejection：
+      //     · settings.position_x/y 没更新 → PATCH /position 从未发出（位置根本没存盘，回默认值 80,420）
+      //     · sendSocket('dragged') 没发
+      //     · 后面的拖拽惯性整段被跳过
+      //   而拖动过程中 model.x/y 已经实时改过 ⇒ 视觉上"拖过去了"，下一轮 pollStatus(5s)
+      //   的 fitModel() 又按 settings 里**没更新的旧位置**重算 ⇒ 表现为"过一会自动回到默认位置"。
+      //   现在改用局部 const 声明，和旧语义（无 B2 时）逐字等价。
+      const next = clampPositionToWorkarea(
+        Math.round(interaction.positionX + dx),
+        Math.round(interaction.positionY + dy),
+      )
+      const nextX = next.x
+      const nextY = next.y
       settings.position_x = nextX
       settings.position_y = nextY
       request('/api/companion/position', {
@@ -3808,9 +4295,13 @@
           if (Math.hypot(vx, vy) > minV) {
             inertiaRaf = requestAnimationFrame(step)
           } else {
-            // 停稳：把最终位置写回后端（覆盖上面"松手即存"的中间值）
-            const fx = Math.round((interaction.positionX + (model.x - (interaction.modelX || 0))) || 0)
-            const fy = Math.round((interaction.positionY + (model.y - (interaction.modelY || 0))) || 0)
+            // 停稳：把最终位置写回后端（覆盖上面"松手即存"的中间值）；B2 开启时夹回 workArea 并集
+            const clamped = clampPositionToWorkarea(
+              Math.round((interaction.positionX + (model.x - (interaction.modelX || 0))) || 0),
+              Math.round((interaction.positionY + (model.y - (interaction.modelY || 0))) || 0),
+            )
+            const fx = clamped.x
+            const fy = clamped.y
             settings.position_x = fx
             settings.position_y = fy
             request('/api/companion/position', {
@@ -4096,6 +4587,13 @@
         renderAgentBadge()
       }
     }
+    // ★ A2 上下文占用开关（2026-10-20）：纯本机显示偏好，只重渲染徽标，不碰后端设置。
+    if (action === 'ctx-meter') {
+      const nowEnabled = !ctxMeterEnabled()
+      localStorage.setItem('mio_ctx_meter_enabled', nowEnabled ? '1' : '0')
+      updateContextMenuLabels()
+      renderAgentBadge()
+    }
     if (action === 'agent') await bridge.open_agent()
     if (action === 'close') await bridge.close_pet()
     updateMousePassThrough(true, event)
@@ -4298,6 +4796,8 @@
     await waitForBridge()
     if (electronRuntime) {
       desktopState = await window.mioDesktop.getState()
+      // ★ B2 多屏 workArea 并集：老版主进程没有 workArea 键 → 回落 bounds（行为同旧）。
+      if (!desktopState.workArea) desktopState.workArea = desktopState.bounds
       mergeImportedModels(desktopState)
       window.mioDesktop.onModelsChanged(async (payload) => {
         mergeImportedModels(payload)
@@ -4629,6 +5129,43 @@
     let hideTimer = null
     let buffer = ''
 
+    // ── ★ B1 发送方标识（2026-10-19）：多会话并发时横条左上显示"谁在说" ──
+    // 追踪近 30s 内有流式内容的 session；只有 ≥2 个并发会话才亮标签（单会话零观感变化）。
+    // 颜色按 session id 哈希生成（亮度/饱和度定死，白底皮肤上可读），标签文本取 id 尾段短标识。
+    const senderEl = document.getElementById('pet-strip-sender')
+    const recentSessions = new Map() // sid -> lastSeenAt(ms)
+    const SESSION_TTL_MS = 30000
+    function sessionColor(sid) {
+      let h = 0
+      for (let i = 0; i < sid.length; i += 1) h = (h * 31 + sid.charCodeAt(i)) >>> 0
+      return `hsl(${h % 360} 62% 40%)`
+    }
+    function sessionLabel(sid) {
+      const s = String(sid || '')
+      const tail = s.split(/[-_:]/).filter(Boolean).pop()
+      return (tail || s).slice(0, 10)
+    }
+    function noteSession(sid) {
+      const s = String(sid || '').trim()
+      if (!s) return
+      const now = Date.now()
+      recentSessions.set(s, now)
+      for (const [k, t] of recentSessions) {
+        if (now - t > SESSION_TTL_MS) recentSessions.delete(k)
+      }
+    }
+    function updateSender(sid) {
+      noteSession(sid)
+      if (!senderEl) return
+      const s = String(sid || '').trim()
+      const multi = recentSessions.size > 1 && Boolean(s)
+      senderEl.hidden = !multi
+      if (!multi) return
+      senderEl.textContent = sessionLabel(s)
+      senderEl.style.setProperty('--sender-color', sessionColor(s))
+      senderEl.title = `会话 ${s}`
+    }
+
     function safe(fn, fallback) {
       try { return fn() } catch (_) { return fallback }
     }
@@ -4904,16 +5441,18 @@
           const o = opts || {}
           buffer = String(text == null ? '' : text)
           render()
+          updateSender(o.sessionId)   // ★ B1：多会话并发时亮发送方标签
           if (o.sticky) scheduleHide(0)
           else scheduleHide(o.durationMs == null ? 5000 : o.durationMs)
           return true
         }, false)
       },
-      append(token, _opts) {
+      append(token, opts) {
         return safe(() => {
           if (!canShow()) return false
           buffer += String(token == null ? '' : token)
           render()
+          if (opts && opts.sessionId) updateSender(opts.sessionId)  // ★ B1
           scheduleHide(0)
           return true
         }, false)

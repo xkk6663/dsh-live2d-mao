@@ -566,6 +566,19 @@ function virtualBounds() {
   return { x: left, y: top, width: right - left, height: bottom - top }
 }
 
+// ★ B2 多屏 workArea 并集（2026-10-19）：与 virtualBounds 的区别是**剔除任务栏**。
+//   渲染层的"可见下限/可选 clamp"用 workArea 才不会把桌宠压到任务栏底下；
+//   display-metrics-changed / display-added / removed 已有监听（renderer 每次拉
+//   get-state 都是现算值，无需推送通道）。
+function workAreaBounds() {
+  const displays = screen.getAllDisplays()
+  const left = Math.min(...displays.map((display) => display.workArea.x))
+  const top = Math.min(...displays.map((display) => display.workArea.y))
+  const right = Math.max(...displays.map((display) => display.workArea.x + display.workArea.width))
+  const bottom = Math.max(...displays.map((display) => display.workArea.y + display.workArea.height))
+  return { x: left, y: top, width: right - left, height: bottom - top }
+}
+
 function iconPath() {
   return app.isPackaged
     ? path.join(process.resourcesPath, 'desktop', 'mio.ico')
@@ -1053,7 +1066,7 @@ function createWindow() {
   setMouseInteractive(false)
   try { mainWindow.webContents.session.clearCache() } catch (_e) {}
   try { mainWindow.webContents.session.setCacheSizeLimit(0) } catch (_e) {}
-  mainWindow.loadURL(`${API_BASE}/agent-app/live2d-pet/index.html?runtime=electron&v=20261019-alive3`)
+  mainWindow.loadURL(`${API_BASE}/agent-app/live2d-pet/index.html?runtime=electron&v=20261020-orbnum`)
   log('window.load', `${API_BASE}/agent-app/live2d-pet/index.html`)
   // 主进程轮询鼠标位置驱动穿透/交互（不依赖渲染层 forward 转发）
   // 60ms ≈ 16Hz：穿透策略与视线跟随共用，兼顾响应度与开销
@@ -1127,6 +1140,7 @@ function registerIpc() {
   ipcMain.handle('mio-desktop:get-state', () => ({
     apiBase: API_BASE,
     bounds: virtualBounds(),
+    workArea: workAreaBounds(),
     models: modelCatalog(),
     selectedModelId: String(loadRuntimeState().selectedModelId || ''),
     clickThroughLocked,

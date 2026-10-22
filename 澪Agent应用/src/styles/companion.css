@@ -459,20 +459,114 @@
   --accent-soft: #f1e5d3;
   --surface-soft: #f9f4ec;
 }
+/* ★ 2026-10-19 AI 娘配色五款（与 App.vue THEME_OPTIONS / pet-bubble-styles UI_THEMES /
+   bubble-panel UI_THEME_DEFS / 后端 _normalize_ui_theme 同 id 同色）。 */
+.app-shell.theme-whale {
+  --app-bg: #e9eef8;
+  --sidebar-bg: rgb(246 249 253 / 96%);
+  --sidebar-active: #dce5f4;
+  --ink: #1d2b45;
+  --muted: #5f6f8f;
+  --line: #d7e0f0;
+  --line-strong: #c2cfe6;
+  --accent: #3f6ac4;
+  --accent-dark: #2d4f9a;
+  --accent-soft: #dfe8f8;
+  --surface-soft: #f2f5fb;
+}
+.app-shell.theme-miku {
+  --app-bg: #ecf7f5;
+  --sidebar-bg: rgb(244 251 249 / 96%);
+  --sidebar-active: #d8eee9;
+  --ink: #1f3a37;
+  --muted: #5d7a74;
+  --line: #d2e8e4;
+  --line-strong: #bddbd4;
+  --accent: #2fbdb3;
+  --accent-dark: #1f968d;
+  --accent-soft: #d9f2ee;
+  --surface-soft: #f0faf7;
+}
+.app-shell.theme-neuro {
+  --app-bg: #fdf0f6;
+  --sidebar-bg: rgb(254 247 250 / 96%);
+  --sidebar-active: #f7dfe9;
+  --ink: #3d2a34;
+  --muted: #836372;
+  --line: #f2dce6;
+  --line-strong: #e6c9d6;
+  --accent: #e8659b;
+  --accent-dark: #c74b7f;
+  --accent-soft: #fbdfec;
+  --surface-soft: #fdf4f8;
+}
+.app-shell.theme-qwen {
+  --app-bg: #f1eefa;
+  --sidebar-bg: rgb(248 246 254 / 96%);
+  --sidebar-active: #e6e0f8;
+  --ink: #2b2740;
+  --muted: #6b6488;
+  --line: #e2dcf4;
+  --line-strong: #cfc7ec;
+  --accent: #7a5af5;
+  --accent-dark: #5f41d6;
+  --accent-soft: #e8e2fb;
+  --surface-soft: #f5f2fd;
+}
+.app-shell.theme-doubao {
+  --app-bg: #eef4fd;
+  --sidebar-bg: rgb(245 249 255 / 96%);
+  --sidebar-active: #dfe9f9;
+  --ink: #1f2c48;
+  --muted: #5f6f8e;
+  --line: #d9e4f6;
+  --line-strong: #c3d3ef;
+  --accent: #4d6bfe;
+  --accent-dark: #3a53d6;
+  --accent-soft: #e0e8fd;
+  --surface-soft: #f2f6fe;
+}
+/* 自定义主题：theme_custom 三色由 App.vue 的 appThemeStyle 以内联 style 覆盖下面全部变量；
+   这里只给中性兜底（取值与 mist 邻近），保证"选了 custom 但取色器还没动"时不至于无从着色。 */
+.app-shell.theme-custom {
+  --app-bg: #e9eef0;
+  --sidebar-bg: rgb(246 249 250 / 96%);
+  --sidebar-active: #dce6e9;
+  --ink: #20303a;
+  --muted: #66787f;
+  --line: #d9e2e6;
+  --line-strong: #c4d1d7;
+  --accent: #4c8798;
+  --accent-dark: #38687a;
+  --accent-soft: #dfe9ec;
+  --surface-soft: #f1f5f6;
+}
 .app-shell.theme-mist,
 .app-shell.theme-clear,
 .app-shell.theme-rose,
 .app-shell.theme-forest,
 .app-shell.theme-sakura,
 .app-shell.theme-celadon,
-.app-shell.theme-amber { background-color: var(--app-bg); }
+.app-shell.theme-amber,
+.app-shell.theme-whale,
+.app-shell.theme-miku,
+.app-shell.theme-neuro,
+.app-shell.theme-qwen,
+.app-shell.theme-doubao,
+.app-shell.theme-custom { background-color: var(--app-bg); }
 .app-shell.theme-mist .sidebar,
 .app-shell.theme-clear .sidebar,
 .app-shell.theme-rose .sidebar,
 .app-shell.theme-forest .sidebar,
 .app-shell.theme-sakura .sidebar,
 .app-shell.theme-celadon .sidebar,
-.app-shell.theme-amber .sidebar { background: var(--sidebar-bg); }
+.app-shell.theme-amber .sidebar,
+.app-shell.theme-whale .sidebar,
+.app-shell.theme-miku .sidebar,
+.app-shell.theme-neuro .sidebar,
+.app-shell.theme-qwen .sidebar,
+.app-shell.theme-doubao .sidebar,
+.app-shell.theme-custom .sidebar { background: var(--sidebar-bg); }
 .app-shell.theme-mist .nav-item.active,
 .app-shell.theme-clear .nav-item.active,
 .app-shell.theme-rose .nav-item.active,
@@ -480,13 +574,25 @@
 .app-shell.theme-sakura .nav-item.active,
 .app-shell.theme-celadon .nav-item.active,
 .app-shell.theme-amber .nav-item.active,
+.app-shell.theme-whale .nav-item.active,
+.app-shell.theme-miku .nav-item.active,
+.app-shell.theme-neuro .nav-item.active,
+.app-shell.theme-qwen .nav-item.active,
+.app-shell.theme-doubao .nav-item.active,
+.app-shell.theme-custom .nav-item.active,
 .app-shell.theme-mist .sidebar-list-item.active,
 .app-shell.theme-clear .sidebar-list-item.active,
 .app-shell.theme-rose .sidebar-list-item.active,
 .app-shell.theme-forest .sidebar-list-item.active,
 .app-shell.theme-sakura .sidebar-list-item.active,
 .app-shell.theme-celadon .sidebar-list-item.active,
-.app-shell.theme-amber .sidebar-list-item.active { background: var(--sidebar-active); }
+.app-shell.theme-amber .sidebar-list-item.active,
+.app-shell.theme-whale .sidebar-list-item.active,
+.app-shell.theme-miku .sidebar-list-item.active,
+.app-shell.theme-neuro .sidebar-list-item.active,
+.app-shell.theme-qwen .sidebar-list-item.active,
+.app-shell.theme-doubao .sidebar-list-item.active,
+.app-shell.theme-custom .sidebar-list-item.active { background: var(--sidebar-active); }
 .app-shell.theme-rose .new-chat-button { background: #40363b; }
 .app-shell.theme-rose .new-chat-button:hover { background: #2f282c; }
 
@@ -674,9 +780,13 @@
 .live2d-resource-grid button:disabled { cursor: default; opacity: .45; }
 /* 任务状态绑定：一行 = 状态名 + 动作槽 + 表情槽（两个 select，无预览按钮，列宽单独定） */
 .live2d-phase-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; }
-.live2d-phase-grid label { display: grid; grid-template-columns: 56px minmax(0, 1fr) minmax(0, .85fr); align-items: center; gap: 6px; }
+.live2d-phase-grid label { display: grid; grid-template-columns: 56px minmax(0, 1fr) minmax(0, .85fr) auto; align-items: center; gap: 6px; }
 .live2d-phase-grid label > span { color: var(--muted); font-size: 11px; }
 .live2d-phase-grid select { width: 100%; min-width: 0; height: 31px; padding: 0 6px; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 5px; font-size: 11px; }
+/* ★ B3 任务状态「试演」按钮：小号次要按钮，不抢保存主按钮的视觉权重 */
+.live2d-phase-grid .phase-preview-btn { height: 26px; padding: 0 9px; font-size: 11px; color: var(--accent-dark, #315f70); background: var(--accent-soft, #e4eff2); border: 1px solid color-mix(in srgb, var(--accent, #4c8798) 35%, transparent); border-radius: 6px; cursor: pointer; white-space: nowrap; }
+.live2d-phase-grid .phase-preview-btn:hover { background: color-mix(in srgb, var(--accent, #4c8798) 16%, var(--surface, #fff)); }
+.live2d-phase-grid .phase-preview-btn:disabled { opacity: .55; cursor: default; }
 .live2d-resource-tip { color: var(--muted); font-size: 11px; }
 .settings-provider-panel { padding-bottom: 0; }
 .settings-provider-panel .provider-group-heading { background: var(--surface-soft); }

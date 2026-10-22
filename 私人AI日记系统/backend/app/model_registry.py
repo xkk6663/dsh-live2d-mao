@@ -631,6 +631,29 @@ def list_model_profiles() -> list[ModelProfile]:
     profiles = [profile for profile in _default_profiles() if profile.provider_id not in hidden_ids]
     known_ids = {profile.id for profile in profiles}
     profiles.extend(profile for profile in _custom_profiles() if profile.id not in known_ids)
+    # 追加云端大肥鱼（AstrBot persona 333）虚拟模型
+    feiyu_profile = ModelProfile(
+        id="cloud_feiyu",
+        provider_id="astrbot",
+        provider_name="云端 AstrBot",
+        display_name="大肥鱼（云端）",
+        model="persona:333",
+        family_name="大肥鱼",
+        variant_name="傲娇",
+        supports_vision=False,
+        supports_tool_calls=False,
+        supports_structured_output=False,
+        context_window_tokens=32768,
+        privacy_location="cloud",
+        cached_input_price_cny_per_million=0.0,
+        input_price_cny_per_million=0.0,
+        output_price_cny_per_million=0.0,
+        pricing_source="internal",
+        base_urls=[],
+        api_key="",
+    )
+    if "cloud_feiyu" not in known_ids:
+        profiles.append(feiyu_profile)
     return profiles
 
 

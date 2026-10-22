@@ -316,7 +316,10 @@ test('6.5 · 环境变量 MAO_PET_BACKEND 可覆盖后端地址', () => {
 function makeConnector(opts = {}) {
   const transport = createMockTransport(opts)
   const pusher = createPusher({ transport, logger: quiet })
-  const connector = createConnector({ pusher, logger: quiet, reemitMs: opts.reemitMs || REEMIT_MS })
+  const connector = createConnector({
+    pusher, logger: quiet, reemitMs: opts.reemitMs || REEMIT_MS,
+    projectionService: opts.projectionService,
+  })
   return { transport, pusher, connector }
 }
 
@@ -328,6 +331,53 @@ test('6.2 · ★ session/event 首参是 session、第二个是 event —— 端
   assert.equal(transport.last.phase, 'planning')
   assert.equal(transport.last.state.session, 'session-abc')
   assert.equal(transport.last.state.turn, 1)
+})
+
+// ── A2 上下文压力（2026-10-19）：宿主投影 → state.ctx_pressure ──
+test('A2 · 投影服务可用时，state 附带**整数** ctx_pressure（后端白名单只收 int）', async () => {
+  // surfaceTokens/contextWindow 按 dsh-token-meter 的 schema（projections.js 头注）；
+  // 62000/100000 = 62.0 → percent 62 → 取整后仍 62
+  const service = {
+    stateOf(_session, key) {
+      if (key === 'contextPressure') return { surfaceTokens: 62000, contextWindow: 100000 }
+      return undefined
+    },
+  }
+  const { transport, connector } = makeConnector({ projectionService: service })
+  connector.handleSessionEvent({ id: 's-ctx' }, { type: 'turn/start', data: { turn: 1 } })
+  await flush()
+  assert.equal(transport.last.phase, 'planning')
+  assert.equal(transport.last.state.ctx_pressure, 62)
+})
+
+test('A2 · 惰性 getter（index.js 的接线形态）同样生效', async () => {
+  const service = {
+    stateOf(_s, key) {
+      if (key === 'contextPressure') return { pressureTokens: 33333, contextWindow: 100000 }
+      return undefined
+    },
+  }
+  const { transport, connector } = makeConnector({ projectionService: () => service })
+  connector.handleSessionEvent({ id: 's-lazy' }, { type: 'turn/start', data: { turn: 1 } })
+  await flush()
+  // 33333/100000 = 33.333 → percent 33.3 → Math.round → 33
+  assert.equal(transport.last.state.ctx_pressure, 33)
+})
+
+test('A2 · 服务缺失 / stateOf 抛异常 → state 不带 ctx_pressure，主链路不受影响', async () => {
+  // 服务缺失（老宿主）
+  const a = makeConnector({ projectionService: null })
+  a.connector.handleSessionEvent({ id: 's-none' }, { type: 'turn/start', data: { turn: 1 } })
+  await flush()
+  assert.equal('ctx_pressure' in a.transport.last.state, false)
+  assert.equal(a.transport.last.phase, 'planning')
+
+  // 服务在但 stateOf 抛（readProjection 三层兜底的第三层）
+  const b = makeConnector({ projectionService: { stateOf() { throw new Error('宿主抽风') } } })
+  b.connector.handleSessionEvent({ id: 's-throw' }, { type: 'turn/start', data: { turn: 1 } })
+  await flush()
+  assert.equal('ctx_pressure' in b.transport.last.state, false)
+  assert.equal(b.transport.last.phase, 'planning')
 })
 
 test('6.2 · 完整轮次的事件序列产生正确的 phase 序列（DP 验收：一说话就出 phase）', async () => {

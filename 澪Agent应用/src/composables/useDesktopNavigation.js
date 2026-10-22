@@ -35,9 +35,10 @@ export function useDesktopNavigation(deps) {
     deps.activeCompanionSection.value = sectionId
   }
   async function focusDesktopPetChat() {
-    // DSH 专用化：原为 'chat'（小智对话页），该页已移除且视图不再合法 → 'companion'。
-    // 真正的桌宠对话窗是独立窗口（#pet-chat-window），不依赖本视图切换。
-    deps.activeView.value = 'companion'
+    // DSH 专用化：原为 'chat'（小智对话页），该页已删除；对话入口现在是「大肥鱼」页
+    // （feiyu-chat，走桌宠自己的 /api/companion/chat*，与桌宠窗口是同一个会话）。
+    // 注意顺序：selectConversation 只切数据不动视图，所以这里**由本函数负责**切到对话页。
+    deps.activeView.value = 'feiyu-chat'
     deps.leftSidebarVisible.value = true
     localStorage.setItem('mio_left_sidebar_visible', 'true')
     await deps.refreshConversations()

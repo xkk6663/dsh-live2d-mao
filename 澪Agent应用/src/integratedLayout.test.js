@@ -69,9 +69,16 @@ test('Agent workspace has its own right rail and settings while main navigation 
   assert.match(agentCss, /grid-template-columns:\s*64px minmax\(0, 1fr\) 92px;/)
 })
 
-test('both settings titlebars keep window controls in place and hide workspace switches', () => {
+test('settings titlebar hides shell toggles and keeps a single-column drag zone (window keys removed by ruling)', () => {
   const appSource = fs.readFileSync(new URL('./App.vue', import.meta.url), 'utf8')
 
-  assert.match(appSource, /v-if="activeView !== 'settings'" class="workspace-title-switch"/)
-  assert.match(css, /active-view-settings \.integrated-titlebar > \.window-controls\s*\{\s*grid-column:\s*2;/)
+  // 设置视图下左右「侧栏切换」按钮 v-if 整体移除（不是置灰/隐藏）。
+  // （旧断言检查 workspace-title-switch / window-controls——那是 pywebview 时代的标题栏，
+  //   三键与工作台切换均已按用户裁决移除（见 integrated.css:58 注释），本用例改为钉住现行决策。）
+  assert.match(appSource, /v-if="activeView !== 'settings'" class="shell-toggle shell-toggle-left"/)
+  assert.match(appSource, /v-if="activeView !== 'settings'" class="shell-toggle shell-toggle-right"/)
+  // 窗口三键不允许回流（pywebview 桥已不存在，按钮本来就是死的）
+  assert.doesNotMatch(appSource, /class="[^"]*window-controls/)
+  // 设置视图下拖拽区单列占满，双击最大化（drag-zone 的 dblclick）仍可用
+  assert.match(css, /\.active-view-settings \.integrated-titlebar > \.window-drag-zone\s*\{\s*grid-column:\s*1;/)
 })

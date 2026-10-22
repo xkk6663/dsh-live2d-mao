@@ -156,9 +156,112 @@ body,
 /* 插件身份识别：声明了 bubble.accent 的插件，其 chip 左侧加一条专属色竖条。
    保留原有 phase 配色（仍能看出"在干什么"），同时能看出"谁在干"——
    多 Agent 并排时一眼区分来源，且新增插件零改动（色值来自插件自己的 manifest）。 */
+/* 带身份色的徽标：底色也用身份色（此前只有左边一条竖线是身份色，
+   而底色仍是"按工作阶段上色"的橙/绿/青，导致大肥鱼的徽标看起来像别人的
+   —— 用户要求"方便区分"，那就整枚徽标都跟身份色走）。
+   工作阶段（thinking / executing_tool …）仍然可见：它是 chip 后缀文案，
+   不需要靠底色区分；底色只用来表示"这是谁"。 */
+
+/* ★ 2026-10-22 修正：身份色不再吞掉"工作状态色"。
+   之前 `background: <身份色> !important` 把 .p-<phase> 的 12 态底色全部覆盖，
+   结果**徽标颜色永远不变**（用户反馈："能显示工作状态，但徽标颜色不会变化了"）。
+   现在两者并存：
+     · 左侧 3px 竖条 = **身份色**（区分 DSH / 大肥鱼 / …）
+     · 底色          = **状态色**（.p-<phase> 决定，一眼看出在思考/执行/完成）
+   身份色以半透明内发光的形式补进底色，既保留辨识度又不吃掉状态色。 */
 .agent-badge-chip.agent-accented {
   padding-left: 6px;
   border-left: 3px solid var(--agent-accent, transparent);
+  /* 不写 background：让 .p-<phase> 的状态色生效 */
+  color: #fff;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--agent-accent, #4F6BED) 55%, transparent);
+}
+
+/* ---- A2 上下文占用**独立常挂玻璃小球**（2026-10-20 三修）----
+   演进：① 内嵌文字药丸（太占位置、会闪）→ ② 徽标内 24px 环形球（工作状态变化时偶发丢失）
+        → ③ **独立 DOM 节点 + 透明玻璃材质 + 20px**（当前）。
+
+   为什么独立：之前球挂在 #agent-badge 里由 renderAgentBadge 重建，
+   而该函数在 agent 短暂 offline / WS 重连 / 状态广播时会把 chips 清空，
+   球就跟着没了。现在 #ctx-orb 是 body 下的独立节点，只由 renderCtxOrb 更新，
+   位置由 updateCtxOrbPosition 贴徽标右缘算出来（position:fixed）。
+
+   视觉（用户要求"小一点、透明一点、玻璃材质" + "里面要有上下文数字"）：
+     · 26px 圆球（含数字必须放得下，20px 会糊），环形进度 conic-gradient 表示占用率；
+     · 玻璃感 = 半透明底色 + backdrop-filter 模糊 + 内高光 + 细描边；
+     · 轨道与填充都走低透明度，压在桌面上不会像实心色块那样突兀；
+     · **球心显示百分比数字**：两位数 10px / 三位数 8.5px 自动收字号（[data-long]），
+       深色描边保证在浅色壁纸上也读得清；精确值同时仍在 tooltip / aria-label 里。
+   ⚠ 仍然**零 animation**（用户明确要求不要闪），只靠色相区分档位：
+     0 宽裕=青绿 / 1 偏紧=琥珀(≥45%) / 2 紧张=珊瑚红(≥70%)。
+   ⚠ 尺寸改动必须同步 live2d-pet.js 里 updateCtxOrbPosition 的 `size` 常量。 */
+.ctx-orb {
+  --pct: 0;
+  --orb-color: #5fd3b8;
+  position: fixed;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* 玻璃底：极淡的白色填充，让桌面透上来。
+     球心故意留得比之前"实"一点：数字要压在环上，底太透会看不清。 */
+  background:
+    radial-gradient(circle at 32% 28%, rgb(255 255 255 / 30%) 0%, rgb(255 255 255 / 4%) 46%, transparent 62%),
+    radial-gradient(circle at 50% 50%, rgb(12 20 28 / 46%) 0 56%, transparent 57%),
+    conic-gradient(
+      color-mix(in srgb, var(--orb-color) 60%, transparent) calc(var(--pct) * 1%),
+      rgb(255 255 255 / 7%) 0
+    );
+  /* 玻璃质感：毛玻璃模糊 + 内高光 + 细描边 + 柔和外阴影 */
+  backdrop-filter: blur(7px) saturate(1.5);
+  -webkit-backdrop-filter: blur(7px) saturate(1.5);
+  box-shadow:
+    inset 0 0 0 1px rgb(255 255 255 / 20%),
+    inset 0 1px 2px rgb(255 255 255 / 22%),
+    0 1px 4px rgb(0 0 0 / 16%);
+  opacity: .82;
+  cursor: default;
+  user-select: none;
+  pointer-events: none;
+}
+
+/* ★ 球心百分比数字（2026-10-20 用户四修要求）。
+   字号策略：两位数 10px、三位数 8.5px（JS 给 [data-long="1"]），
+   配合 tabular-nums 保证 9% → 10% 时字宽不变、不跳动。
+   颜色随档位微调，深色描边（-webkit-text-stroke 不可靠，改用 text-shadow 四向晕）
+   确保浅色壁纸 / 浅色环上也能读清。 */
+.ctx-orb > .ctx-orb-num {
+  position: relative;
+  z-index: 1;                 /* 压在 ::after 高光之上，否则会被白色反光糊掉 */
+  font: 700 10px/1 "Microsoft YaHei", system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.2px;
+  color: #f2fbf8;
+  text-shadow:
+    0 0 2px rgb(0 0 0 / 75%),
+    0 1px 1px rgb(0 0 0 / 55%);
+  pointer-events: none;
+}
+
+/* 三位数（100%）自动收字号，避免溢出球心 */
+.ctx-orb[data-long="1"] > .ctx-orb-num {
+  font-size: 8.5px;
+  letter-spacing: -.6px;
+}
+
+.ctx-orb.lv-1 { --orb-color: #ffcf70; }
+.ctx-orb.lv-2 { --orb-color: #ff6b63; }
+
+/* 遮罩会一并裁掉 box-shadow 的 inset 高光，所以玻璃高光改走 ::after 叠一层 */
+.ctx-orb::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: radial-gradient(circle at 30% 26%, rgb(255 255 255 / 55%) 0%, transparent 42%);
+  pointer-events: none;
 }
 
 /* 气泡调色板：默认 = 项目原本的观感。
@@ -182,14 +285,56 @@ body,
   pointer-events: none;
 }
 
-/* DSH 气泡：复用同一个框，只换**蓝色**调色板。
-   色值由插件 manifest 的 bubble.accent 提供（DSH = 靛蓝 #4F6BED），
-   渲染层不硬编码任何插件身份——新增插件声明 accent 即自动换色。 */
+/* Agent 气泡：复用同一个框，只换**身份蓝色**调色板。
+   色值由插件/适配器自己声明并经总线透传（DSH = 靛蓝 #4F6BED，大肥鱼/鲸鱼娘 = 鲸鱼蓝 #2B6CB0），
+   渲染层不硬编码任何身份——声明 accent 即自动换色。
+
+   ★★ 身份色优先于皮肤（对齐 docs/DSH桌宠深度融合技术方案.md:223
+   「插件身份色优先于皮肤——气泡颜色跟"谁在说话"走」）。
+
+   为什么必须 !important：皮肤系统（pet-bubble-styles.js）把调色板写成**内联**
+   `--bubble-bg/--bubble-border/--bubble-ink`，内联样式优先级高于任何选择器 ——
+   用户选了「磨砂玻璃/霓虹/墨黑」之后，Agent 的身份蓝会被整个盖掉、气泡变回纯白。
+   实测确认：选了 style-glass 时计算值是 rgba(255,255,255,0.52)，鲸鱼蓝完全不可见。
+   现在：**皮肤负责质感**（模糊/渐变/描边），**身份色负责色相**，两者不再互相覆盖。
+
+   配色意图（2026-10-22 用户要求"专属蓝、方便区分"）：
+     原实现是 accent 7% + 白，淡到在白桌面上根本看不出蓝；这里提到：
+       底色 16%（淡蓝，仍能读深色文字）
+       边框 82%（身份线，最直观的区分点）
+       文字 = 身份色压深（对比度足够）
+       外发光 24%（让气泡从桌面浮出来） */
 .speech-bubble[data-agent-accent] {
-  --bubble-bg: color-mix(in srgb, var(--bubble-accent, #4F6BED) 7%, rgb(255 255 255 / 97%));
-  --bubble-border: color-mix(in srgb, var(--bubble-accent, #4F6BED) 48%, transparent);
-  --bubble-ink: color-mix(in srgb, var(--bubble-accent, #4F6BED) 52%, #17202b);
-  --bubble-shadow: 0 8px 24px rgb(24 43 50 / 16%), 0 0 0 2px color-mix(in srgb, var(--bubble-accent, #4F6BED) 10%, transparent);
+  --bubble-bg: color-mix(in srgb, var(--bubble-accent, #4F6BED) 16%, rgb(255 255 255 / 96%)) !important;
+  --bubble-border: color-mix(in srgb, var(--bubble-accent, #4F6BED) 82%, transparent) !important;
+  --bubble-ink: color-mix(in srgb, var(--bubble-accent, #4F6BED) 66%, #101a22) !important;
+  --bubble-shadow: 0 10px 28px rgb(16 42 66 / 22%),
+    0 0 0 2px color-mix(in srgb, var(--bubble-accent, #4F6BED) 24%, transparent) !important;
+}
+/* 深色皮肤（墨黑/霓虹/终端/水墨）上，文字必须反过来用浅色，
+   否则"深蓝字 + 深底"会糊成一片。 */
+.speech-bubble[data-agent-accent].style-mono,
+.speech-bubble[data-agent-accent].style-neon,
+.speech-bubble[data-agent-accent].style-terminal,
+.speech-bubble[data-agent-accent].style-ink {
+  --bubble-bg: color-mix(in srgb, var(--bubble-accent, #4F6BED) 62%, #0b1620) !important;
+  --bubble-border: color-mix(in srgb, var(--bubble-accent, #4F6BED) 88%, #ffffff) !important;
+  --bubble-ink: color-mix(in srgb, var(--bubble-accent, #4F6BED) 18%, #ffffff) !important;
+}
+
+/* 图片模式同样吃身份色：给图片加一圈身份色描边，
+   否则表情包白底会把气泡颜色"吃掉"，看起来还是白卡片。 */
+.speech-bubble.image-mode[data-agent-accent] .speech-bubble-img {
+  outline: 2px solid color-mix(in srgb, var(--bubble-accent, #4F6BED) 55%, transparent);
+  outline-offset: -2px;
+  border-radius: 6px;
+}
+/* 气泡小尾巴也跟随身份色。
+   注意尾巴是旋转 45° 的方块，靠 border-right/border-bottom 画描边（不是 border-top），
+   这里只补描边色；背景用 `background: inherit` 已经自动跟随 --bubble-bg。 */
+.speech-bubble[data-agent-accent]::after {
+  border-right-color: var(--bubble-border);
+  border-bottom-color: var(--bubble-border);
 }
 
 .speech-bubble[hidden] {
@@ -590,6 +735,27 @@ body,
   border-width: 2px;
 }
 
+/* ★ aero 透明玻璃（2026-10-19）：为"挂在桌面上展示信息"设计。
+   桌宠页本身就是透明窗口（PIXI transparent + 鼠标穿透），
+   所以这里只把背景 alpha 压到 ~24%，桌面就真的透过来；
+   backdrop-filter 只柔化页内层（模型/徽标），对桌面无效但无害。
+   可读性策略：文字保持深墨 + 白色双 halo（text-shadow），
+   浅色壁纸不糊、深色壁纸靠白晕衬出来 —— 不依赖宿主窗口改 acrylic。 */
+.speech-bubble.style-aero,
+.pet-strip.style-aero {
+  --bubble-bg: rgb(255 255 255 / 24%);
+  --bubble-border: rgb(255 255 255 / 50%);
+  --bubble-ink: #1c2a32;
+  --bubble-shadow: 0 8px 22px rgb(24 43 50 / 15%), inset 0 1px 0 rgb(255 255 255 / 45%);
+  backdrop-filter: blur(6px) saturate(1.35);
+  -webkit-backdrop-filter: blur(6px) saturate(1.35);
+}
+
+.speech-bubble.style-aero span,
+.pet-strip.style-aero span {
+  text-shadow: 0 1px 2px rgb(255 255 255 / 82%), 0 0 8px rgb(255 255 255 / 55%);
+}
+
 /* ---- 新增 4 款（2026-10-19）：玻璃 / 霓虹 / 纸墨 / 夜墨 ----
    参考 shader-effects-inc/shaders 的 glass 与 bloom 效果清单，
    但**不引入 WebGPU 依赖**（本机可能 live2d_disable_gpu，且面板是注入式
@@ -728,8 +894,15 @@ body,
   color: #8a9ba3;
 }
 
-/* ---- 气泡图片模式（点击互动：随机图片复用说话气泡框）---- */
-.speech-bubble.image-mode span {
+/* ---- 气泡图片模式（点击互动：随机图片复用说话气泡框）----
+   ★ 2026-10-22 修「图片能显示、但文字气泡不显示」：
+     这里原来是 `.speech-bubble.image-mode span { display: none }` —— 图片模式下**整段文字被隐藏**。
+     而大肥鱼"发图 + 说一句话"的那一轮，后端会连推 agent_bubble（文字）和 agent_image（图），
+     agent_image 一进来就把气泡切到 image-mode，刚显示的文字立刻被这条规则藏掉，
+     用户看到的就是"只有图、没有字"。
+     现在：**图文并存** —— 图在上、文字在下方照常显示（只在文字为空时才是纯图模式）。 */
+.speech-bubble.image-mode span:empty,
+.speech-bubble.image-mode[data-empty-text="1"] span {
   display: none;
 }
 
@@ -795,6 +968,25 @@ body,
 
 .pet-strip[hidden] {
   display: none;
+}
+
+/* ★ B1 发送方标识（2026-10-19）：多会话并发时显示"谁在说"的小标签。
+   单会话永远 hidden（零观感变化）；颜色由 JS 按 session id 哈希内联注入。 */
+.pet-strip .pet-strip-sender {
+  flex: none;
+  max-width: 96px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--sender-color, #4c8798);
+  color: var(--sender-color, #4c8798);
+  background: color-mix(in srgb, var(--sender-color, #4c8798) 10%, transparent);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.5;
+  cursor: default;
 }
 
 .pet-strip.dragging {

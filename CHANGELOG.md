@@ -5,6 +5,146 @@
 
 ---
 
+## 未发布（2026-10-23）· **大肥鱼桌宠对话：多模态互通 + 记忆打通 + 渲染稳定性**
+
+新增一个桌面端页签「大肥鱼」，接云端 AstrBot persona 333，与微信端是同一个人格。
+功能总览见 [`docs/大肥鱼功能总览.md`](./docs/大肥鱼功能总览.md)，协议与踩坑见
+[`docs/大肥鱼多模态桥接-协议与修复.md`](./docs/大肥鱼多模态桥接-协议与修复.md)。
+
+### 新增能力
+
+- **图像双向**：她发表情包 → 后端下载落盘 → 短 URL 经 WS `agent_image` + HTTP `attachments`
+  双通道送达；桌面发图 → 上传为 AstrBot attachment 再进对话。
+- **音频（点歌）**：`点歌 晴天 1` → 云端音乐插件回 `[FILE]xxx.mp3` → 下载落盘 →
+  WS `agent_audio` → 对话页 `<audio>`（支持 Range 拖动进度）+ 桌宠气泡播放。
+- **跨会话记忆**：AstrBot livingmemory 的 `memory_scope_mode` 由 `legacy` 改为 **`user`**，
+  并迁移 `1070 条`记忆到 `livingmemory:user:webchat:xiao1`（含微信侧 814 条）。
+  验证：在桌宠端提问，她答出"凌晨一点多问我睡了没""嫌广州三十度冷"等微信侧内容。
+- **对话历史落库**：`cloud_feiyu` 直通分支此前**从不写本地消息表**，导致刷新即丢；
+  现写入 `desktop_pet` 会话，历史接口回传正文 + 附件 URL。
+
+### 关键修复（每一条都有实机证据）
+
+| 问题 | 根因 |
+|---|---|
+| 气泡满屏英文思考 | AstrBot 的思考帧是 `plain` 但带 `chain_type:"reasoning"`，被当正文推了 |
+| 气泡里出现"我的提问" | 每轮注入的设备上下文前缀被她复述 → 出气泡前剥掉 |
+| 偶发回一段裸 JSON | 工具调用轮次的 `complete.data` 是原始工具载荷 → 后端 + 前端双层剥离 |
+| 对话界面图片一闪就没 | ① HTTP `attachments` 未回填 url ② WS 订阅只在发送窗口期存在 ③ 本地缓存重建列表时丢了附件 |
+| 刷新后图片整条消失 | 落库只存 `{kind,name}`、**没存 url**；历史接口也不返回附件 |
+| 同一张表情复制多份 | 去重只在单条消息内生效；承载消息被重建后每帧新建一条 → 改为**全局 url 集合** |
+| 图片/回复跑到提问上面 | 消息身份用了 `role+text`（「发个表情包」重复 22 次）；且 `sortByTime` 只在读缓存时调用 |
+| 气泡 3 秒不消失 | `stopSpeech` 把 3 秒重置成 `settings.bubble_seconds`（默认 9 秒） |
+| 图文只显示图 | CSS `.image-mode span{display:none}` 把文字藏了；`fallbackText` 传进来却没用 |
+| 徽标颜色永不变化 | 身份色写成 `background: … !important`，把 12 态状态色全盖掉 |
+| 设置随机保存失败 500 | Windows `os.replace` 被 `PermissionError WinError 32` 打断；写入 `.tmp` 那步也没重试 |
+| 日志明文泄露 API Key | 每轮对话 `logger.warning("[DEBUG] feiyu api_key: …")`，已删除该行 |
+
+### 安全
+
+- `.gitignore` 增补：一次性探针脚本、抓包配置样本（**含真实 key / Cookie**）、浏览器截图、`pet-data/`。
+- 清理工作区 **119 个**调试废料（30 个根目录探测脚本 + 31 个 Playwright 探针 + 17 个 backend 脚本 +
+  截图 + `old_chat_page.vue`），清理前已确认**无一进入过 git 历史**。
+- `test_feiyu_client.py` 里硬编码的 ASTRBOT key 改为从环境变量读取。
+- **建议轮换 ASTRBOT API Key**：它曾以明文反复写入后端日志。
+
+### 测试
+
+- 前端 `npm test` 114 条全绿（新增图片去重、消息排序、气泡图文并存等回归守卫）。
+- 新增 3 个守卫测试专门防复发：
+  - 所有 `messages` 写入必须经过 `setMessages()`（禁止直接赋值）
+  - 消息身份只能按 `id`（禁止 `role+text`）
+  - 工具 JSON 必须在前后端各剥一次
+
+---
+
+## 未发布（2026-10-20）· **拖拽回弹修复 + 上下文占用可见化**
+
+- **★ 修「桌宠拖到别的位置，过一会自动回到默认位置」（2026-10-20 用户报障）**
+  根因是 B2 workArea clamp 接入时引入的**未声明变量解构赋值**：
+  `finishPointerInteraction()` 里写成 `;({ x: nextX, y: nextY } = clampPositionToWorkarea(...))`，
+  外层作用域根本没有 `nextX/nextY`，严格模式下抛 `ReferenceError: nextX is not defined`。
+  它落在 async 函数里变成一条 unhandled rejection（`desktop-pet.log` 里
+  `renderer.console [level=3] Uncaught (in promise) ReferenceError: nextX is not defined`
+  可以逐条对上），后果是一串连锁：
+  ① `settings.position_x/y` 没更新；② `PATCH /api/companion/position` 从未发出（位置没存盘）；
+  ③ `sendSocket('dragged')` 没发；④ 拖拽惯性整段被跳过。
+  而拖动过程中 `model.x/y` 已经实时改过 ⇒ 视觉上"已经拖过去了"，等下一轮 `pollStatus`（5s）
+  的 `fitModel()` 按 `settings` 里**没更新的旧位置**重算 ⇒ 表现为"过一会自动回到默认位置"。
+  - 修法：改用局部 `const next = clampPositionToWorkarea(...)`，与 B2 之前的语义逐字等价。
+  - 同类的 `fitModel()` 那处 `;({ x: posX, y: posY } = ...)` **不是** bug（`posX/posY` 是 `let` 声明的局部变量），
+    已复核保留。
+- **★ 上下文占用改为「独立常挂小球」（2026-10-20 用户二次裁决）**
+  第一版是 chip **内部**的文字药丸，用户实测后反馈两点：**太占位置**、**一直在闪**。改为：
+  状态 chip 右侧一颗独立圆球（`#agent-badge` 是 flex，小球作 chip 的**兄弟节点**，`gap:4px` 隔开），
+  环形进度用 `conic-gradient` 画，占位恒定 24px —— 百分比变化只改环的角度，**盒模型完全不变**，
+  因此不会抖动/闪烁；数字用 `font-variant-numeric: tabular-nums` 防字宽跳变。
+  - **刻意零动画**：删掉了第一版的 `ctx-meter-pulse` 脉冲（用户明确要求"不要一直闪"），只靠颜色分档：
+    青绿（宽裕）/ 琥珀 ≥45% / 珊瑚红 ≥70%。
+  - 数值缺失（老宿主无投影服务）时整个球不渲染，保持旧观感；多 agent 时取当前最大值。
+  - 开关沿用右键菜单「隐藏/显示上下文占用」（`mio_ctx_meter_enabled`）。
+  - 可视化验收：用 Edge headless 渲染真实 CSS 变量出图确认（15/32/48/71/93 五档占位完全一致）。
+- **★ 插件端 A2 代码此前从未安装到本机 DSH（本轮一并修掉）**
+  排查发现 `~/.dsh/profiles/desktop/node_modules/dsh-live2d-mao` 的副本 `lib/events.js` 里
+  `ctx_pressure` / `summarizeContextPressure` **一次都不出现** —— 2026-10-19 的 A2 改动只进了仓库，
+  从未装进 DSH，所以无论渲染端怎么改都拿不到数值。已同步 `lib/events.js`（+25 行）
+  与 `lib/index.js`（投影服务惰性 getter），并逐文件 SHA256 与仓库比对一致。
+  实测确认链路打通：诊断日志 `hasCtxGet=function svc=OBJ stateOf=function`，总线 `ctx_pressure=15 plugin_owned=True`。
+  诊断探针与临时中间件**已全部移除**（`_projdiag.log` 已删，`main.py` 已还原到零 diff）。
+  ⚠ 这是本机直装，未发 npm；下次 `dsh plugin update` 会覆盖回旧版，正式发版需走
+  `docs/SKILL-发布与版本迭代.md` 升版本号（1.1.0 → 1.1.1）。
+- **★ 上下文小球三修：小一点 + 透明玻璃 + 修「工作状态变化时偶发丢失」（2026-10-20 用户三次反馈）**
+  - **丢失根因（三条独立路径，都已修）**：小球原先挂在 `#agent-badge` 里由 `renderAgentBadge()` 重建，
+    而该函数会在下列情况整条清空/隐藏，球就跟着没了：
+    ① `status === 'offline'` 直接 `return` —— 网络抖动、后端 30s 心跳超时（`HEARTBEAT_TIMEOUT_MS`）、
+       WS 重连窗口都可能瞬间命中；
+    ② `renderAgentBadge()` 开头 `badge.replaceChildren()` 全量重建；
+    ③ **`applyAgentStatus()` 重建 state 时没继承 `ctx_pressure`** —— 任何一次 `agent_status`
+       广播（上线/离线/启停）都会把已有数值抹掉。
+  - **修法：彻底解耦**。小球改为 body 下独立节点 `#ctx-orb`，只由新函数 `renderCtxOrb()` 更新；
+    位置由 `updateCtxOrbPosition()` 贴徽标右缘计算（`position:fixed`），徽标移动时同步跟随。
+    另外三处兜底：`lastCtxPct` 记住最后一次数值（瞬时空值不清球）、
+    `lastCtxOrbPos` 记住最后位置（徽标宽高为 0 时不跳回左上角）、
+    `applyAgentStatus` 补上 `ctx_pressure` 继承。
+  - **视觉**：24px → **20px**；实心色块改**透明玻璃**（半透明 conic 环 + `backdrop-filter: blur(7px)` +
+    内高光 + 细描边，整体 `opacity: .72`）；球心数字移除（20px 放三位数必糊），精确值走 tooltip
+    与 `aria-label`。仍然**零 animation**。
+  - **验收**：Edge headless 跑真实 DOM 场景测试全绿 —— offline+chip 清空时节点保留、
+    连续 20 次状态变化后仍只有一个球、徽标空时位置不跳、47% 正确进琥珀档。
+- **★ 球心加回上下文数字（2026-10-20 用户四修要求）**
+  上一版为压尺寸把数字删了，用户要求"小球里面应该要有上下文数字"。现在：
+  - 尺寸 20px → **26px**（20px 放不下三位数，必糊；26px 仍属"小"），玻璃质感保留
+    （`opacity` .72 → .82、球心加一层 46% 深色径向底，保证数字压在环上也读得清）；
+  - 球心显示 `15%`：两位数 10px、三位数 8.5px 自动收字号（`data-long`），
+    `tabular-nums` 保证 9% → 10% 字宽不变；
+  - 数字 `z-index:1` 压在 `::after` 高光之上，加四向 `text-shadow` 深色晕，
+    浅色壁纸 / 浅色环上都可读；
+  - 精确值仍同步到 `title` 与 `aria-label`。
+  - 验收：Edge headless 真实 DOM 测试 —— `15%` / `7%` / `100%`（三位数正确打 `data-long` 收字号）/
+    切回 `93%` 时标记正确清除、`aria-label` 同步、始终只有 1 个球节点。
+- 缓存戳：`live2d-pet.js` / `live2d-pet.css` → `?v=20261020-orbnum`（index.html 两处 + main.js loadURL 一处）。
+
+---
+
+## 未发布（2026-10-19）· **A2 上下文压力全链路 + 陈旧测试修复**
+
+- **A2 上下文压力接通**（后续开发方向 A1/A2 里最后一块）：插件 connector 惰性读宿主
+  `sessionProjections` 的 `contextPressure` 投影，state 附带整数 `ctx_pressure`
+  （后端白名单 `ingest.py` 原已放行 int；服务缺失/未注册/抛异常三重兜底不伤主链路）；
+  桌宠徽标 chip 的 tooltip 显示「上下文 N%」（hover 可见，不占横条文字），
+  `applyAgentPhase` 与全量快照两条路径都落值，拿不到继承旧值防 tooltip 忽有忽无。
+  缓存戳 `live2d-pet.js?v=20261019-ctx1`（index.html + main.js 两处）。
+- **陈旧测试修复**：`src/integratedLayout.test.js:72` 断言的 `workspace-title-switch` /
+  `window-controls` 是 pywebview 时代的标题栏结构（窗口三键已按用户裁决移除，
+  见 `integrated.css:58` 注释），按现行设计重写断言（shell-toggle 的 v-if、
+  设置视图拖拽区单列、window-controls 禁止回流）——`npm test` 83/84 → **84/84**。
+- **插件测试 +3**：push.test.js 覆盖 ctx_pressure 的整数化 / 惰性 getter / 异常兜底，
+  插件全量 220 → **223**/223。
+- **文档同步**：AGENTS.md 三处旧包名 `mao-pet` → `dsh-live2d-mao`（调查时修）；
+  后续开发方向.md A1/A2 转完成留档；SKILL-发布与版本迭代.md 门禁计数 220 → 223。
+
+---
+
 ## v1.1.0（2026-10-19）· **工作状态驱动动作/表情：四条断链修复 + 活人感 + 个性化页**
 
 > 现象：DSH 的 phase 明明在变（徽标实时刷新），桌宠本体既不换表情、也没有对应动作。

@@ -34,6 +34,7 @@
     { id: 'terminal', name: '终端绿', cls: 'style-terminal', swatch: '#17301f' },
     { id: 'comic', name: '漫画描边', cls: 'style-comic', swatch: '#ffffff' },
     { id: 'glass', name: '磨砂玻璃', cls: 'style-glass', swatch: 'rgba(255,255,255,0.55)' },
+    { id: 'aero', name: '透明玻璃', cls: 'style-aero', swatch: 'rgba(255,255,255,0.26)' },
     { id: 'neon', name: '霓虹', cls: 'style-neon', swatch: '#0b1220' },
     { id: 'paper', name: '纸墨', cls: 'style-paper', swatch: '#f7f0df' },
     { id: 'ink', name: '夜墨', cls: 'style-ink', swatch: '#14161a' },
@@ -49,6 +50,15 @@
     sakura: { bg: '#f3eef1', ink: '#38323a', line: '#e5dce2', accent: '#b7798f' },
     celadon: { bg: '#e9f0ee', ink: '#22322e', line: '#d5e2dd', accent: '#5f8f80' },
     amber: { bg: '#f3ede2', ink: '#3a3128', line: '#e4dbcb', accent: '#a8763c' },
+    // ★ 2026-10-19 AI 娘配色五款 + 自定义（与 App.vue THEME_OPTIONS / companion.css 同值）
+    whale: { bg: '#e9eef8', ink: '#1d2b45', line: '#d7e0f0', accent: '#3f6ac4' },
+    miku: { bg: '#ecf7f5', ink: '#1f3a37', line: '#d2e8e4', accent: '#2fbdb3' },
+    neuro: { bg: '#fdf0f6', ink: '#3d2a34', line: '#f2dce6', accent: '#e8659b' },
+    qwen: { bg: '#f1eefa', ink: '#2b2740', line: '#e2dcf4', accent: '#7a5af5' },
+    doubao: { bg: '#eef4fd', ink: '#1f2c48', line: '#d9e4f6', accent: '#4d6bfe' },
+    // custom 的真色值由 setUiTheme(id, palette) 第三参动态合并进来；
+    // 下面是"还没推过自定义色"时的中性兜底。
+    custom: { bg: '#e9eef0', ink: '#20303a', line: '#d9e2e6', accent: '#4c8798' },
   }
   var DEFAULT_THEME = 'mist'
 
@@ -124,8 +134,26 @@
   }
 
   /** 切换"跟随的主界面主题"（只影响 theme 皮肤的配色） */
-  function setUiTheme(themeId, applyEl) {
+  function setUiTheme(themeId, applyEl, palette) {
     var wanted = String(themeId || '').trim().toLowerCase()
+    // 自定义主题：三色（bg/ink/line/accent，缺 line 用 bg 混出的近似）动态并入调色板。
+    // 老调用只传两个参 → 不影响；颜色非法时保留现有值（含上次推过的自定义色）。
+    if (palette && typeof palette === 'object') {
+      var hex = function (v, fallback) {
+        var s = String(v || '').trim()
+        return /^#[0-9a-fA-F]{6}$/.test(s) ? s : fallback
+      }
+      var cur = UI_THEMES.custom
+      var bg = hex(palette.bg, cur.bg)
+      var ink = hex(palette.ink, cur.ink)
+      var accent = hex(palette.accent, cur.accent)
+      UI_THEMES.custom = {
+        bg: bg,
+        ink: ink,
+        line: hex(palette.line, bg),
+        accent: accent,
+      }
+    }
     uiThemeId = UI_THEMES[wanted] ? wanted : DEFAULT_THEME
     try { window.localStorage.setItem(FALLBACK_THEME_KEY, uiThemeId) } catch (_) {}
     if (applyEl && currentId === 'theme') {

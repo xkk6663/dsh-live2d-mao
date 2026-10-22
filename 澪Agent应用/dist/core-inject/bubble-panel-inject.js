@@ -30,6 +30,7 @@
     { id: 'terminal', name: '终端绿', swatch: '#17301f' },
     { id: 'comic', name: '漫画描边', swatch: '#ffffff' },
     { id: 'glass', name: '磨砂玻璃', swatch: 'linear-gradient(135deg,rgba(255,255,255,.85),rgba(226,240,244,.45))', glass: true },
+    { id: 'aero', name: '透明玻璃', swatch: 'linear-gradient(135deg,rgba(255,255,255,.5),rgba(255,255,255,.12))', glass: true },
     { id: 'neon', name: '霓虹', swatch: 'radial-gradient(circle at 50% 50%,#9df6ff,#0b1220 70%)' },
     { id: 'paper', name: '纸墨', swatch: '#f7f0df' },
     { id: 'ink', name: '夜墨', swatch: '#14161a' },
@@ -44,6 +45,14 @@
     { id: 'sakura', name: '晚樱', colors: ['#f3eef1', '#b7798f', '#38323a'] },
     { id: 'celadon', name: '青瓷', colors: ['#e9f0ee', '#5f8f80', '#22322e'] },
     { id: 'amber', name: '琥珀', colors: ['#f3ede2', '#a8763c', '#3a3128'] },
+    // ★ 2026-10-19 AI 娘配色五款（与 App.vue THEME_OPTIONS / pet-bubble-styles UI_THEMES 同值）
+    { id: 'whale', name: '溟月鲸歌', colors: ['#e9eef8', '#3f6ac4', '#1d2b45'] },
+    { id: 'miku', name: '初音葱绿', colors: ['#ecf7f5', '#2fbdb3', '#1f3a37'] },
+    { id: 'neuro', name: '粉蓝双生', colors: ['#fdf0f6', '#e8659b', '#3d2a34'] },
+    { id: 'qwen', name: '千问星紫', colors: ['#f1eefa', '#7a5af5', '#2b2740'] },
+    { id: 'doubao', name: '豆包晴空', colors: ['#eef4fd', '#4d6bfe', '#1f2c48'] },
+    // 自定义：colors 仅为占位，tile 的实际色带用 customPalette 动态渲染
+    { id: 'custom', name: '自定义', colors: ['#e9eef0', '#4c8798', '#20303a'] },
   ]
 
   // 话痨程度锚点：**必须与 live2d-pet.js 的 TALK_ANCHORS 保持一致**，
@@ -129,6 +138,9 @@
   // ★ 同日二次拆分：本文件不再直接决定"哪些卡渲染"，而由 CARD_RENDER + PART_CARDS
   //   按「主题（appearance）」/「个性化（behavior）」两组分别注入到两个 tab。
   var uiThemeId = 'mist'
+  // 自定义主题三色（ui_theme === 'custom' 时的真值；refresh 从后端设置读回，
+  // 取色器改它并经 saveSettings + localStorage 双路同步——与 applyGlobalTheme 同一套双向语义）。
+  var customPalette = { bg: '#e9eef0', accent: '#4c8798', ink: '#20303a' }
   var streamText = true
   var images = []
   var imageWeights = {}
@@ -237,7 +249,9 @@
   function renderPersonalization() {
     var themeTiles = UI_THEME_DEFS.map(function (t) {
       var cur = t.id === uiThemeId
-      var swatches = t.colors.map(function (c) {
+      // 自定义 tile 的色带用**当前自定义三色**实时渲染（改一次取色器立刻变）
+      var colors = t.id === 'custom' ? [customPalette.bg, customPalette.accent, customPalette.ink] : t.colors
+      var swatches = colors.map(function (c) {
         return '<i style="display:block;width:100%;height:8px;background:' + c + ';"></i>'
       }).join('')
       return '<button type="button" data-ui-theme="' + t.id + '" aria-pressed="' + (cur ? 'true' : 'false') + '" ' +
@@ -246,6 +260,18 @@
         '<span aria-hidden="true" style="display:flex;flex-direction:column;border-radius:4px;overflow:hidden;box-shadow:inset 0 0 0 1px rgb(20 35 45 / 10%);">' + swatches + '</span>' +
         '<span style="font-size:12px;font-weight:600;color:var(--ink,#20303a);text-align:left;">' + t.name + '</span></button>'
     }).join('')
+    // 自定义取色行：只在选中「自定义」时出现。oninput 即改即存（节流交给 saveSettings
+    // 的静默失败语义 + 后端 hex 校验），同步走 applyGlobalTheme 同款双通道。
+    var customPickers = uiThemeId === 'custom'
+      ? '<div style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap;">' +
+        [['bg', '底色'], ['accent', '主色'], ['ink', '文字色']].map(function (slot) {
+          var key = 'ui_theme_custom_' + slot[0]
+          return '<label style="display:flex;align-items:center;gap:7px;padding:6px 10px;border:1px solid var(--line,#d9e2e6);border-radius:9px;background:var(--surface,#fff);cursor:pointer;">' +
+            '<input type="color" data-custom-theme="' + slot[0] + '" value="' + customPalette[slot[0]] + '" style="width:32px;height:28px;padding:0;border:1px solid var(--line,#d9e2e6);border-radius:6px;background:#fff;cursor:pointer;" />' +
+            '<span style="display:flex;flex-direction:column;"><strong style="font-size:11px;color:var(--ink,#20303a);">' + slot[1] + '</strong>' +
+            '<small style="font-size:10px;color:var(--muted,#687984);font-family:ui-monospace,monospace;">' + customPalette[slot[0]] + '</small></span></label>'
+        }).join('') + '</div>'
+      : ''
 
     // ★ 2026-10-19：话痨滑块 + 两个"活人感"开关**整块迁到「设置 → 个性化 → 活人感」**。
     //   原因：本页已经有 7 张卡（皮肤 / 全局主题 / 流式 / 点击互动 / 图片 / 音效事件 / 音效片段），
@@ -254,7 +280,7 @@
     //   个性化页通过 window.__mioBubblePanel.talkativeness.* 复用，不各算一套。
     //   ⚠ 本卡属于 PART_CARDS.appearance（主题 tab），提示里要指向"个性化"而不是"桌宠"。
     return card('全局主题',
-      '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:8px;">' + themeTiles + '</div>' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:8px;">' + themeTiles + '</div>' + customPickers +
       hint('全局主题决定整个应用（含本页）的底色与主色，也是皮肤选「跟随主题」时气泡/横条的取色来源。' +
         '<br />与「设置 → 外观 → 主题」是同一个设置，改哪边都同步。' +
         '<br />话痨程度 / 随机微表情 / 模型台词已移到「个性化」页。'))
@@ -391,6 +417,10 @@
     }).join('')
     return card('音效事件',
       '<div style="display:flex;flex-direction:column;gap:7px;">' + rows + '</div>' +
+      '<div style="margin-top:9px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
+        '<button type="button" data-snd-play-all style="' + btnStyle('primary') + '">按序试听全部</button>' +
+        '<span style="font-size:12px;color:var(--muted,#687984);">从上到下每 0.4s 播一条（播下拉当前选中），再点一次可随时停止</span>' +
+      '</div>' +
       '<div style="margin-top:9px;font-size:12px;line-height:1.8;color:var(--muted,#687984);">' +
         '每行下拉直接选播什么：默认音效（推荐，内置片段）／内置合成音／内置片段（小黄鸭、Minecraft 经验球等）／我的片段。选中即所见，试听播的也是下拉当前选中的那条。<br />' +
         '总开关与基准音量在「设置 → 桌宠 → 音效」；本页音量是各事件相对基准的百分比。</div>')
@@ -674,11 +704,21 @@
     // storage 事件**同窗口不触发**，所以写完 localStorage 手动派发一次，
     // 让主界面即时换肤（不必再点"保存"，与面板"即时生效"的语义一致）。
     var applyGlobalTheme = function (themeId) {
-      saveSettings({ ui_theme: themeId }, '全局主题：' + uiThemeName(themeId)).then(function () { refresh() })
+      var patch = { ui_theme: themeId }
+      // 切到自定义时把当前三色一并下发（否则后端只有默认占位色）
+      if (themeId === 'custom') {
+        patch.ui_theme_custom_bg = customPalette.bg
+        patch.ui_theme_custom_accent = customPalette.accent
+        patch.ui_theme_custom_ink = customPalette.ink
+      }
+      saveSettings(patch, '全局主题：' + uiThemeName(themeId)).then(function () { refresh() })
       try {
         var raw = window.localStorage.getItem('mio_app_preferences')
         var prefs = raw ? JSON.parse(raw) : {}
         prefs.theme = themeId
+        if (themeId === 'custom') {
+          prefs.theme_custom = { bg: customPalette.bg, accent: customPalette.accent, ink: customPalette.ink }
+        }
         var next = JSON.stringify(prefs)
         window.localStorage.setItem('mio_app_preferences', next)
         window.dispatchEvent(new StorageEvent('storage', { key: 'mio_app_preferences', newValue: next }))
@@ -689,6 +729,34 @@
         e.stopPropagation()
         uiThemeId = btn.getAttribute('data-ui-theme')
         applyGlobalTheme(uiThemeId)
+      })
+    })
+
+    // ---- 自定义主题取色器（ui_theme === 'custom' 时渲染）----
+    // oninput 即改即存：① 后端 ui_theme_custom_* 三键（桌宠皮肤「跟随主题」取色源）；
+    // ② 本机偏好 theme_custom（主界面 Vue 经 storage 事件即时换肤）——与 applyGlobalTheme 同一套双向语义。
+    body.querySelectorAll('[data-custom-theme]').forEach(function (input) {
+      input.addEventListener('input', function () {
+        var slot = String(input.getAttribute('data-custom-theme') || '')
+        var value = String(input.value || '')
+        if (['bg', 'accent', 'ink'].indexOf(slot) < 0) return
+        if (!/^#[0-9a-fA-F]{6}$/.test(value)) return
+        customPalette[slot] = value
+        saveSettings({
+          ui_theme: 'custom',
+          ui_theme_custom_bg: customPalette.bg,
+          ui_theme_custom_accent: customPalette.accent,
+          ui_theme_custom_ink: customPalette.ink,
+        }, '自定义主题已更新').then(function () { refresh() })
+        try {
+          var raw = window.localStorage.getItem('mio_app_preferences')
+          var prefs = raw ? JSON.parse(raw) : {}
+          prefs.theme = 'custom'
+          prefs.theme_custom = { bg: customPalette.bg, accent: customPalette.accent, ink: customPalette.ink }
+          var next = JSON.stringify(prefs)
+          window.localStorage.setItem('mio_app_preferences', next)
+          window.dispatchEvent(new StorageEvent('storage', { key: 'mio_app_preferences', newValue: next }))
+        } catch (_) {}
       })
     })
 
@@ -852,6 +920,41 @@
         previewEvent(id, clip)
       })
     })
+
+    // ★ B4 按序试听全部（2026-10-19）：EVENT 列表从上到下 400ms 间隔依次走既有
+    //   previewEvent 通道；再点一次停止。面板 refresh 会重建 body——定时器闭包里
+    //   检查按钮已断开 DOM 就自动收尾，避免往已销毁的节点上写状态。
+    var playAllBtn = $q('[data-snd-play-all]', body)
+    if (playAllBtn) {
+      var playAllList = null
+      var playAllIdx = 0
+      var playAllTimer = null
+      var stopPlayAll = function () {
+        if (playAllTimer) { window.clearInterval(playAllTimer); playAllTimer = null }
+        playAllList = null
+        if (playAllBtn && playAllBtn.isConnected) playAllBtn.textContent = '按序试听全部'
+      }
+      playAllBtn.addEventListener('click', function (e) {
+        e.stopPropagation()
+        if (playAllTimer) { stopPlayAll(); return }
+        playAllList = SOUND_EVENTS.slice()
+        playAllIdx = 0
+        playAllBtn.textContent = '停止'
+        var step = function () {
+          if (!playAllBtn || !playAllBtn.isConnected) { stopPlayAll(); return }
+          if (playAllIdx >= playAllList.length) {
+            stopPlayAll()
+            toast('音效事件试听完毕', true)
+            return
+          }
+          var ev = playAllList[playAllIdx++]
+          var sel = $q('[data-snd-clip="' + ev.id + '"]', body)
+          previewEvent(ev.id, sel ? String(sel.value || '') : '')
+        }
+        step()
+        playAllTimer = window.setInterval(step, 400)
+      })
+    }
 
     // 音效片段：上传 / 试听 / 裁剪 / 删除
     var sUpBtn = $q('#bpSoundUploadBtn', body)
@@ -1080,6 +1183,10 @@
         styleId = String(st.live2d_strip_style)
       }
       uiThemeId = String(st.ui_theme || 'mist')
+      var hexOk = function (v) { return /^#[0-9a-fA-F]{6}$/.test(String(v || '')) }
+      if (hexOk(st.ui_theme_custom_bg)) customPalette.bg = String(st.ui_theme_custom_bg)
+      if (hexOk(st.ui_theme_custom_accent)) customPalette.accent = String(st.ui_theme_custom_accent)
+      if (hexOk(st.ui_theme_custom_ink)) customPalette.ink = String(st.ui_theme_custom_ink)
       clickTalk = st.pet_click_talk_enabled !== false
       streamText = st.live2d_stream_text_enabled !== false
       soundEvents = (st.pet_sound_events && typeof st.pet_sound_events === 'object') ? JSON.parse(JSON.stringify(st.pet_sound_events)) : {}
