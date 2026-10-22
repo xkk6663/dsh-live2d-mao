@@ -508,6 +508,18 @@
       body.appendChild(row('语音回复', '小智回答时播放语音', makeSwitch(s.voice_enabled !== false, '语音回复'), 'voice_enabled'))
       body.appendChild(row('流式播放', '边接收边播放（低延迟）', makeSwitch(!!s.voice_streaming_enabled, '流式播放'), 'voice_streaming_enabled'))
       body.appendChild(row('音量', '语音播放音量', makeSlider(s.voice_volume != null ? s.voice_volume : 85, 0, 100, 5, '%'), 'voice_volume'))
+      // ★ 2026-10-23 新增「音频自动播放」开关。
+      //   用户反馈：「收到音频之后会自动播放一次，然后相关都不知道在哪里关」。
+      //   背景：渲染端 playAgentAudio() 早就认 `settings.audio_autoplay === false`，
+      //   但**没有任何 UI 能设置它**，也没有默认值（undefined !== false）⇒ 永远自动播放。
+      //   这里补上开关，默认开（不改变现有体验）；关掉后气泡只提示
+      //   「♪ 正在播放：歌名（自动播放已关闭）」，改为在对话界面手动点播放。
+      body.appendChild(row(
+        '音频自动播放',
+        '大肥鱼发来语音/点歌时自动出声；关闭后只在气泡提示，改为在对话里手动播放',
+        makeSwitch(s.audio_autoplay !== false, '音频自动播放'),
+        'audio_autoplay',
+      ))
       body.appendChild(row('回复语言', '小智语音与文字语言', makeSelect(s.pet_speech_language || 'zh', [{ v: 'zh', t: '中文' }, { v: 'ja', t: '日语' }]), 'pet_speech_language'))
       body.appendChild(section('屏幕观察播报'))
       body.appendChild(row('观察时语音播报', '屏幕观察分析后语音播报', makeSwitch(!!s.speak_screen_observations, '观察语音播报'), 'speak_screen_observations'))
@@ -626,6 +638,10 @@
       'live2d_follow_cursor', 'live2d_always_on_top', 'live2d_smart_passthrough',
       'live2d_speech_bubble_enabled', 'voice_enabled', 'voice_streaming_enabled',
       'voice_volume', 'pet_speech_language', 'speak_screen_observations',
+      // ★ 音频自动播放（2026-10-23）：渲染端 playAgentAudio 认这个键决定是否直接出声。
+      //   **必须列进本白名单**，否则开关能点、保存后值被这里静默丢掉
+      //   （本页保存是按这份表挑值的）→ 表现为"关了还是会自动播放"。
+      'audio_autoplay',
       'screen_ai_enabled',
       // ★ 横条个性化（2026-10-17）。2026-10-19 起皮肤并入 live2d_bubble_style，
       //   这里不再收集 live2d_strip_style（留着只会让"改了没反应"更难查）。

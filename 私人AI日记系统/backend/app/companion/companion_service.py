@@ -73,6 +73,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "pet_call_min_speech_ms": 280,
     "pet_call_max_turn_seconds": 18,
     "voice_volume": 85,
+    # ★ 2026-10-23：大肥鱼发来音频（点歌 / 语音）时是否**自动出声**。
+    #   渲染端 playAgentAudio() 早就认这个键（false = 只在气泡提示、不出声），
+    #   但既没有默认值也没有设置入口 ⇒ 永远"自动播放且找不到关的地方"（用户报障）。
+    #   现在：补默认 true（保持原行为）+ 设置页「语音」tab 新增开关。
+    "audio_autoplay": True,
     "voice_streaming_enabled": True,
     "pet_speech_language": "zh",
     "speak_screen_observations": True,
