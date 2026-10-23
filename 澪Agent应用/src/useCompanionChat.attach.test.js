@@ -146,7 +146,7 @@ test('★ 本地缓存只在列表为空或补更早整段时使用（不做文�
 test('★ 带附件的本地消息永远不能被历史覆盖', () => {
   const fn = source.match(/function appendHistoryRows\(rows\)[\s\S]*?\n  \}/)?.[0] || ''
   // 新实现里本地消息一律保留（除非 id 完全相同）
-  assert.match(fn, /setMessages\(\[\.\.\.messages\.value, \.\.\.fresh\]\)/, '本地消息默认全部保留，只追加 fresh')
+  assert.match(fn, /setMessages\(\[\.\.\.messages\.value, \.\.\.effectiveFresh\]\)/, '本地消息默认全部保留，只追加 fresh')
 })
 
 test('★ 轮询拉历史时绝不能清空已有消息（否则每 8 秒闪一次空列表）', () => {
@@ -155,7 +155,7 @@ test('★ 轮询拉历史时绝不能清空已有消息（否则每 8 秒闪一�
   // 禁止按 incomingIds 过滤掉已有消息：那会和 fresh 的 existingIds 过滤互相抵消 → 列表清空
   const code = fn.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
   // 必须以"已有 + 新增"的方式写回
-  assert.match(fn, /setMessages\(\[\.\.\.messages\.value, \.\.\.fresh\]\)/, '应保留现有消息，只追加缺失的')
+  assert.match(fn, /setMessages\(\[\.\.\.messages\.value, \.\.\.effectiveFresh\]\)/, '应保留现有消息，只追加缺失的')
   assert.doesNotMatch(code, /incomingIds\.has/, '禁止按 incomingIds 过滤（会与 fresh 抵消导致清空）')
 })
 
@@ -180,4 +180,19 @@ test('★ 后端 agent_image 必须带 filename（与 HTTP attachments 同形状
   const tail = py.slice(idx, idx + 1600)
   assert.match(tail, /"url":/, '必须推 url')
   assert.match(tail, /"filename":/, '必须推 filename，否则前端与 HTTP 那条形状不一致 → 同图多份')
+})
+
+test('★ 历史行与本地回合同文本时必须合并，不能新建一条（否则同图两张）', () => {
+  const fn = source.match(/function appendHistoryRows\(rows\)[\s\S]*?return true\r?\n  \}/)?.[0] || ''
+  assert.ok(fn, 'appendHistoryRows 应存在')
+  // 必须按"角色+正文+时间窗口"合并历史行与在屏回复
+  assert.match(fn, /REPLY_MERGE_WINDOW_MS/, '必须有时间窗口，避免把真重复的同一句话吃掉')
+  assert.match(fn, /stillFresh/, '合并掉的历史行不能再进 fresh')
+  assert.match(fn, /setMessages\(\[\.\.\.messages\.value, \.\.\.effectiveFresh\]\)/, '只追加未合并的历史行')
+})
+
+test('★ 合并历史行时附件按 url 去重，不重复挂同一张图', () => {
+  const fn = source.match(/function appendHistoryRows\(rows\)[\s\S]*?return true\r?\n  \}/)?.[0] || ''
+  assert.match(fn, /seenUrls|have\.has\(url\)/, '必须做 url 去重')
+  assert.doesNotMatch(fn, /attachments: \[\.\.\.base, \.\.\.hist\.attachments\]/, '禁止无条件拼接历史附件')
 })

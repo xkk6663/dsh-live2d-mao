@@ -783,6 +783,70 @@ export function useCompanionChat(deps) {
       if (rid && localRequestIds.has(rid)) return false
       return true
     })
+
+    // ★★★ 2026-10-23 修「同一条回复显示两张一模一样的表情」的**第二个真凶**（残留的那一张）。
+    //
+    // 现象：修掉 WS/HTTP 双通道去重后还剩两张；刷新一次就变回一张（用户实拍两次）。
+    //
+    // 根因是**两条通道各建了一条消息**：
+    //   · WS  agent_image 先到 → attachToCurrentReply 建 `reply-<requestId>`（本地消息）
+    //   · HTTP 响应回来后，后端在这一轮**已经落库**了（cloud_feiyu 分支会写 desktop_pet 会话）
+    //   · 8 秒轮询拉历史 → 同一条回复带着同一张图以 `h-<db id>` 回来
+    //   · 两个 id 不同（`reply-xxx` vs `h-123`），**且 requestId 对不上**
+    //     （历史行的 request_id 与前端 client_request_id 并非同一个值）
+    //   ⇒ fresh 判定为"新消息" → 又插一条 → 同图两张。
+    //   刷新后只剩历史那一份，所以"刷新就正常"。
+    //
+    // 判据不能再用 id 或 requestId，改用**内容指纹**（角色 + 清洗后正文 + 时间近似）：
+    //   同一轮对话里正文完全一致、且时间相差在窗口内 → 认定是同一条回复。
+    //   注意不能只比正文：用户实测会话里"发个表情包"重复了 22 次，
+    //   所以**加时间窗口**（同一轮不会隔几分钟才落库）。
+    const REPLY_MERGE_WINDOW_MS = 10 * 60 * 1000
+    const rowFor = (item) => {
+      const text = String(item.text || '').trim()
+      if (!text) return null
+      return messages.value.find((m) => (
+        String(m.text || '').trim() === text
+        && Math.abs(Number(m.ts || 0) - Number(item.ts || 0)) <= REPLY_MERGE_WINDOW_MS
+      )) || null
+    }
+    const merged = []
+    const stillFresh = []
+    for (const item of fresh) {
+      const target = rowFor(item)
+      if (!target) { stillFresh.push(item); continue }
+      merged.push({ target, item })
+    }
+    // 把历史行里的附件**并到**已在屏上的那条消息（按 url 去重），不再新增一条
+    if (merged.length) {
+      const byId = new Map(merged.map((x) => [x.target.id, x.item]))
+      // 兜底：也把**同 url 的其它副本**从整张列表里剔掉（防止此前已经插进去的重复行留着）
+      const seenUrls = new Set(
+        messages.value
+          .filter((m) => !byId.has(m.id))
+          .flatMap((m) => (m.attachments || []).map((a) => String(a.url || '')))
+          .filter(Boolean),
+      )
+      const next = []
+      for (const m of messages.value) {
+        const hist = byId.get(m.id)
+        if (!hist) { next.push(m); continue }
+        const base = Array.isArray(m.attachments) ? m.attachments : []
+        const have = new Set(base.map((a) => String(a.url || '')).filter(Boolean))
+        const extra = (hist.attachments || []).filter((a) => {
+          const url = String(a.url || '')
+          if (!url) return false
+          if (have.has(url) || seenUrls.has(url)) return false
+          have.add(url)
+          return true
+        })
+        next.push({ ...m, attachments: extra.length ? [...base, ...extra] : base })
+      }
+      setMessages(next)
+    }
+    // 被合并掉的历史行算作"已有消息"，不算变化（否则会误报 grew → 多滚一次）
+    const effectiveFresh = stillFresh
+    if (merged.length && !effectiveFresh.length) return false
     // ★★★ 2026-10-23 修「对话历史每 8 秒消失一次、过会又回来」的**唯一真凶**。
     //
     // 上下文：大肥鱼页开着 8 秒轮询（接住微信/QQ 那边说的话），每次轮询调 loadHistory。
@@ -800,9 +864,9 @@ export function useCompanionChat(deps) {
     //
     // 正确语义：**已有消息原样保留，只用 fresh 补缺失的**。
     // 历史行与本地行同 id 时，本地那条就是要显示的那一条，没有任何理由删除它。
-    const changed = fresh.length > 0
+    const changed = effectiveFresh.length > 0
     if (!changed) return false
-    setMessages([...messages.value, ...fresh])
+    setMessages([...messages.value, ...effectiveFresh])
     return true
   }
 
