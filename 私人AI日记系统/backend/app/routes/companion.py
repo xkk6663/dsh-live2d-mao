@@ -1844,6 +1844,16 @@ async def companion_chat(payload: CompanionChatRequest):
                     for image in saved_images:
                         pet_event_service.publish("agent_image", {
                             "url": image["url"],
+                            # ★ 2026-10-23：补 filename / display / mime_type / size，
+                            #   让 WS 这条和 HTTP 响应里的 attachments **同形状**。
+                            #   以前只推 url，前端对 WS 那条算出 filename=''，
+                            #   与 HTTP 那条的 'x.jpg' 不一致 → 同一张图被当成两张
+                            #   → 界面上出现 2~3 份（用户实拍，刷新后正常）。
+                            #   前端去重已改成只看 url 兜底，这里补全字段是第二道保险。
+                            "filename": image.get("filename") or "",
+                            "display": image.get("display") or "",
+                            "mime_type": image.get("mime_type") or "",
+                            "size": image.get("size") or 0,
                             "agent_id": FEIYU_AGENT_ID,
                             "accent": FEIYU_BUBBLE_ACCENT,
                             # 带 response_id → 渲染端不把它当"点击随机图"

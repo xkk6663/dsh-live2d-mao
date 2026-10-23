@@ -828,13 +828,22 @@ export function useCompanionChat(deps) {
     const attachments = (() => {
       const base = Array.isArray(existing?.attachments) ? existing.attachments : []
       if (!base.length) return incomingAttachments
-      // 去重键：url + filename（**不含 responseId**）——
-      // HTTP 这条路的附件没有 response_id，而它和 WS 那条是**同一张图的两次投递**，
-      // 必须合并成一条；同一张图"两次不同发送"后端已给不同 url，所以不会误合并。
-      const keyOf = (a) => `${a.url || ''}\u0000${a.filename || ''}`
-      const seen = new Set(base.map(keyOf))
+      // ★★★ 2026-10-23 修「一张表情显示成 2~3 张、刷新后变回一张」的真凶。
+      //
+      // 旧键是 `url + filename`，但两条通道给的 filename **不一致**：
+      //   · WS  agent_image 的 payload **只有 url，没有 filename** → 前端填 ''（空串）
+      //   · HTTP attachments 带真实落盘名                          → 'x.jpg'
+      // 于是同一张图在两次投递里算出两个不同的键 → 两条都被保留 → 同一张图出现多份。
+      // 刷新后只走历史行（一行一张），所以"刷新就正常"。
+      //
+      // 正确键：**只用 url**。后端落盘按内容哈希命名，同一张图 = 同一个 url；
+      // 而"她真的发了两次同一张图"是**不同的行、不同的 requestId**，
+      // 根本进不到这一段（这里只在同一轮内合并两条通道的投递）。
+      const keyOf = (a) => String(a.url || a.data_url || '')
+      const seen = new Set(base.map(keyOf).filter(Boolean))
       const extra = incomingAttachments.filter((a) => {
         const key = keyOf(a)
+        if (!key) return true          // 没 url 的不参与去重（当前也渲染不出来）
         if (seen.has(key)) return false
         seen.add(key)
         return true

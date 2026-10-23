@@ -158,3 +158,26 @@ test('★ 轮询拉历史时绝不能清空已有消息（否则每 8 秒闪一�
   assert.match(fn, /setMessages\(\[\.\.\.messages\.value, \.\.\.fresh\]\)/, '应保留现有消息，只追加缺失的')
   assert.doesNotMatch(code, /incomingIds\.has/, '禁止按 incomingIds 过滤（会与 fresh 抵消导致清空）')
 })
+
+test('★ 附件去重键只能看 url（WS 与 HTTP 的 filename 不一致会导致同图多份）', () => {
+  const fn = source.match(/function upsertReply\(requestId, result\)[\s\S]*?\n  \}/)?.[0] || ''
+  assert.ok(fn, 'upsertReply 应存在')
+  // 必须只用 url 做键
+  assert.match(fn, /const keyOf = \(a\) => String\(a\.url \|\| a\.data_url \|\| ''\)/, '去重键必须是纯 url')
+  // 禁止把 filename 混进去重键
+  assert.doesNotMatch(fn, /keyOf = \(a\) => `\$\{a\.url[^`]*filename/, '禁止把 filename 混进键（WS 侧 filename 为空、HTTP 侧有值）')
+})
+
+test('★ 后端 agent_image 必须带 filename（与 HTTP attachments 同形状）', () => {
+  const py = fs.readFileSync(
+    path.join(here, '..', '..', '私人AI日记系统', 'backend', 'app', 'routes', 'companion.py'),
+    'utf8',
+  )
+  // 直接定位 agent_image 推送位置，往后取一段代码看字段
+  // 注意：注释里也出现过 publish("agent_image"，所以取**最后一次**出现的位置
+  const idx = py.lastIndexOf('pet_event_service.publish("agent_image"')
+  assert.ok(idx > 0, 'agent_image 推送点应存在')
+  const tail = py.slice(idx, idx + 1600)
+  assert.match(tail, /"url":/, '必须推 url')
+  assert.match(tail, /"filename":/, '必须推 filename，否则前端与 HTTP 那条形状不一致 → 同图多份')
+})
