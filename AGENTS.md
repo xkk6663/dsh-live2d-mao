@@ -50,6 +50,7 @@ DSH 专用 Live2D 桌宠：桌宠本体只认统一状态总线上的 12 态 pha
 | **大肥鱼对话页** `FeiyuChatPage.vue` / `useCompanionChat.js` | ★ **`docs/大肥鱼功能总览.md`**（消息模型、排序铁律、去重规则）+ `docs/大肥鱼多模态桥接-协议与修复.md`（协议与踩过的坑） |
 | **大肥鱼后端** `app/cloud_feiyu/**`、`routes/companion.py` | `docs/大肥鱼聊天-后端契约审计.md`（**契约陷阱**：chat-settings 不存在 / cancel 无效 / 一轮问答共用 request_id） |
 | 气泡 & 状态徽标配色 | `docs/大肥鱼功能总览.md` §5（**身份色与状态色必须并存**；曾用 `!important` 把 12 态色全盖掉） |
+| **接新设备到云端 AstrBot**（一个灵魂多个身体） | ★ **`docs/SKILL-跨设备接入云端AstrBot.md`**（六层架构 + **8 个易错假设** + 最小接入=零代码 + 记忆共享策略 + 多模态附件流转 + 安全红线） |
 
 ---
 
