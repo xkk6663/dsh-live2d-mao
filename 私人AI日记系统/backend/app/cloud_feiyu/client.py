@@ -626,6 +626,27 @@ def media_kind_from_bytes(data: bytes, fallback_mime: str = "", fallback_name: s
     return attachment_media_kind(fallback_kind, fallback_mime, fallback_name)
 
 
+def _collapse_exact_doubling(text: str) -> str:
+    """把"整段文字精确重复两次"压成一次。
+
+    ★ 2026-10-24 实测：云端 `provider_tts_settings.dual_output = true` 时，
+      AstrBot 会为同一句话推送**两轮 plain 帧**（一轮给 TTS、一轮给文字），
+      拼起来就是 `测完就去睡觉，别熬了测完就去睡觉，别熬了`（周期 10）。
+      观察链路直接把拼接结果当气泡正文，用户会看到每句话都说两遍。
+
+    只处理"前后完全相同的整段重复"，不做任何模糊匹配 ——
+    正常的叠词（"看看""慢慢"）和复读机式的循环不会误伤。
+    重复 3 次以上也一并去掉（取一份）。
+    """
+    if not text:
+        return text
+    for period in range(1, len(text) // 2 + 1):
+        unit = text[:period]
+        if text == unit * (len(text) // period):
+            return unit
+    return text
+
+
 @dataclass
 class FeiyuMessage:
     """大肥鱼返回的消息。"""
@@ -1077,7 +1098,8 @@ class CloudFeiyuClient:
         content = streamed_text
         if not content.strip() and complete_text.strip():
             content = complete_text
-        return strip_tool_payload(strip_reasoning_prefix(content)).strip(), {
+        content = _collapse_exact_doubling(strip_tool_payload(strip_reasoning_prefix(content)).strip())
+        return content, {
             "plain_frames": plain_frames,
             "complete_frames": complete_frames,
             "record_frames": record_frames,

@@ -1291,51 +1291,11 @@
     lowHistory: [],
     lastAt: 0,
     lastPeak: 0,
-    // ── 重拍检测状态（在线均值/方差，不依赖 FFT）──
-    beatEma: 0,
-    beatVar: 0,
-    beatSamples: 0,
-    beatCount: 0,
-    lastBlinkAt: 0,
-    blinkUntil: 0,
   }
   const AUDIO_REACT_HEAD_LAG = 7
   const AUDIO_REACT_MIN_ON = 0.02
   // 超过这么久没收到新数据就认为采集断了，逐渐归零（避免"卡在最后一帧一直抖"）
   const AUDIO_REACT_STALE_MS = 600
-  // 重拍眨眼：一次眨眼持续多久（毫秒）。人的自然眨眼约 120~180ms。
-  const BEAT_BLINK_MS = 150
-
-  /**
-   * 触发一次"重拍眨眼"。
-   *
-   * ★ 为什么不用 addParameter 去减 ParamEyeLOpen：
-   *   上一版就是这么写的，结果眼睛闭死不睁（addParameter 是累加，
-   *   和自动眨眼打架）。这里改用**绝对写入**（setParameter）且只在
-   *   一次眨眼窗口内生效，窗口结束立刻停止写入，让控制权还给眨眼系统。
-   *   写入发生在 beforeModelUpdate 之后的位置（applyFrameParameters 里），
-   *   因此覆盖的是本帧最终值，不会残留到下一帧。
-   */
-  function triggerBeatBlink() {
-    audioReact.blinkUntil = performance.now() + BEAT_BLINK_MS
-  }
-
-  /** 本帧是否处于重拍眨眼窗口内；是则返回闭眼程度（0~1）。 */
-  function currentBeatBlink() {
-    if (!audioReact.blinkUntil) return 0
-    const now = performance.now()
-    if (now >= audioReact.blinkUntil) {
-      audioReact.blinkUntil = 0
-      return 0
-    }
-    // 三角形包络：快速闭上(前 30%)→ 保持 → 快速睁开(后 40%)，
-    // 比"方波"自然得多，也不会让她看起来像在发愣。
-    const total = BEAT_BLINK_MS
-    const elapsed = total - (audioReact.blinkUntil - now)
-    const p = Math.max(0, Math.min(1, elapsed / total))
-    const close = p < 0.3 ? p / 0.3 : (p < 0.6 ? 1 : (1 - p) / 0.4)
-    return Math.max(0, Math.min(1, close))
-  }
 
   /** 收到后端 audio_bands 帧：只存目标值，真正的参数写入在每帧 updateAudioReaction。 */
   function applyAudioBands(payload) {
@@ -1348,14 +1308,6 @@
     try {
       window.__mioAudioReact = window.__mioAudioReact || {}
       window.__mioAudioReact.lastBands = { ...audioReact.target, at: audioReact.lastAt }
-      // 调试：控制台 `__mioAudioReact.stats()` 看重拍次数与当前闭眼程度
-      window.__mioAudioReact.stats = () => ({
-        beats: audioReact.beatCount,
-        blinkNow: Number(currentBeatBlink().toFixed(3)),
-        low: Number(audioReact.low.toFixed(3)),
-        ema: Number(audioReact.beatEma.toFixed(3)),
-        sigma: Number(Math.sqrt(Math.max(0, audioReact.beatVar)).toFixed(3)),
-      })
     } catch (_) {}
   }
 
@@ -1371,13 +1323,11 @@
       const k = target > cur ? up : down
       return cur + (target - cur) * k
     }
-    // 本地再柔化一次（服务端已经缓动过一轮，这里是"双保险"）。
-    // ★ 2026-10-24：上行系数也调慢（0.5→0.22 等），否则 30fps 的数据一跳
-    //   就瞬间贴到目标值，视觉上就是"顿一下"。慢一点才有肌肉感而不是弹簧感。
-    audioReact.low = ease(audioReact.low, t.low, 0.22, 0.075)
-    audioReact.mid = ease(audioReact.mid, t.mid, 0.18, 0.065)
-    audioReact.high = ease(audioReact.high, t.high, 0.14, 0.055)
-    audioReact.level = ease(audioReact.level, t.level, 0.20, 0.075)
+    // 本地再柔化一次（服务端已经缓动过一轮，这里是"双保险"，让过渡更像肌肉而非弹簧）
+    audioReact.low = ease(audioReact.low, t.low, 0.5, 0.12)
+    audioReact.mid = ease(audioReact.mid, t.mid, 0.44, 0.10)
+    audioReact.high = ease(audioReact.high, t.high, 0.36, 0.085)
+    audioReact.level = ease(audioReact.level, t.level, 0.5, 0.12)
     if (audioReact.level > audioReact.lastPeak) audioReact.lastPeak = audioReact.level
     else audioReact.lastPeak *= 0.995
 
@@ -1386,47 +1336,12 @@
     const high = audioReact.high
     const intensity = audioReact.level
     if (intensity < AUDIO_REACT_MIN_ON && low < AUDIO_REACT_MIN_ON && mid < AUDIO_REACT_MIN_ON) {
-      // ★ 注意：不能直接 return —— 已经触发的那次重拍眨眼必须能走完，
-      //   否则鼓点后音乐刚好变安静，她的眼睛会**停在半闭**（又变成"闭着不睁"）。
-      const pendingBlink = currentBeatBlink()
-      if (pendingBlink > 0) {
-        setParameter('ParamEyeLOpen', 1 - pendingBlink, 0.95)
-        setParameter('ParamEyeROpen', 1 - pendingBlink, 0.95)
-      }
-      return // 没有声音：不写身体参数，把身体让给待机动画
-    }
-
-    // ★★ 重拍检测（2026-10-24 用户诉求：「重拍时眨一下眼，交互性更好」）
-    //   算法：**在线能量统计 + 突增判定**，不用 FFT、不占额外开销。
-    //     · 维护低频能量的运行均值(ema)与标准差(var)；
-    //     · 当前 low 明显高于「均值 + 2.2σ」→ 判为重拍（鼓点）；
-    //     · 两次眨眼之间强制冷却 ≥360ms，否则连续鼓点会让她一直眨眼；
-    //     · 只在有低频时触发（人声/弦乐不该触发眨眼）。
-    //   为什么用突增而不是固定阈值：不同音乐响度差很多，固定阈值要么不响要么乱响。
-    if (low > AUDIO_REACT_MIN_ON) {
-      const ema = audioReact.beatEma
-      const dev = low - ema
-      audioReact.beatEma = ema + dev * 0.08 // 慢跟踪：反映"这首歌的常态音量"
-      audioReact.beatVar = audioReact.beatVar + (dev * dev - audioReact.beatVar) * 0.08
-      const sigma = Math.sqrt(Math.max(1e-6, audioReact.beatVar))
-      // 预热：前 0.5 秒统计还不稳，不判定，免得开播就狂眨
-      audioReact.beatSamples += 1
-      if (audioReact.beatSamples > 30) {
-        const strong = low > ema + sigma * 2.2 && low > 0.18
-        const cooled = now - audioReact.lastBlinkAt > 360
-        if (strong && cooled) {
-          audioReact.lastBlinkAt = now
-          audioReact.beatCount += 1
-          triggerBeatBlink()
-        }
-      }
+      return // 没有声音：不写任何参数，把身体完全让给待机动画
     }
 
     // 相位：由低频能量驱动前进速度 → 音乐停、相位停
-    //   ★ 2026-10-24「抽搐」修正：原来基准 0.055 + low*0.075（最快要 0.13 rad/帧
-    //   ≈ 1.24 圈/秒），频率太高，看着像抖动而不是呼吸。
-    //   现在降到 0.028 + low*0.030（约 0.27~0.55 圈/秒），接近人的呼吸节律。
-    audioReact.phase += 0.028 + low * 0.030
+    //   基准 0.055 rad/帧 ≈ 0.52 拍/秒的"呼吸感"，随低音加强最多翻倍
+    audioReact.phase += 0.055 + low * 0.075
     if (audioReact.phase > Math.PI * 2) audioReact.phase -= Math.PI * 2
 
     // 头部滞后：环形缓冲取 7 帧前的低频 → 头比身体慢半拍（细腻感的关键）
@@ -1437,49 +1352,41 @@
     const sin = Math.sin(audioReact.phase)
     const sin2 = Math.sin(audioReact.phase * 2)
 
-    // ★★ 2026-10-24 用户实拍「抽搐太夸张」的修正：
-    //   原来直接写 `sin * low * 9.5` 再 addParameter —— 但 addParameter 是**累加**，
-    //   而 Live2D 自身的运动/待机动作**也在给同一批参数写值**，
-    //   两边叠加后实际幅度远超 9.5 度，于是看起来像抽搐。
-    //   现在：
-    //     ① 幅度整体下调（约原来的 40%），并把 weight 降到 0.35~0.5，
-    //        让"音频驱动"只作为**叠加层**存在，主姿态仍由模型自己的动作决定；
-    //     ② 相位推进速度减半（更接近"呼吸"而不是"打拍子"）。
-    const AMP = 0.60 // 总幅度缩放：觉得还想更轻就调到 0.25，想更明显可到 0.6
+    // ★★ 2026-10-25 回滚后的最终版（在 4779fd81「能摇」的实现上做两处最小改动）
+    //
+    //   为什么保留 addParameter 而不是改 setParameter：
+    //     实测这条路径下 addParameter **确实能让模型动**（4779fd81 用户确认"能摇"），
+    //     而后续几次改用 setParameter/blend 的尝试虽然参数值看起来正常，
+    //     模型却反而不动了（phase 冻结）。既然已知哪种写法有效，就用有效的，
+    //     只把"太大"和"碰眼睛"这两处改掉。
+    //
+    //   改动一：幅度整体 ×0.40（原值会让幅度叠加到钳位、看起来抽搐）
+    //   改动二：**删除眼睛驱动** —— addParameter 是累加，往 ParamEyeLOpen 加负值
+    //           会和 Live2D 自动眨眼的 0→1 打开互相打架，导致眼睛闭着睁不开。
+    //           眼睛归表情/眨眼系统管，音频反应不该碰。
+    const AMP = 0.40
 
     // ── ① 呼吸：低频包络驱动身体上下（量要小，否则像跳） ──
-    addParameter('ParamBodyAngleY', (0.8 + low * 1.6) * AMP, 0.35)
+    addParameter('ParamBodyAngleY', (1.5 + low * 2.6) * AMP, 0.45)
 
     // ── ② 摇摆：身体左右，主节拍感在这里 ──
-    addParameter('ParamBodyAngleX', sin * low * 4.2 * AMP, 0.40)
-    addParameter('ParamBodyAngleZ', sin2 * low * 1.4 * AMP, 0.30)
+    addParameter('ParamBodyAngleX', sin * low * 9.5 * AMP, 0.55)
+    addParameter('ParamBodyAngleZ', sin2 * low * 3.2 * AMP, 0.42)
 
     // ── ③ 头部：滞后低频 + 中频，产生惯性跟随 ──
-    addParameter('ParamAngleX', (sin * laggedLow * 5.0 + mid * 0.8) * AMP, 0.40)
-    addParameter('ParamAngleY', -mid * 1.6 * AMP, 0.30)
-    addParameter('ParamAngleZ', sin2 * laggedLow * 2.2 * AMP, 0.35)
+    addParameter('ParamAngleX', (sin * laggedLow * 11 + mid * 1.6) * AMP, 0.55)
+    addParameter('ParamAngleY', -mid * 3.4 * AMP, 0.40)
+    addParameter('ParamAngleZ', sin2 * laggedLow * 5.2 * AMP, 0.45)
 
     // ── ④ 头发：高频轻动，幅度小；无高音时不写 ──
-    if (high > 0.10) {
-      const hairWave = Math.sin(audioReact.phase * 1.7) * high * 0.30 * AMP
-      addParameter('ParamHairFront1', hairWave, 0.25)
-      addParameter('ParamHairFront2', hairWave * 0.8, 0.25)
-      addParameter('ParamHairSide1', hairWave * 0.6, 0.22)
-      addParameter('ParamHairSide2', hairWave * 0.5, 0.22)
+    if (high > 0.06) {
+      const hairWave = Math.sin(audioReact.phase * 1.7) * high * 0.55 * AMP
+      addParameter('ParamHairFront1', hairWave, 0.30)
+      addParameter('ParamHairFront2', hairWave * 0.8, 0.30)
+      addParameter('ParamHairSide1', hairWave * 0.6, 0.25)
+      addParameter('ParamHairSide2', hairWave * 0.5, 0.25)
     }
-    // ★★ 2026-10-24 用户实拍「眼睛闭上了不打开」：**不能用 addParameter 去减眼睛**。
-    //   原来这里对 ParamEyeLOpen / ParamEyeROpen 加了负值（`-mid * 0.35`），
-    //   而 addParameter 是**累加**：Live2D 的自动眨眼每个周期把眼睛从 0→1 打开，
-    //   这里的负值又把它往下拽，两者打架的结果就是**眼睛闭着再也睁不开**。
-    //
-    //   现在眼睛只在**重拍眨眼窗口**内被驱动，且用 setParameter（绝对写入）：
-    //   窗口结束立刻停止写入，控制权完整交还自动眨眼 —— 不会再出现闭死不睁。
-    const blink = currentBeatBlink()
-    if (blink > 0) {
-      // weight=0.95：几乎完全接管，但留一点余量避免与眨眼插值硬冲突
-      setParameter('ParamEyeLOpen', 1 - blink, 0.95)
-      setParameter('ParamEyeROpen', 1 - blink, 0.95)
-    }
+    // 注意：这里**不写任何眼睛参数**（见上方"改动二"）。
   }
 
   // 把参数写入挂到 Cubism 的 beforeModelUpdate 钩子上（每次换模型重挂一次）。
