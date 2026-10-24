@@ -9,6 +9,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from . import local_vision_service, system_audio_service
@@ -66,9 +67,21 @@ _session_unknown_cost_count = 0
 _session_attempt_count = 0
 _session_failure_count = 0
 _cloud_profile_health: dict[str, dict[str, Any]] = {}
+# 2026-10-24 用户裁决（m02056）：屏幕观察从"画面一变就分析"改成"可设最短/最长间隔、
+# 区间内均匀随机的定时触发"（典型是 1~2 小时看一眼）。这里保存下一次该在什么时候观察，
+# 以及它落在哪个区间里 —— 给设置页显示倒计时，也避免每次轮询都重新掷骰子。
+_trigger_next_monotonic = 0.0
+_trigger_span_seconds = 0
+_trigger_last_fire_monotonic = 0.0
+_trigger_last_span_seconds = 0
 CLOUD_PROFILE_BASE_COOLDOWN_SECONDS = 30.0
 CLOUD_PROFILE_MAX_COOLDOWN_SECONDS = 300.0
 DESKTOP_PET_CONVERSATION_ID = "desktop_pet"
+# 云端大肥鱼这条路在状态面板里借用健康度表展示（它不是本地 llm 的 ModelProfile）
+FEIYU_VISION_HEALTH_ID = "cloud_feiyu"
+# 云端识图：跟 routes/companion.py 的直通式对话一样，给大肥鱼的正文前加一枚设备前缀，
+# 让她知道这是哪台电脑在看屏幕（多设备共用一个灵魂时的识别依据）。
+FEIYU_SCREEN_DEVICE_TAG = "电脑桌宠"
 # 游戏窗口需要比整屏观察更敏感：对白框、选项和立绘变化通常只占画面一小块。
 # 这只影响“何时送视觉请求”，不会让普通桌面整屏观察变成高频上传。
 GAME_WINDOW_CHANGE_FACTOR = 0.6
@@ -110,19 +123,34 @@ GAME_EVENT_TYPES = {
     "dialogue_choice",
     "cutscene_turn",
 }
+# ★ 2026-10-24 用户反馈「自然语言触发不了屏幕观察」。
+#   原来这里是一串写死的短语（现在呢/再看看/屏幕呢…），必须**整句完全等于**其中之一
+#   （下面用的是 fullmatch），用户换个说法就失效。现在改成**要素组合**：
+#     动作词（看/瞅/瞧…）+ 可选的"现在/当前/一下" + 对象词（屏幕/画面/桌面）
+#   这样「看一下现在的屏幕」「看下我这屏幕」「帮我瞅瞅画面」「屏幕上是啥」都能命中，
+#   而「看看这个视频」这种带具体内容的不会被误判（对象词必须是屏幕类）。
+_SCREEN_ACTION = r"(?:帮\s*我\s*|给\s*我\s*|你\s*)?(?:看|瞅|瞧|瞄|扫)(?:一|了)?(?:下|看|眼)?"
+_SCREEN_OBJECT = r"(?:屏幕|画面|桌面|电脑|显示器)"
 SCREEN_FOLLOW_UP_RE = re.compile(
     r"^(?:"
-    r"\u73b0\u5728\u5462|\u73b0\u5728\u600e\u4e48\u6837|\u7136\u540e\u5462|\u63a5\u4e0b\u6765\u5462|"
-    r"\u8fd9\u4e2a\u5462|\u90a3\u8fd9\u4e2a\u5462|\u518d\u770b\u770b|\u4f60\u518d\u770b(?:\u770b)?|"
-    r"\u73b0\u5728\u770b\u5230\u4e86\u5417|\u73b0\u5728\u80fd\u770b\u5230\u4e86\u5417|"
-    r"\u8fd8\u662f\u770b\u4e0d\u89c1|\u8fd8\u80fd\u770b\u5230\u5417|\u6709\u753b\u9762\u5417|"
-    r"\u753b\u9762\u5462|\u5c4f\u5e55\u5462|\u89c6\u89c9\u529f\u80fd(?:\u5462|\u600e\u4e48\u4e86|\u6709\u53cd\u5e94\u5417)?"
+    # ① 纯指示语（靠上下文判断）：现在呢 / 然后呢 / 再看看 / 这个呢
+    r"(?:现在|然后|接下来|这个|那个|屏幕|画面|视觉功能)(?:呢|怎么样|怎么了|有啥|有什么)?|"
+    r"(?:再|重新)?(?:看|瞅|瞧)(?:一下|看|一眼)?|"
+    # ② 动作 + 对象：看/瞅/瞧 + (现在/当前/一下) + 屏幕/画面/桌面
+    rf"{_SCREEN_ACTION}(?:现在|当前|一下)?(?:的)?(?:电脑)?{_SCREEN_OBJECT}(?:上|里|中)?(?:是|有|在|显示|变成)?(?:啥|什么|干嘛|做什么|什么情况|怎么样|呢)?|"
+    # ③ 对象打头：屏幕上是什么 / 画面里是啥 / 桌面现在什么样 / 屏幕呢
+    rf"(?:我的?|这|那)?{_SCREEN_OBJECT}(?:上|里|中)?(?:现在|此刻)?(?:是|有|在|显示|变成|什么样|怎么样)?(?:啥|什么|干嘛|做什么|什么情况|怎么样|呢)?|"
+    # ④ 别的说法：现在能看到吗 / 看得到吗 / 有画面吗
+    r"现在(?:能)?看到(?:了)?吗|看得到(?:屏幕|画面)?吗|有画面吗|还是看不见|还能看到吗"
     r")[\uFF0C\u3002\uFF01\uFF1F!?/\\\s]*$"
 )
 SCREEN_CONTEXT_INTENT_RE = re.compile(
-    r"(?:看(?:看|一下)?(?:现在|当前)?(?:的)?(?:屏幕|画面)|"
-    r"(?:屏幕|画面)(?:上|里|中)?(?:是|有|变成|显示)|"
-    r"你看现在|看得到(?:屏幕|画面)吗|视觉功能|画面识别|屏幕观察)"
+    # ★ 同一反馈：原来只认"看屏幕/屏幕是/你看现在"几种固定写法，
+    #   「我屏幕上现在有啥」「桌面现在什么样」漏了。放宽成"动作+对象"或"对象+问词"。
+    #   注意对象词包含"桌面"——用户说"桌面"时说的就是屏幕，不是桌面文件夹。
+    rf"(?:{_SCREEN_ACTION}[^。！？\n]{{0,6}}?{_SCREEN_OBJECT})|"
+    rf"(?:{_SCREEN_OBJECT}(?:上|里|中)?[^。！？\n]{{0,8}}?(?:是|有|显示|变成|怎么样|什么样|干嘛|做什么))|"
+    r"你在看我|看看我在干嘛|看看我在做什么|现在在干嘛|视觉功能|画面识别|屏幕观察"
 )
 SCREEN_FOLLOW_UP_CONTEXT_SECONDS = 5 * 60
 # A screen follow-up is an explicit user request about what is visible now.
@@ -174,6 +202,168 @@ class CombinedVisionResult:
     emotion: str
     reply: str
     reason: str
+
+
+def _vision_routes(config: dict[str, Any]) -> set[str]:
+    """当前允许的识图通路。
+
+    ★ 2026-10-24 用户裁决：**桌宠端完全不需要任何模型 API，模型全部走云端服务器。**
+      所以这里恒为 {"feiyu"}（云端大肥鱼直连：一帧图 + 一段自然语言提示词发 AstrBot）。
+      原来还有两条需要本机持有模型的路，按裁决移除：
+        · "local" —— 本机 Ollama 跑 qwen2.5-vl（要下载模型、要占显存）
+        · "cloud" —— 本机拼一大段 JSON 指令发某个云端 VL 模型，再解析 JSON
+      老配置里写了 local/cloud 的，一律按 feiyu 处理，保证升级后行为一致。
+
+    config 参数保留：调用点都传了，且将来若真的要多通路，这里是唯一开关。
+    """
+    _ = config
+    return {"feiyu"}
+
+
+def _uses_feiyu_vision(config: dict[str, Any]) -> bool:
+    return "feiyu" in _vision_routes(config)
+
+
+def _feiyu_unavailable_reason() -> str:
+    """云端大肥鱼没配好时给用户的明确原因（不要把"没配 key"说成"网络错误"）。"""
+    try:
+        from ..cloud_feiyu import get_client as get_feiyu_client
+
+        client = get_feiyu_client()
+    except Exception as exc:  # noqa: BLE001 - 导入/初始化失败都按"不可用"处理
+        return f"云端大肥鱼客户端初始化失败：{exc}"
+    if not client.is_configured:
+        return "云端大肥鱼未配置：在 backend/.env 里设置 ASTRBOT_API_KEY（不要写进源码）"
+    return ""
+
+
+def _feiyu_screen_prompt(
+    *,
+    custom_prompt: str,
+    is_window: bool,
+    frame: dict[str, Any],
+    persona_context: str,
+    recent_context: str,
+    audio_context: str,
+    foreground: dict[str, Any],
+) -> str:
+    """交给云端大肥鱼的提示词：**一张图 + 一句话**，不要 JSON。
+
+    和本地/普通云视觉那条链路最大的区别：
+      · 不要求模型输出结构化 JSON —— 大肥鱼是人格化对话，硬要 JSON 会把她答成"识图接口"；
+      · 屏幕观察要的"识别 + 判断该不该说"由本机完成（观测记录照样落库），
+        云端只负责用她自己的性格看图说话；
+      · 有用户自定义提示词时直接交给她，本机不预先替她决定口径。
+    """
+    scope = "用户指定的单个窗口" if is_window else "用户此刻的整个电脑屏幕"
+    title = str(frame.get("title") or "").strip()
+    custom = str(custom_prompt or "").strip()
+    if custom:
+        request = (
+            "用户对你这次看屏幕有明确要求，按这个要求回答（不要解释你在遵守要求）：\n"
+            f"{custom[:2000]}"
+        )
+    else:
+        request = (
+            "自然地说一句 1-2 句短话：可以是对的吐槽、感受、关心或随口反应。"
+            "不要播报画面、不要复述用户在做什么、不要说「我看到了」，不要提问式追问。"
+        )
+    lines = [
+        f"这是{scope}的一瞬间截图。",
+    ]
+    if title:
+        lines.append(f"窗口标题：{title[:120]}")
+    if foreground.get("process_name"):
+        lines.append(f"前台应用：{foreground.get('process_name')}（{foreground.get('kind') or '未知类型'}）")
+    if audio_context:
+        lines.append(f"你刚听到的声音台词（只作画面补充，不要当成用户在跟你说话）：{audio_context[:240]}")
+    if persona_context:
+        lines.append(f"你的身份与语气：{persona_context[:600]}")
+    if recent_context:
+        lines.append(f"最近这段对话（别重复已说过的话）：\n{recent_context[:600]}")
+    lines.append("")
+    lines.append(request)
+    lines.append("直接输出要对用户说的话，不要 Markdown，不要情绪标签。")
+    return "\n".join(lines)
+
+
+async def _feiyu_vision_call(
+    *,
+    frame: dict[str, Any],
+    prompt: str,
+    timeout_seconds: float,
+) -> CompletionResult:
+    """把这一帧 + 提示词丢给云端 AstrBot，拿回她的原话。
+
+    为什么不用 `client.chat()`：
+      · `chat()` 解析正文时**从不读 `complete` 帧**，而云端模型非流式时只发 complete
+        → 实测拿到空正文（client 层的既有 bug，这里不顺手改，避免影响大肥鱼聊天主链路）；
+      · 观察链路也不需要云端回传的图片/语音字节，所以用 `chat_text_diagnosed()`：
+        只取正文，但把帧级诊断带出来（本次是 plain 还是 complete 回的、云端 stats 是什么）。
+    """
+    from ..cloud_feiyu import get_client as get_feiyu_client
+    from ..cloud_feiyu.device import build_device_context
+
+    client = get_feiyu_client()
+    reason = _feiyu_unavailable_reason()
+    if reason:
+        raise RuntimeError(reason)
+
+    image_data_url = "data:image/jpeg;base64," + base64.b64encode(frame["content"]).decode("ascii")
+    # 出站多模态：AstrBot 只收 attachment_id，data URL 必须先上传换 id
+    attachment_id = await client.upload_attachment(image_data_url, filename="screen_observe.jpg")
+    try:
+        device_ctx = build_device_context()
+    except Exception:  # noqa: BLE001 - 设备上下文是锦上添花
+        device_ctx = ""
+    message = f"[{FEIYU_SCREEN_DEVICE_TAG}] {device_ctx}\n\n{prompt}" if device_ctx else prompt
+
+    started = time.monotonic()
+    text, diagnostics = await client.chat_text_diagnosed(
+        message,
+        session_id=client.session_id,
+        images=[attachment_id],
+    )
+    elapsed_ms = round((time.monotonic() - started) * 1000, 1)
+    stats = diagnostics.get("agent_stats") if isinstance(diagnostics, dict) else None
+    first_token_ms = None
+    if isinstance(stats, dict):
+        try:
+            first_token_ms = round(float(stats.get("time_to_first_token") or 0) * 1000, 1)
+        except (TypeError, ValueError):
+            first_token_ms = None
+    if not str(text or "").strip():
+        # 帧级诊断直接进报错文案：用户看到的是"云端这轮没吐正文"而不是笼统的网络错误
+        seen = ""
+        record_hint = ""
+        if isinstance(diagnostics, dict):
+            frames = diagnostics.get("frames") or []
+            seen = "、".join(str(item) for item in list(frames)[:12]) or "无"
+            if int(diagnostics.get("record_frames") or 0) > 0:
+                record_hint = "；她这轮把回复转成了语音（record 帧），文字没有随帧下发"
+        raise RuntimeError(
+            "云端大肥鱼这轮没有返回正文"
+            f"（plain 帧 {diagnostics.get('plain_frames', 0)} 个 / "
+            f"complete 帧 {diagnostics.get('complete_frames', 0)} 个{record_hint}；"
+            f"本次收到的帧序列：{seen}）"
+            if isinstance(diagnostics, dict)
+            else "云端大肥鱼这轮没有返回正文"
+        )
+    return CompletionResult(
+        content=str(text),
+        model="cloud_feiyu",
+        prompt_tokens=0,
+        cached_prompt_tokens=0,
+        completion_tokens=0,
+        reasoning_tokens=0,
+        # 云端按人统计费用，这里拿不到单价 → 记"未知"，不计入本机预算，也不假装是 0 元
+        cost_yuan=None,
+        cost_source="cloud_feiyu_unmetered",
+        first_token_latency_ms=(first_token_ms if first_token_ms else None),
+        total_latency_ms=elapsed_ms,
+        provider_id=FEIYU_VISION_HEALTH_ID,
+        provider_name="大肥鱼（云端）",
+    )
 
 
 def _fallback_reaction(observation: Observation) -> str:
@@ -890,6 +1080,28 @@ def _parse_combined_vision_result(content: str) -> CombinedVisionResult:
     )
 
 
+def _custom_instruction_block() -> str:
+    """用户自定义的观察提示词（设置页「观察提示词」）。
+
+    空字符串返回空串，不往 prompt 里塞占位符 —— 默认行为保持原样。
+    用户原话示例：「锐评一下此刻的电脑屏幕画面」。
+    """
+    try:
+        config = companion_service.load_config()
+    except Exception:  # noqa: BLE001 - 读配置失败不能拖垮整轮观察
+        return ""
+    raw = str(config.get("screen_observation_prompt") or "").strip()
+    if not raw:
+        return ""
+    # 截断到合理长度，避免用户粘贴一整篇文档把上下文顶爆
+    text = raw[:2000]
+    return (
+        "\n【用户对这次观察的专门要求，优先级高于上面的默认口吻】\n"
+        f"{text}\n"
+        "仍然只输出要对用户说的话（1-2 句短话），不要解释你在遵守这条要求。\n"
+    )
+
+
 def _reaction_messages(
     observation: Observation,
     decision: Any,
@@ -919,6 +1131,7 @@ Mio 当前属性摘要：
 {_recent_context(conversation_id)}
 
 先想清楚：按 Mio 当前属性定义的关系，一个就在用户旁边的熟人此刻真的会说什么。只挑一个最自然的反应，不要总结整幅画面。
+{_custom_instruction_block()}
 可以是简短感受、轻微吐槽、关心、替用户高兴，或对眼前局面的随口反应；没有必要时不要追问。
 只说 1-2 句短话，每句尽量不超过 28 个字。
 不要报告截图、识图、事件类型、可信度或内部判断过程。
@@ -965,6 +1178,7 @@ Mio 当前属性摘要：
 {_recent_context(conversation_id)}
 
 先理解画面和时间感，再决定此刻最自然的一句话。优先回应眼前具体的细节，不要介绍自己的观察能力。
+{_custom_instruction_block()}
 像熟人刚坐到旁边那样开口，可以随口接一句、轻微吐槽或简单问候，不要做场景播报。
 只说 1-2 句简短口语，每句尽量不超过 28 个字。普通桌面也要自然开口，不要强行找话题。
 不要说截图、识图、模型、事件、可信度、分析或“我醒了”。
@@ -1048,6 +1262,11 @@ def _record_completion_usage(completion: Any, *, analysis: bool) -> None:
             _session_cost_yuan += max(0.0, float(completion.cost_yuan))
         elif cost_source in {"local", "local_fallback"}:
             pass
+        elif cost_source == "cloud_feiyu_unmetered":
+            # ★ 云端大肥鱼按人计费，本机拿不到单价：既不能算 0 元（会显得"免费"），
+            #   也不能计入 _session_unknown_cost_count —— 那个计数是"本地预算未知花费"的
+            #   信号，算进去会让设置页一直提示"有未知花费"。
+            pass
         else:
             _session_unknown_cost_count += 1
 
@@ -1056,55 +1275,264 @@ def _combined_cost(*values: float | None) -> float | None:
     return sum(float(value) for value in values) if all(value is not None for value in values) else None
 
 
+def _agent_media_dir() -> Path:
+    """与 routes/companion.py 的 agent_media 同一目录：渲染端用同一个 URL 前缀拉。"""
+    directory = companion_service.live2d_state_dir() / "agent_media"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def _save_observation_voice(blob: bytes, *, emotion: str) -> dict[str, Any] | None:
+    """把合成好的语音落盘，返回渲染端可拉的短 URL（形状与 agent_audio 一致）。"""
+    import hashlib
+
+    if not blob:
+        return None
+    ext = ".wav" if blob[:4] in (b"RIFF",) else ".mp3"
+    digest = hashlib.sha256(blob).hexdigest()[:16]
+    name = f"{digest}{ext}"
+    target = _agent_media_dir() / name
+    try:
+        if not target.is_file() or target.stat().st_size != len(blob):
+            target.write_bytes(blob)
+    except OSError as exc:
+        with _state_lock:
+            _last_error = f"观察语音落盘失败：{exc}"
+        return None
+    return {
+        "media": "audio",
+        "url": f"/api/companion/agent-media/{name}",
+        "filename": name,
+        "mime_type": "audio/wav" if ext == ".wav" else "audio/mpeg",
+        "size": len(blob),
+        "emotion": emotion or "neutral",
+    }
+
+
+async def _deliver_observation(
+    *,
+    reply: str,
+    emotion: str,
+    request_id: str,
+    config: dict[str, Any],
+    source_is_game: bool,
+    allow_direct_speech: bool | None,
+) -> None:
+    """把这一轮观察推到桌宠：文字进气泡，按开关再补一条语音。
+
+    用户裁决（m02056）：语音做成开关而不是概率；有语音就都带文字，
+    所以文字永远先发，语音只是叠加，不会把文字顶掉。
+    """
+    voice_on = bool(config.get("screen_observation_voice_enabled", True))
+    speak_on = bool(config.get("voice_enabled", True)) and bool(
+        config.get("speak_game_observations", True)
+        if source_is_game
+        else config.get("speak_screen_observations", False)
+    )
+    # 2026-10-24 修正：**不要把 allow_direct_speech 当语音总闸**。
+    # 那个值来自旧的 screen_direct_voice_enabled（"直接语音"老开关，默认 false），
+    # 它管的是「旧版本地 TTS 直接念」这条已经断掉的路，跟用户新要的
+    # 「观察结果走云端 AstrBot 合成语音」是两回事。拿它当总闸会出现：
+    # 用户明明打开了「观察语音播报」，语音却永远不响。
+    # 这里只看两个新开关：观察语音开关 + 该来源的播报开关。
+    want_voice = voice_on and speak_on
+    _ = allow_direct_speech  # 保留形参兼容旧调用方，不再参与判定
+
+    # 文字：走 agent_audio 同族的 agent_bubble 通道，让桌宠气泡即时说话
+    # （pet_event_service 的 speak 事件只看 messages 表，观察已经落库，会自然跟上）
+    payload: dict[str, Any] = {
+        "text": reply,
+        "agent_id": "screen",
+        "source": "game" if source_is_game else "screen",
+        "request_id": request_id,
+        "emotion": emotion or "neutral",
+        # ★ 2026-10-24 用户裁决：气泡停留 6~8 秒（原 3 秒看不清就没了）。
+        #   这里按字数给 6000~8000；渲染端 bubbleHoldMs() 会再夹一次上下限。
+        "hold_ms": max(6000, min(8000, len(reply) * 120)),
+    }
+
+    # ★★ 2026-10-24 用户实拍「文字气泡没出现」的真根因（这里）：
+    #   原实现是「先 await 合成语音，成功了才发文字气泡」。云端 TTS 一次要几秒到十几秒，
+    #   期间**文字气泡一帧都没发出去**；气泡本身 3~20 秒就会自动收起，等语音回来才发，
+    #   用户看到的往往是"什么也没有"，或者文字挤在语音之后一闪而过。
+    #   文档里写的是"文字永远先发，语音只是叠加"，实现却反着来 —— 现在按文档来：
+    #     ① **立刻**发文字气泡（这一句和语音无关，任何情况下都该出现）；
+    #     ② 语音合成放在后面**独立** try 里，成功就再补一帧 agent_audio。
+    pet_event_service.publish("agent_bubble", payload)
+
+    if not want_voice:
+        return
+
+    try:
+        from ..cloud_feiyu import tts as cloud_tts
+
+        blob = await cloud_tts.synthesize(reply)
+    except Exception as exc:  # noqa: BLE001 - 语音是增强，失败不能吞掉文字
+        # 文字上面已经发出去了，这里只记账，不再重复发气泡
+        with _state_lock:
+            _last_error = f"观察语音合成失败（文字气泡已正常发出）：{exc}"
+        return
+
+    saved = _save_observation_voice(blob, emotion=emotion)
+    if not saved:
+        # 语音落盘失败：文字气泡已发过，不重复
+        return
+    # 文字气泡上面已先发；这里只补语音（用户明确要"语音对应的文字也显示在气泡里"，
+    # 而文字气泡此刻仍然挂在桌面上，不会被这条语音顶掉）
+    pet_event_service.publish(
+        "agent_audio",
+        {
+            **saved,
+            "text": reply,
+            "agent_id": "screen",
+            "source": payload["source"],
+            "request_id": request_id,
+            "response_id": request_id,
+        },
+    )
+
+
+def _trigger_bounds_seconds(config: dict[str, Any]) -> tuple[float, float]:
+    """随机触发的区间（秒）。保证下限 <= 上限，否则配置写反会永远不触发。"""
+    minimum = max(1, min(1440, int(config.get("screen_trigger_min_minutes", 60)))) * 60.0
+    maximum = max(1, min(1440, int(config.get("screen_trigger_max_minutes", 120)))) * 60.0
+    if maximum < minimum:
+        minimum, maximum = maximum, minimum
+    return minimum, maximum
+
+
+def _schedule_next_trigger(config: dict[str, Any], *, now: float) -> None:
+    """在 [min, max] 里均匀抽一个等待时长，安排下一次观察。"""
+    global _trigger_next_monotonic, _trigger_span_seconds
+    import random
+
+    minimum, maximum = _trigger_bounds_seconds(config)
+    span = random.uniform(minimum, maximum)
+    with _state_lock:
+        _trigger_span_seconds = int(round(span))
+        _trigger_next_monotonic = now + span
+
+
+def _trigger_status(config: dict[str, Any]) -> dict[str, Any]:
+    """给设置页看的触发状态：开关、区间、下次倒计时、上次间隔。
+
+    注意：`status()` 是在 `_state_lock` 里调用本函数的，所以这里**绝不能再加锁**
+    （threading.Lock 不可重入，会直接把 /screen/preview 和 /status 挂死 —— 已踩过）。
+    读的只是几个标量，不加锁读也不会读到撕裂值。
+    """
+    now = time.monotonic()
+    minimum, maximum = _trigger_bounds_seconds(config)
+    next_at = _trigger_next_monotonic
+    span = _trigger_span_seconds
+    last_fire = _trigger_last_fire_monotonic
+    last_span = _trigger_last_span_seconds
+    return {
+        "random_enabled": bool(config.get("screen_trigger_random_enabled", True)),
+        "min_minutes": int(minimum // 60),
+        "max_minutes": int(maximum // 60),
+        "next_span_seconds": span,
+        "seconds_until_next": max(0, int(round(next_at - now))) if next_at else None,
+        "last_fire_age_seconds": (
+            max(0, int(round(now - last_fire))) if last_fire else None
+        ),
+        "last_span_seconds": last_span,
+    }
+
+
+def _trigger_due(config: dict[str, Any]) -> bool:
+    """到点没有？顺手在需要时初始化/续约下一次触发。"""
+    if not bool(config.get("screen_trigger_random_enabled", True)):
+        return True
+    now = time.monotonic()
+    with _state_lock:
+        next_at = _trigger_next_monotonic
+    if next_at <= 0:
+        _schedule_next_trigger(config, now=now)
+        return False
+    return now >= next_at
+
+
+def reschedule_trigger() -> None:
+    """用户在设置页改了触发区间/开关后，立刻按新区间重排下一次触发。
+
+    不这么做的话旧的下一次时刻会一直挂着（实测把 60–120 分钟改成 1 分钟后，
+    seconds_until_next 仍是 5464 秒），用户改完要等一个多小时才生效。
+    """
+    config = companion_service.load_config()
+    _schedule_next_trigger(config, now=time.monotonic())
+
+
+def _trigger_consumed(config: dict[str, Any]) -> None:
+    """这一轮真的观察成功了，才安排下一次（失败不消耗，下一轮继续重试）。"""
+    global _trigger_last_fire_monotonic, _trigger_last_span_seconds
+    now = time.monotonic()
+    with _state_lock:
+        _trigger_last_fire_monotonic = now
+        _trigger_last_span_seconds = _trigger_span_seconds
+    _schedule_next_trigger(config, now=now)
+
+
 def status() -> dict[str, Any]:
     config = companion_service.load_config()
-    profiles = _vision_profiles()
     observer_status = companion_service.window_observer.status()
-    local_status = local_vision_service.status()
     is_window = str(observer_status.get("mode") or "screen") == "window"
-    uses_local_vision = str(config.get("screen_vision_route") or "local") == "local"
-    configured_profile = None if uses_local_vision or not profiles else _selected_vision_profile(config, profiles)
-    selected_profile = None if uses_local_vision or not profiles else _healthy_vision_profile(config, profiles)
+    # ★ 2026-10-24 用户裁决：桌宠端不需要任何模型 API，识图恒走云端大肥鱼。
+    #   这里不再探测本地视觉模型（Ollama）状态，也不再列出"可用的云端 VL 模型"——
+    #   那两样都会让状态面板看起来像"本机需要配模型"。本地视觉只在关机清理时停一下服务，
+    #   见 companion_service.shutdown 与 routes 里的 unload_model 调用。
+    feiyu_reason = _feiyu_unavailable_reason()
+    feiyu_client = None
+    try:
+        from ..cloud_feiyu import get_client as get_feiyu_client
+
+        feiyu_client = get_feiyu_client()
+    except Exception:  # noqa: BLE001 - 状态面板永远不该抛
+        feiyu_client = None
     budget = _budget_state(config)
-    cloud_health = _cloud_health_status(profiles)
+    cloud_health = _cloud_health_status(
+        [
+            ModelProfile(
+                id=FEIYU_VISION_HEALTH_ID,
+                provider_name="AstrBot",
+                display_name="大肥鱼（云端）",
+                model="astrbot",
+                base_urls=(),
+                api_key="",
+            )
+        ]
+    )
     with _state_lock:
         return {
             "enabled": bool(config.get("screen_ai_enabled", True)),
             "capture_only": _capture_only,
             "capture": dict(observer_status),
-            "vision_available": (
-                bool(local_status.get("runtime_installed") and local_status.get("model_installed"))
-                if uses_local_vision
-                else bool(profiles)
-            ),
-            "vision_models": [profile.id for profile in profiles],
+            "vision_available": not feiyu_reason,
+            # 这两项保留形状（前端仍在读），但内容只剩云端大肥鱼
+            "vision_models": [FEIYU_VISION_HEALTH_ID],
             "vision_model_options": [
                 {
-                    "id": profile.id,
-                    "label": profile.display_name,
-                    "model": profile.model,
-                    "low_latency_rank": _vision_latency_rank(profile)[0],
+                    "id": FEIYU_VISION_HEALTH_ID,
+                    "label": "大肥鱼（云端）",
+                    "model": "astrbot",
+                    "low_latency_rank": 0,
                 }
-                for profile in sorted(profiles, key=_vision_latency_rank)
             ],
-            "selected_vision_model_id": (
-                local_vision_service.DEFAULT_MODEL if uses_local_vision else (selected_profile.id if selected_profile else "")
+            "selected_vision_model_id": FEIYU_VISION_HEALTH_ID,
+            "configured_vision_model_id": FEIYU_VISION_HEALTH_ID,
+            "using_fallback_vision_model": False,
+            "vision_route": "feiyu",
+            "vision_route_label": "云端大肥鱼 · 图 + 提示词直接发云端，她亲自看图回话",
+            # 云端大肥鱼没配好时的具体原因（status 面板直接展示，免得用户猜）
+            "vision_unavailable_reason": feiyu_reason,
+            "feiyu": (
+                {
+                    "base_url": getattr(feiyu_client, "base_url", ""),
+                    "session_id": getattr(feiyu_client, "session_id", ""),
+                    "configured": bool(getattr(feiyu_client, "is_configured", False)),
+                },
             ),
-            "configured_vision_model_id": (
-                local_vision_service.DEFAULT_MODEL
-                if uses_local_vision
-                else (configured_profile.id if configured_profile else "")
-            ),
-            "using_fallback_vision_model": bool(
-                configured_profile and selected_profile and configured_profile.id != selected_profile.id
-            ),
-            "vision_route": "local" if uses_local_vision else "cloud",
-            "vision_route_label": (
-                "本地视觉 · 图片不上传"
-                if uses_local_vision
-                else ("云端视觉 · 仅游戏窗口" if is_window else "云端视觉 · 上传当前屏幕")
-            ),
-            "local_vision": local_status,
+            # 保留 local_vision 这个键（前端还在读），但明确告知"本机不跑视觉模型"
+            "local_vision": {"enabled": False, "reason": "桌宠端不使用本地模型，识图全部走云端大肥鱼"},
             "cloud_profile_health": cloud_health,
             "in_progress": _in_progress,
             "last_analyzed_at": _last_analyzed_at,
@@ -1131,6 +1559,8 @@ def status() -> dict[str, Any]:
                 2,
             ),
             "minimum_interval_seconds": int(config.get("screen_analysis_interval_seconds", 5)),
+            # 2026-10-24：随机长间隔触发状态（下次触发倒计时由 _trigger 状态机维护）
+            "trigger": _trigger_status(config),
             "request_timeout_seconds": int(config.get("screen_request_timeout_seconds", 25)),
             "voice_cooldown_seconds": int(config.get("screen_voice_cooldown_seconds", 5)),
             "minimum_importance": float(config.get("screen_minimum_importance", 0.62)),
@@ -1225,6 +1655,7 @@ async def analyze_once(
     conversation_id: str = "",
     request_id: str = "",
     allow_direct_speech: bool | None = None,
+    skip_self_ui_gate: bool = False,
 ) -> bool:
     global _in_progress, _last_analysis_monotonic, _last_analyzed_at
     global _last_analyzed_frame_id, _last_reply, _last_error, _last_model
@@ -1258,30 +1689,30 @@ async def analyze_once(
 
     now = time.monotonic()
     minimum_interval = int(config.get("screen_analysis_interval_seconds", 5))
+    # 2026-10-24 用户裁决（m02056）：随机长间隔模式下，「画面有没有变」不再是硬门槛 ——
+    # 到点就该看一眼（1~2 小时才触发一次，静止画面也要能出观察结果）。
+    # 秒级节流在随机模式下也不再适用，否则 60 分钟档位会被 5 秒节流反复拒绝。
+    random_trigger = bool(config.get("screen_trigger_random_enabled", True))
     with _state_lock:
-        if _in_progress or (not force and now - _last_analysis_monotonic < minimum_interval):
+        if _in_progress:
+            return False
+        if not force and not random_trigger and now - _last_analysis_monotonic < minimum_interval:
             return False
         last_frame_id = _last_analyzed_frame_id
+    if not force and random_trigger and not _trigger_due(config):
+        return False
     pending_change = float(observer_status.get("pending_change_percent") or 0)
     change_threshold = _effective_change_threshold(config, observer_status)
-    if not force and last_frame_id > 0 and pending_change < change_threshold:
+    if not force and not random_trigger and last_frame_id > 0 and pending_change < change_threshold:
         return False
 
-    use_local_vision = str(config.get("screen_vision_route") or "local") == "local"
-    profiles = _vision_profiles()
-    if not use_local_vision and not profiles:
+    # ★ 2026-10-24 用户裁决：桌宠端不需要任何模型 API，识图恒走云端大肥鱼。
+    #   下面不再有 use_local_vision / 普通云端两个分支（连同它们要求的本机模型配置）。
+    _ = _vision_routes(config)  # 保留唯一开关点：将来要加通路只改这里
+    feiyu_reason = await asyncio.to_thread(_feiyu_unavailable_reason)
+    if feiyu_reason:
         with _state_lock:
-            _last_error = "没有配置可识图的模型。请在模型设置中启用视觉能力。"
-        return False
-    selected_profile = None if use_local_vision else _healthy_vision_profile(config, profiles)
-    if not use_local_vision and selected_profile is None:
-        health = _cloud_health_status(profiles)
-        remaining = min(
-            (float(item["cooldown_remaining_seconds"]) for item in health if not item["available_now"]),
-            default=CLOUD_PROFILE_BASE_COOLDOWN_SECONDS,
-        )
-        with _state_lock:
-            _last_error = f"云端视觉模型暂时不可用，将在约 {max(1, int(round(remaining)))} 秒后重试。画面捕获仍在运行。"
+            _last_error = f"{feiyu_reason}。画面捕获仍在运行，本轮不发云端。"
         return False
 
     frame = companion_service.window_observer.claim_analysis_frame(last_frame_id)
@@ -1308,7 +1739,9 @@ async def analyze_once(
         frame.clear()
         return False
     is_full_screen = str(frame.get("mode") or "screen") != "window"
-    if is_full_screen and _is_self_ui_foreground(frame) and not (wake or interactive):
+    if is_full_screen and _is_self_ui_foreground(frame) and not (
+        wake or interactive or skip_self_ui_gate
+    ):
         # Full-screen capture includes Mio's own chat/WebView and Live2D windows.
         # Treating that UI as user activity feeds old chat text back into vision
         # and can cause stale story references and unsolicited speech.
@@ -1325,17 +1758,13 @@ async def analyze_once(
         return False
     processed = process_frame(
         bytes(frame["content"]),
-        max_width=768 if use_local_vision else 640,
-        max_height=432 if use_local_vision else 360,
-        jpeg_quality=72 if use_local_vision else 64,
+        # 只有云端一条路了：640x360 / q64 是当初给"上传到云端"定的体积档位
+        max_width=640,
+        max_height=360,
+        jpeg_quality=64,
     )
     frame["content"] = processed.content
-    vision_route = None if use_local_vision else select_auto_route(
-        "低延迟识别并回应当前屏幕事件" if is_full_screen else "低延迟识别并回应当前指定窗口事件",
-        image_count=1,
-        profiles=[selected_profile],
-    )
-    vision_model_id = local_vision_service.DEFAULT_MODEL if use_local_vision else vision_route.model_id
+    vision_model_id = FEIYU_VISION_HEALTH_ID
     conversation_id = str(conversation_id or "").strip() or _desktop_pet_conversation_id()
     session_id = db.start_screen_session(
         str(frame.get("mode") or "screen"),
@@ -1350,26 +1779,19 @@ async def analyze_once(
         _last_analysis_monotonic = now
         _last_pipeline_timings = {
             "started_at": db.now_iso(),
-            "single_multimodal_call": not use_local_vision,
+            "single_multimodal_call": True,
             "streamed_model": False,
-            "transport_mode": "local" if use_local_vision else "nonstream_json",
+            "transport_mode": "feiyu_sse",
             "vision_model_id": vision_model_id,
-            "configured_vision_model_id": (
-                local_vision_service.DEFAULT_MODEL
-                if use_local_vision
-                else _selected_vision_profile(config, profiles).id
-            ),
-            "using_fallback_vision_model": bool(
-                not use_local_vision
-                and selected_profile
-                and selected_profile.id != _selected_vision_profile(config, profiles).id
-            ),
+            "configured_vision_model_id": FEIYU_VISION_HEALTH_ID,
+            # 只剩一条通路，不存在"回退到备用视觉模型"这个状态
+            "using_fallback_vision_model": False,
             "image_width": processed.width,
             "image_height": processed.height,
             "image_encoded_bytes": len(processed.content),
         }
 
-    cloud_result_ready = bool(use_local_vision)
+    cloud_result_ready = True
     try:
         request_timeout = max(5, int(config.get("screen_request_timeout_seconds", 25)))
 
@@ -1378,48 +1800,54 @@ async def analyze_once(
         )
         with _state_lock:
             _session_attempt_count += 1
-        if use_local_vision:
-            analysis_messages = _analysis_messages(
-                frame,
-                recent_observations,
-                current_state,
-                processed.metadata(),
-                local_vision=True,
-            )
-            system_prompt, prompt = _local_analysis_parts(analysis_messages)
-            vision_completion = await asyncio.wait_for(
-                local_vision_service.analyze_image(
-                    prompt=prompt,
-                    image=bytes(frame["content"]),
-                    system_prompt=system_prompt,
+        # ★ 2026-10-24 用户裁决（m02071）：「图 + 提示词直接丢到云端，云端会回答」。
+        #   原来云端这条路是"本机拼一大段 JSON 指令 → 云端模型吐 JSON → 本机再解析"，
+        #   换成大肥鱼之后这条形状反而累赘：她本来就有人格和记忆，硬要 JSON 只会把
+        #   她答成识图接口。现在只发一段自然语言指令 + 这一帧图，她的原话就是气泡内容。
+        feiyu_started = time.monotonic()
+        vision_completion = await asyncio.wait_for(
+            _feiyu_vision_call(
+                frame=frame,
+                prompt=_feiyu_screen_prompt(
+                    custom_prompt=str(config.get("screen_observation_prompt") or ""),
+                    is_window=not is_full_screen,
+                    frame=frame,
+                    persona_context=_screen_persona_context(),
+                    recent_context=_recent_context(conversation_id, limit=6, max_chars=120),
+                    audio_context=_audio_context() if not is_full_screen else "",
+                    foreground=_activity_context(frame),
                 ),
-                timeout=request_timeout,
+                timeout_seconds=float(request_timeout),
+            ),
+            # 云端要上传图、跑多模态、还可能合成语音，25 秒的默认值对这条路偏紧
+            timeout=max(float(request_timeout), 60.0),
+        )
+        with _state_lock:
+            _last_pipeline_timings["feiyu_seconds"] = round(
+                max(0.0, time.monotonic() - feiyu_started),
+                3,
             )
-            combined_result = None
-        else:
-            analysis_messages = _combined_analysis_messages(
-                frame,
-                recent_observations,
-                current_state,
-                processed.metadata(),
-            conversation_id,
-            wake=wake,
-            interactive=interactive,
-            seconds_since_last_speech=seconds_since_last_speech,
-            )
-            vision_completion = await asyncio.wait_for(
-                call_chat_completion_result(
-                    analysis_messages,
-                    temperature=0.45,
-                    model_id=vision_route.model_id,
-                    reasoning_level="low",
-                    retry_attempts=1,
-                ),
-                timeout=request_timeout,
-            )
-            combined_result = _parse_combined_vision_result(vision_completion.content)
-            _mark_cloud_profile_success(selected_profile.id)
-            cloud_result_ready = True
+        reply_text = _clean_reply(vision_completion.content)
+        if not reply_text:
+            raise RuntimeError("云端大肥鱼这次没有返回文字（可能只回了语音/图片）")
+        # 本机只补一条"事件"记录（用于落库/状态面板/去重），不回传云端：
+        # 云端已经看过图并给出了话，这里再做一次模型识别纯属重复花钱。
+        observation = Observation(
+            event_type="screen_observe",
+            summary=" ".join(reply_text.split())[:200],
+            confidence=0.8,
+            game_name="",
+            details={},
+            tags=(),
+        )
+        combined_result = CombinedVisionResult(
+            observation=observation,
+            should_reply=True,
+            importance=max(0.66, float(config.get("screen_minimum_importance", 0.62))),
+            emotion="neutral",
+            reply=reply_text,
+            reason="云端大肥鱼直接看屏幕并回话",
+        )
         with _state_lock:
             first_token_ms = getattr(vision_completion, "first_token_latency_ms", None)
             if first_token_ms is not None:
@@ -1437,22 +1865,13 @@ async def analyze_once(
             if combined_result is not None
             else _parse_observation(vision_completion.content)
         )
-        corrected_observation = _correct_observation_for_activity(observation, frame)
-        if combined_result is not None and corrected_observation != observation:
-            corrected_reply = (
-                _fallback_reaction(corrected_observation)
-                if combined_result.should_reply
-                else ""
-            )
-            combined_result = CombinedVisionResult(
-                observation=corrected_observation,
-                should_reply=bool(corrected_reply),
-                importance=combined_result.importance,
-                emotion=combined_result.emotion,
-                reply=corrected_reply,
-                reason="根据前台应用纠正活动类型",
-            )
-        observation = corrected_observation
+        # ★ 2026-10-24：原来这里会用"前台应用"去纠正模型给的事件类型，再把回复换成
+        #   本地模板句（_fallback_reaction）。那套是给旧的"结构化 JSON 识别"分支准备的：
+        #   模型只吐事件类型，本机再按类型套话。
+        #   现在云端大肥鱼**自己看过图、自己写出的话**，拿模板句覆盖她等于把她的话丢了
+        #   （实测：屏幕上明明是别的应用，她的原话被替换成「我看到了，继续吧」）。
+        #   所以保留她自己的观察与回复，只纠正事件类型用于落库/统计。
+        observation = _correct_observation_for_activity(observation, frame)
         if processed.nearly_blank and observation.event_type not in {"error", "warning"}:
             observation = Observation(
                 event_type="black_screen",
@@ -1502,6 +1921,13 @@ async def analyze_once(
             updated_state,
         )
         recent_summaries = [str(row["summary"] or "") for row in recent_observations]
+        # 2026-10-24 用户裁决（m02056）：随机长间隔模式下，**到点这一刻就是要说话**。
+        # 以前 exploration / idle / movement 这些事件全在 SILENT_EVENTS 里，到点了也被
+        # decide_behavior 一句"普通画面变化，保持安静"拦下 → 观察结果只落库、气泡一直是空的。
+        # 现在把"随机模式到点"等同于 force（用户主动让它看），交给 decide_behavior 的 force 分支：
+        # 只要置信度够、不是黑屏，就开口。
+        periodic_observation = bool(config.get("screen_trigger_random_enabled", True))
+        speak_force = bool(force) or periodic_observation
         decision = decide_behavior(
             observation,
             updated_state,
@@ -1510,7 +1936,7 @@ async def analyze_once(
             cooldown_seconds=int(config.get("screen_voice_cooldown_seconds", 5)),
             minimum_priority=float(config.get("screen_minimum_importance", 0.62)),
             event_is_new=event_is_new,
-            force=force,
+            force=speak_force,
         )
         if combined_result is not None:
             model_emotion = combined_result.emotion or decision.emotion
@@ -1540,7 +1966,9 @@ async def analyze_once(
                 )
             )
             decision = BehaviorDecision(
-                should_speak=ambient_reply or (
+                should_speak=ambient_reply
+                or speak_force  # 随机到点看一眼：到点就说，不再被模型的 should_reply 二次否决
+                or (
                     decision.should_speak
                     and (
                         combined_result.should_reply
@@ -1792,6 +2220,25 @@ async def analyze_once(
         )
         if allow_direct_speech is not None:
             should_direct_speak = should_direct_speak and bool(allow_direct_speech)
+        # 2026-10-24 用户裁决（m01961 / m02056）：观察结果必须真的出现在桌宠对话界面 ——
+        # 以前算完 should_direct_speak 就 return True，结果文字只落了库、桌宠端收不到；
+        # 语音那条更是完全没实现。现在统一在这里投递：文字进气泡，再按开关补语音。
+        # 投递失败不能影响本轮观察结论（观察本身已经成功、已落库）。
+        try:
+            await _deliver_observation(
+                reply=reply,
+                emotion=decision.emotion,
+                request_id=request_id,
+                config=config,
+                source_is_game=source_is_game,
+                allow_direct_speech=should_direct_speak,
+            )
+        except Exception as exc:  # noqa: BLE001
+            with _state_lock:
+                _last_error = f"观察结果投递桌宠失败：{exc}"
+        # 只有真正观察成功才消耗本次触发，安排下一次随机间隔
+        if not force:
+            _trigger_consumed(config)
         return True
     except Exception as exc:
         error_text = (
@@ -1800,8 +2247,10 @@ async def analyze_once(
             else str(exc)
         )
         cooldown_seconds = 0.0
-        if not use_local_vision and selected_profile is not None and not cloud_result_ready:
-            cooldown_seconds = _mark_cloud_profile_failure(selected_profile.id, error_text)
+        # 只剩云端大肥鱼一条路：连续失败走同一套冷却，
+        # 避免到点后每 5 秒重试一次把云端打爆
+        if not cloud_result_ready:
+            cooldown_seconds = _mark_cloud_profile_failure(FEIYU_VISION_HEALTH_ID, error_text)
             with _state_lock:
                 _session_failure_count += 1
         with _state_lock:
@@ -1813,11 +2262,7 @@ async def analyze_once(
             _last_pipeline_timings["timed_out"] = isinstance(exc, asyncio.TimeoutError)
             if cooldown_seconds:
                 _last_pipeline_timings["profile_cooldown_seconds"] = round(cooldown_seconds, 1)
-            _last_error = (
-                f"{error_text}。画面捕获会继续运行，且不会自动转发云端；请检查本地视觉模型。"
-                if use_local_vision
-                else f"{error_text}。该视觉模型已暂时冷却，下一观察周期会尝试可用备用模型。"
-            )
+            _last_error = f"{error_text}。画面捕获会继续运行，下一观察周期会重试云端。"
         return False
     finally:
         frame.clear()
@@ -1857,8 +2302,18 @@ def is_screen_chat_follow_up(
             break
     if recent_screen_context and normalized_message in {"", "？", "?"}:
         return True
+    # ★★ 2026-10-24 用户反馈「自然语言触发不了屏幕观察」的第二层根因（这里）：
+    #   原来即使句式命中（SCREEN_FOLLOW_UP_RE），还要再等下面那段
+    #   "最近 5 分钟内观察过 / 历史里有屏幕记录"才肯返回 True。
+    #   可用户明明已经**明说要看屏幕**（「看一下现在的屏幕」「屏幕上是什么」），
+    #   桌面端刚开机、历史为空时这段判定必然失败 → 观察不触发，只有普通聊天回复。
+    #   现在分两类：
+    #     · 显式提到屏幕/画面的（SCREEN_CONTEXT_INTENT_RE）→ 直接触发，不依赖历史；
+    #     · 纯指示语（「现在呢」「然后呢」）→ 仍要求有近期屏幕上下文，避免无意义截图。
+    if SCREEN_CONTEXT_INTENT_RE.search(str(message or "")):
+        return True
     if not SCREEN_FOLLOW_UP_RE.fullmatch(str(message or "").strip()):
-        return bool(SCREEN_CONTEXT_INTENT_RE.search(str(message or "")))
+        return False
 
     analyzed_at = str(status_payload.get("last_analyzed_at") or "").strip()
     if analyzed_at:
@@ -1944,10 +2399,9 @@ async def analyze_screen_chat_follow_up(
         capture_before = analysis_before.get("capture") if isinstance(analysis_before.get("capture"), dict) else {}
         if was_running and not bool(capture_before.get("running", True)):
             raise RuntimeError("屏幕捕获器没有运行")
-        if str(analysis_before.get("vision_route") or "local") == "local":
-            await local_vision_service.ensure_ready()
-        else:
-            await asyncio.to_thread(local_vision_service.unload_model)
+        # ★ 2026-10-24：不再有本地视觉这条路，也就没有"先把 Ollama 拉起来"这一步。
+        #   顺手把可能残留的本地视觉服务卸掉（它不该在本机占内存/显存）。
+        await asyncio.to_thread(local_vision_service.unload_model)
         await asyncio.to_thread(set_capture_only, False)
         if not was_running:
             await asyncio.to_thread(companion_service.window_observer.select_screen, "primary")

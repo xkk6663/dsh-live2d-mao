@@ -41,7 +41,7 @@ from ..chat.chat_service import chat_with_ai, persist_generated_chat_result
 from ..chat.conversation_runtime import ChatRunCancelledError, chat_run_coordinator
 from ..cloud_feiyu import get_client as get_feiyu_client
 from ..cloud_feiyu.client import attachment_media_kind, strip_device_prefix, strip_tool_payload
-from ..cloud_feiyu.device import build_device_context
+from ..cloud_feiyu.device import build_device_context, is_plugin_command
 from ..config import settings
 from ..llm import ModelRequestError, resolve_model_id
 from ..image_service import image_attachment_from_data_url
@@ -217,11 +217,23 @@ class CompanionSettingsRequest(BaseModel):
     screen_audio_model: str = Field(default="base", pattern="^(tiny|base|small)$")
     screen_audio_language: str = Field(default="auto", pattern="^(auto|zh|ja|en)$")
     screen_audio_chunk_seconds: int = Field(default=5, ge=4, le=15)
-    screen_vision_route: str = Field(default="local", pattern="^(local|cloud)$")
+    # feiyu = 图 + 提示词直接发云端大肥鱼，她亲自看图回话（2026-10-24 用户裁决 m02071）
+    # ★ 2026-10-24：只保留 feiyu（云端大肥鱼）。local/cloud 需要本机持有模型，
+    #   与「桌宠端完全不需要任何模型 API」的裁决冲突，已不再接受。
+    screen_vision_route: str = Field(default="feiyu", pattern="^(feiyu|local|cloud)$")
     screen_vision_model_id: str = Field(default="auto-fast", max_length=200)
     screen_direct_voice_enabled: bool = True
     screen_change_threshold: float = Field(default=8.0, ge=1.0, le=50.0)
     screen_analysis_interval_seconds: int = Field(default=5, ge=5, le=600)
+    # 2026-10-24 用户裁决（m02056）：观察改成"可设最短/最长间隔，区间内均匀随机"，
+    # 面向"1~2 小时看一眼"这种长周期；上限 1440 分钟 = 24 小时。
+    screen_trigger_random_enabled: bool = True
+    screen_trigger_min_minutes: int = Field(default=60, ge=1, le=1440)
+    screen_trigger_max_minutes: int = Field(default=120, ge=1, le=1440)
+    # 观察结果转语音：开关制（有语音就都带文字），概率保留作扩展位
+    screen_observation_voice_enabled: bool = True
+    screen_observation_voice_probability: float = Field(default=1.0, ge=0.0, le=1.0)
+    screen_observation_prompt: str = Field(default="", max_length=2000)
     screen_request_timeout_seconds: int = Field(default=25, ge=5, le=60)
     screen_voice_cooldown_seconds: int = Field(default=5, ge=5, le=600)
     screen_minimum_importance: float = Field(default=0.62, ge=0.0, le=1.0)
@@ -388,10 +400,36 @@ class Live2DExpressionPreviewRequest(BaseModel):
 
 class Live2DPhasePreviewRequest(BaseModel):
     phase: str = Field(min_length=1, max_length=60)
+    # ★ 2026-10-24：设置页「任务状态-试演」要能**按当前还没保存的选择**试演。
+    #   只给 phase 的话渲染端只能用自己缓存的 settings（可能已过期、甚至没保存过），
+    #   用户报的「切换表情点试演，目标表情没播放」有一半就出在这里：
+    #   选中的是新表情，桌面端 settings 里还是旧值 ⇒ 播的是上一张脸。
+    model_id: str | None = Field(default=None, max_length=100)
+    motion: str | None = Field(default=None, max_length=60)
+    expression: str | None = Field(default=None, max_length=120)
 
 
 # B3 试演 nonce：每次试演 +1，桌宠端用它区分"同一相位的重播请求"
 _phase_preview_nonce = 0
+
+# ★ 2026-10-24：12 态 phase → 内置默认情绪槽（「自动表情」时用），必须与渲染端
+#   `澪Agent应用/dist/live2d-pet/live2d-pet.js` 里的 PHASE_EMOTION 保持一致，
+#   否则"没绑的时候试演"和后端解析结果对不上。
+PHASE_DEFAULT_EMOTION = {
+    "idle": "gentle",
+    "thinking": "serious",
+    "replying": "gentle",
+    "voice": "gentle",
+    "error": "concerned",
+    "awaiting": "gentle",
+    "planning": "gentle",
+    "executing": "serious",
+    "listening": "gentle",
+    "done": "cheerful",
+    "paused": "gentle",
+}
+# 绑定里能写的"情绪槽名"（渲染端把槽映射到模型自己的表情；模型没有就用内置动作兜底）
+PHASE_EXPRESSION_SLOT_NAMES = {"gentle", "cheerful", "concerned", "serious", "shy", "alert"}
 
 
 class GameWindowRequest(BaseModel):
@@ -418,6 +456,8 @@ def _status_payload() -> dict[str, object]:
         "game": window_status,
         "call": call_runtime_status(),
         "window_topology": window_topology_service.snapshot(),
+        # 任务状态表情绑定失效回报（2026-10-24，内存态；没有就是空 dict）
+        "live2d_phase_slot_invalid": companion_service.phase_slot_invalid_snapshot(),
     }
 
 
@@ -745,6 +785,16 @@ def _apply_companion_settings(changes: dict[str, object]) -> None:
         saved_config = companion_service.load_config()
         if saved_config["screen_audio_enabled"]:
             system_audio_service.start(saved_config)
+    # 2026-10-24：用户改了"多久触发一次"的区间，必须立刻按新区间重排下一次。
+    # 否则旧的下一次时刻还挂在那儿（实测把 60–120 分钟改成 1 分钟后，
+    # seconds_until_next 仍是 5464 秒），用户设置完要等一个多小时才生效。
+    trigger_keys = {
+        "screen_trigger_random_enabled",
+        "screen_trigger_min_minutes",
+        "screen_trigger_max_minutes",
+    }
+    if trigger_keys & changes.keys():
+        screen_observation_service.reschedule_trigger()
 
 
 def _start_observation_runtime(
@@ -861,6 +911,9 @@ async def companion_settings(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if changes.get("screen_vision_route") == "cloud":
+        await asyncio.to_thread(local_vision_service.unload_model)
+    elif changes.get("screen_vision_route") == "feiyu":
+        # 走云端大肥鱼时本地视觉模型完全用不上，顺手卸掉腾显存
         await asyncio.to_thread(local_vision_service.unload_model)
     return await asyncio.to_thread(_status_payload)
 
@@ -1449,22 +1502,96 @@ async def companion_live2d_phase_preview(payload: Live2DPhasePreviewRequest):
     """★ B3 任务状态联动试演（2026-10-19）：管理页点「试演」→ 合成一条 agent_phase
     走既有 WS 广播，桌宠端 applyAgentPhase 原样消费（动作/表情/徽标/音效全链路真实联动）。
     agent_id 固定 'phase-preview'、nonce 逐次递增——桌宠端 faceKey 含 nonce，
-    连点同一状态也会重播表现（否则同相位重发会被去抖吞掉）。"""
+    连点同一状态也会重播表现（否则同相位重发会被去抖吞掉）。
+
+    ★ 2026-10-24：动作/表情走**设置页当前选择**（payload.motion/expression），不再依赖
+    渲染端缓存的 settings；表达式按 model_id 解析成「真实表情文件名 / 情绪槽名」后，
+    用独立消息类型 phase_expression_preview 推给渲染端（有风险投递，没连上会明说）。"""
     global _phase_preview_nonce
-    if not pet_event_service.has_desktop_renderer():
-        raise HTTPException(status_code=409, detail="请先启动 Live2D 桌宠。")
     _phase_preview_nonce += 1
+    phase = payload.phase.strip()
+    if not pet_event_service.has_desktop_renderer():
+        # ⚠ 原来是 409：按钮只会弹一句红色报错，用户不知道"是桌宠没开"还是"代码坏了"
+        return {
+            "ok": False,
+            "reason": "renderer-offline",
+            "detail": "桌宠没有连上，试演播不出来：请先启动 Live2D 桌宠再点「试演」。",
+            "phase": phase,
+            "nonce": _phase_preview_nonce,
+        }
+    agent_id = "phase-preview"
     event = {
-        "agent_id": "phase-preview",
+        "agent_id": agent_id,
         "agent_name": "试演",
-        "phase": payload.phase.strip(),
+        "phase": phase,
         "active": True,
         "nonce": _phase_preview_nonce,
     }
     _preview_diag_log("phase_preview REQUEST", event)
     pet_event_service.publish("agent_phase", event)
     _preview_diag_log("phase_preview PUBLISHED", event)
-    return {"ok": True, **event}
+
+    # ---- 表情：把「设置页选的那一列」解析成渲染端能直接落地的东西 ----
+    model_id = str(payload.model_id or "").strip()
+    resolved: dict = {"phase": phase, "model_id": model_id, "kind": "none", "expression": ""}
+    try:
+        if not model_id:
+            model_id = str(companion_service.load_config().get("live2d_model_id") or "")
+            resolved["model_id"] = model_id
+        models = {str(item.get("id")): item for item in companion_service.available_live2d_models()}
+        model = models.get(model_id) or {}
+        capabilities = model.get("capabilities") if isinstance(model.get("capabilities"), dict) else {}
+        raw_expressions = capabilities.get("expressions") if isinstance(capabilities.get("expressions"), list) else []
+        names = [str(item.get("Name") or item.get("name") or "") for item in raw_expressions if isinstance(item, dict)]
+        requested = payload.expression
+        if requested is None:
+            # 设置页没带（老调用方）：按已落库的绑定取
+            slots = companion_service.load_config().get("live2d_phase_slots") or {}
+            per_model = slots.get(model_id) if isinstance(slots, dict) else None
+            binding = per_model.get(phase) if isinstance(per_model, dict) else None
+            requested = (binding or {}).get("expression", "") if isinstance(binding, dict) else ""
+        requested = str(requested or "").strip()
+        if requested and requested in names:
+            resolved.update(kind="file", expression=requested)
+        elif requested in PHASE_EXPRESSION_SLOT_NAMES:
+            resolved.update(kind="slot", expression=requested)
+        elif requested:
+            # 既不是本模型的表情文件、也不是情绪槽名：别假装播了，明说
+            resolved.update(kind="missing", expression=requested)
+        else:
+            # 没绑（自动）：用内置默认情绪槽，至少让用户看见这个状态长什么样
+            resolved.update(kind="slot", expression=PHASE_DEFAULT_EMOTION.get(phase, ""))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("phase preview 表情解析失败：%s", exc)
+
+    if resolved.get("expression"):
+        deliverable = pet_event_service.publish_deliverable("expression_preview", resolved)
+        _preview_diag_log("phase_expression_preview PUBLISHED", {**resolved, "deliverable": deliverable})
+        return {"ok": True, **event, "expression": resolved}
+    return {"ok": True, **event, "expression": resolved}
+
+
+@router.post("/live2d/phase-slots/invalid")
+async def companion_live2d_phase_slots_invalid(payload: dict):
+    """桌宠端回报「任务状态绑定了当前模型不存在的表情」（2026-10-24）。
+
+    设置页现在直接列模型的 exp3 表情文件，但换模型后老绑定（如大肥鱼的「07 流口水」
+    绑在另一个模型上）会静默失效。渲染端在 applyAgentPhase 里攒一轮后回传一条说明，
+    这里只做落盘归类：前端读 status 里的 live2d_phase_slot_invalid 显示黄条并提供「清理」。
+
+    ⚠ 只记录、**绝不改配置**：用户可能只是临时换了模型，回来还要用原绑定。
+    """
+    message = str(payload.get("message") or "").strip()[:200]
+    if not message:
+        return {"ok": True}
+    _state_put = getattr(companion_service, "record_phase_slot_invalid", None)
+    if callable(_state_put):
+        _state_put(
+            agent_id=str(payload.get("agent_id") or "").strip()[:40],
+            model_id=str(payload.get("model_id") or "").strip()[:100],
+            message=message,
+        )
+    return {"ok": True}
 
 
 @router.post("/preview-feedback")
@@ -1672,6 +1799,18 @@ async def companion_chat(payload: CompanionChatRequest):
                 #     1) 前缀缩短，只保留识别设备所需的最少信息（能力清单挪到 system 侧，不每轮重复）；
                 #     2) 万一她真的复述了，出气泡前用 strip_device_prefix 把整段剥掉。
                 full_message = f"[电脑桌宠] {device_ctx}\n\n用户说：{message}"
+                # ★★ 2026-10-24 用户实拍「云端插件全用不了」的真根因修复：
+                #   AstrBot 的命令匹配是纯字符串前缀判断（core/star/filter/command.py:202
+                #   `message_str.startswith(full_cmd)`），而上面这段设备上下文前缀会把
+                #   `/setu_file 3`、`/p 白发`、`/余额` 全部推到消息中间 → 永远命中不了命令，
+                #   只能被 LLM 当闲聊敷衍（她甚至会编"好，就这张：xxx.png"冒充已执行）。
+                #   命令类消息**原样发送**：插件直接处理，不经过 LLM，不需要设备上下文。
+                if is_plugin_command(message):
+                    full_message = message
+                    logger.info(
+                        "[feiyu] 命令原样转发（跳过设备上下文前缀）：%s",
+                        str(message)[:60],
+                    )
                 # 把图片转成 data URL 列表传给大肥鱼
                 # ── 出站多模态：图片必须先上传换 attachment_id ──
                 # AstrBot 的 message 字段收的是**消息段数组**（{"type":"image","attachment_id":..}），
@@ -1802,9 +1941,27 @@ async def companion_chat(payload: CompanionChatRequest):
                     )
                     if not saved:
                         continue
-                    if kind == "image":
+                    # ★★ 2026-10-24 修「语音明明发到了，对话界面却是图片气泡 / 音频地址是 .jpg」。
+                    #
+                    #   AstrBot 的 SSE 里，record 帧和紧随其后的 attachment_saved **未必指向同一条**：
+                    #   实测云端语音插件会把语音当成**图文本体**发下来，帧序列变成
+                    #     record → data:[RECORD]x.wav   (attachment_saved 属于随后那张表情图)
+                    #     image  → data:[IMAGE]y.gif    (attachment_saved 属于语音)
+                    #   旧实现把"最近一个 attachment_saved 的 id"交给下一个占位符，但
+                    #   fetch_attachment 优先按 filename 下载 → 字节其实能取对，**错的是分类**：
+                    #   占位符写 record、字节却是 GIF，于是 songs 里放着一张图、saved_images 里
+                    #   放着一首歌，再经过按序对齐 → 前端把图当语音、语音当图。
+                    #
+                    #   现在 client.fetch_attachment 已按**数据头魔数**改写 att.kind / mime_type，
+                    #   这里再兜一层：用落盘后的真实 MIME + 扩展名复核一次。
+                    actual_kind = attachment_media_kind(
+                        str(item.kind or ""),
+                        saved.get("mime_type") or item.mime_type,
+                        saved.get("filename") or item.filename,
+                    )
+                    if actual_kind == "image":
                         saved_images.append(saved)
-                    else:
+                    elif actual_kind == "audio":
                         songs.append(saved)
                 # ★ 把落盘后的 URL **合并回 attached_meta**（2026-10-22 修）。
                 #   之前只把 URL 放进了 saved_images、推给 WS 用，而 HTTP 响应的
@@ -1814,31 +1971,45 @@ async def companion_chat(payload: CompanionChatRequest):
                 #   注意**不能按 filename 匹配**：落盘用的是内容哈希名（`<sha16>.jpg`），
                 #   而 meta 里是云端原名（`2026102221xxxx.jpg`），两边永远对不上。
                 #   改为按顺序对齐：被落盘的条目顺序 == saved_images/songs 的顺序。
-                _saved_queue = list(saved_images) + list(songs)
+                #   ★ 2026-10-24：改成**按类型各排各的队**。以前是一个大队列，只要上下行
+                #     同类型条数不一致（语音被当成图片、图片被当成语音），后面每一条都会串位，
+                #     于是语音消息挂上了图、图消息挂上了 .wav。
+                _image_queue = list(saved_images)
+                _audio_queue = list(songs)
                 for meta in attached_meta:
                     meta.setdefault("url", "")
                 for meta in attached_meta:
-                    if str(meta.get("media") or "") not in ("image", "audio"):
+                    media_of_meta = str(meta.get("media") or "") or str(meta.get("kind") or "")
+                    if media_of_meta not in ("image", "audio"):
                         continue
-                    if not _saved_queue:
-                        break
-                    saved = _saved_queue.pop(0)
+                    queue = _image_queue if media_of_meta == "image" else _audio_queue
+                    if not queue:
+                        # 这条没落盘成功（超限/下载失败）→ 保持空 url，前端按占位展示，
+                        # 绝不能拿另一类型的文件去顶（那正是"语音变图片"的来源）。
+                        continue
+                    saved = queue.pop(0)
                     meta["url"] = saved.get("url") or ""
                     meta["size"] = saved.get("size") or meta.get("size") or 0
                     meta["filename"] = saved.get("filename") or meta.get("filename") or ""
+                    meta["mime_type"] = saved.get("mime_type") or meta.get("mime_type") or ""
                 # 非图片非音频的普通文件：只给前端一个下载卡片，不进播放器
                 other_media = [
                     item for item in attached_meta
                     if str(item.get("media") or "") not in ("image", "audio")
                 ]
+                # ★★ 2026-10-24 用户裁决（m01961）：语音那一轮**文字也要留在气泡里**。
+                #   上一版曾按 dual_output=False 做过"只发语音"（voice_only 清空正文），
+                #   用户看到截图后明确要"把语音对应的文字显示在文字气泡里"，
+                #   所以这里恢复：正文照常回填，语音只是额外挂一个播放器。
                 if bubble_text or collected_bubble_items or saved_images:
                     pet_event_service.publish("agent_bubble", {
                         "text": bubble_text,
                         "agent_id": FEIYU_AGENT_ID,
                         "accent": FEIYU_BUBBLE_ACCENT,
-                        # 气泡停留 3 秒后自动消失（2026-10-22 用户裁决）。
-                        # 以前按字数给 4~30s，长句子会一直挂在桌上挡视线。
-                        "duration_ms": 3000,
+                        # ★ 2026-10-24 用户裁决：气泡停留 6~8 秒（原 3 秒看不清就没了）。
+                        #   这里给 6000 作为下限；渲染端 bubbleHoldMs() 还会按字数
+                        #   最多延到 8000，并兜底夹在这个区间内。
+                        "duration_ms": 6000,
                     })
                     # 图片：用落盘后的短 URL（不是 base64），帧只有几百字节
                     for image in saved_images:
@@ -1858,15 +2029,25 @@ async def companion_chat(payload: CompanionChatRequest):
                             "accent": FEIYU_BUBBLE_ACCENT,
                             # 带 response_id → 渲染端不把它当"点击随机图"
                             "response_id": claim.client_request_id,
-                            # 图也 3 秒收起，和文字气泡一致（用户裁决：气泡别一直挂着）
-                            "hold_ms": 3000,
+                            # 图和文字气泡同寿命（2026-10-24 用户裁决：6~8 秒）
+                            "hold_ms": 6000,
                             # 本轮正文：图展示完由渲染端接着把这句话说出来
                             # （否则"文字+表情包"的回复会卡在图上、话永远不出现）
                             "text": bubble_text,
                         })
                 # ★ 音频：点歌/发语音 → 桌宠真正播出来（这是用户要的"点歌功能"）。
                 #   走独立的 agent_audio 事件 + 短 URL，不塞进气泡也不塞进帧。
-                for song in songs:
+                #
+                #   ★★ 2026-10-24 修「语音只播一遍、后面全是图」：
+                #     同一轮里可能是"语音 + 表情图"（云端语音插件把语音当图文本体发，
+                #     紧接着再发一张表情）。WS 广播如果只播第一首：
+                #       · 对话界面按 url 去重 → 第二条 agent_audio 被当成重复投递丢掉，
+                #         于是用户只看到图，语音那条在对话里根本没出现；
+                #       · 桌宠本体也只播第一首。
+                #     现在逐条广播（每条 url 不同，前端去重键是 url，不会误杀），
+                #     并且 `text` 只挂在**第一条**上 —— 前端把 payload.text 当"这一轮的正文"，
+                #     每条都带会让同一句话被重复挂上去。
+                for song_index, song in enumerate(songs):
                     pet_event_service.publish("agent_audio", {
                         "url": song["url"],
                         "filename": song["filename"],
@@ -1876,7 +2057,10 @@ async def companion_chat(payload: CompanionChatRequest):
                         "agent_id": FEIYU_AGENT_ID,
                         "accent": FEIYU_BUBBLE_ACCENT,
                         "response_id": claim.client_request_id,
-                        "text": bubble_text,
+                        # 第一条挂本轮正文：前端把 payload.text 当"这一轮说什么"，
+                        # 语音对应的文字要能落进文字气泡（用户裁决 m01961）。
+                        # 后面几条不挂，避免同一句话被重复显示。
+                        "text": bubble_text if song_index == 0 else "",
                     })
                 for item in other_media:
                     pet_event_service.publish("agent_file", {
@@ -1889,9 +2073,12 @@ async def companion_chat(payload: CompanionChatRequest):
                     })
 
                 import types as _types
+                # 语音轮的回答文案照常返回（用户要求文字进气泡）；语音另由 attachments 的
+                # audio 表达同一句话，两者并存是期望行为。
+                _reply_text = clean_content
                 result = _types.SimpleNamespace(
-                    reply=clean_content,
-                    replies=[clean_content],
+                    reply=_reply_text,
+                    replies=[_reply_text] if _reply_text else [],
                     request_id=claim.client_request_id,
                     model_id="cloud_feiyu",
                     reasoning_level="off",
@@ -2033,7 +2220,15 @@ async def companion_chat(payload: CompanionChatRequest):
         and companion_service.load_config().get("voice_enabled", True)
     )
     spoken = False
-    voice_delegated = bool(voice_attempted and pet_event_service.has_clients())
+    # ★ 2026-10-24 排查云端链路时踩到的既有 bug（与附件修复无关，但会直接 500）：
+    #   `pet_event_service` 在本函数里只在 cloud_feiyu 分支内部 `from ..companion import
+    #   pet_event_service` 局部导入过；一旦走的是**非** cloud_feiyu 分支（普通模型），
+    #   这个名字就是未绑定局部变量 → `UnboundLocalError` → /chat 500。
+    #   实测：`/setu_file 3` 命中云端分支没问题，但普通对话只要 voice_enabled=True 就炸。
+    #   这里改成显式导入模块（模块级已有其它引用方式，这里不改变任何语义）。
+    from ..companion import pet_event_service as _pet_event_service
+
+    voice_delegated = bool(voice_attempted and _pet_event_service.has_clients())
     voice_error = ""
     if voice_attempted and not voice_delegated:
         speech_text = "\n".join(result.replies)
@@ -2671,11 +2866,9 @@ async def companion_window_preview():
 async def companion_screen_start(payload: ScreenObservationRequest):
     try:
         if not payload.capture_only:
-            route = str(companion_service.load_config().get("screen_vision_route") or "local")
-            if route == "local":
-                await local_vision_service.ensure_ready()
-            else:
-                await asyncio.to_thread(local_vision_service.unload_model)
+            # ★ 2026-10-24：识图恒走云端大肥鱼，本机不跑任何视觉模型。
+            #   这里不再"按路线决定要不要拉起 Ollama"，只把可能残留的本地服务卸掉。
+            await asyncio.to_thread(local_vision_service.unload_model)
         return await asyncio.to_thread(
             _start_observation_runtime,
             interval_ms=payload.interval_ms,
@@ -2705,11 +2898,8 @@ async def companion_screen_analyze(payload: ScreenObservationRequest):
         if not bool(companion_service.load_config().get("screen_ai_enabled", True)) and not payload.capture_only:
             raise HTTPException(status_code=409, detail="屏幕 AI 已关闭；请先在桌宠设置中启用后再分析。")
         if not payload.capture_only:
-            route = str(companion_service.load_config().get("screen_vision_route") or "local")
-            if route == "local":
-                await local_vision_service.ensure_ready()
-            else:
-                await asyncio.to_thread(local_vision_service.unload_model)
+            # 同上：只卸本地视觉，不按路线去拉起它
+            await asyncio.to_thread(local_vision_service.unload_model)
         await asyncio.to_thread(screen_observation_service.set_capture_only, payload.capture_only)
         await asyncio.to_thread(companion_service.window_observer.select_screen, payload.scope)
         replied = await screen_observation_service.analyze_once(force=True)
@@ -2729,6 +2919,42 @@ async def companion_screen_stop():
     result = await asyncio.to_thread(_stop_observation_runtime)
     await asyncio.to_thread(local_vision_service.unload_model)
     return result
+
+
+@router.post("/screen/look-now")
+async def companion_screen_look_now():
+    """立刻按当前通路看一眼并回话（`fig.1` 的「DSH · 待机」那种即时观察）。
+
+    不落库到对话以外的地方：走的还是 analyze_once(force=True) 那条完整链路
+    （截图 → 识别 → 决策 → 气泡/语音），所以设置页换了通路后**当场**就能验证，
+    不用等到下一次随机触发。
+
+    ★ 2026-10-24：这里显式带上 skip_self_ui_gate=True。原因很具体 —— 用户点
+    「立即看一眼」时，鼠标多半刚在**桌宠自己的窗口**上（设置面板/桌宠本体），
+    而整屏观察有一条「前台是 Mio 自己的窗口就跳过」的保护（防把旧聊天文字当成
+    用户活动）。不带这个标志的话，手动触发会被这条保护直接吃掉，用户只看到"没反应"。
+    刻意**不用 wake=True**：那会把来源标成 desktop_pet_wake（"桌宠启动后第一次观察"），
+    语义不对，也会让对话里那条消息挂上错误来源。这是"用户主动要求看一眼"。
+    """
+    observer = companion_service.window_observer
+    try:
+        status = await asyncio.to_thread(observer.status)
+        # 没在捕获就先起捕获：手动观察不应该要求用户先开机开始观察
+        if not bool(status.get("running")):
+            await asyncio.to_thread(observer.select_screen, "primary")
+            await asyncio.to_thread(observer.start, 1000)
+        await asyncio.to_thread(screen_observation_service.set_capture_only, False)
+        await asyncio.to_thread(observer.capture)
+    except (ValueError, RuntimeError, OSError) as exc:
+        raise HTTPException(status_code=400, detail=f"无法取得屏幕画面：{exc}") from exc
+    try:
+        replied = await screen_observation_service.analyze_once(
+            force=True,
+            skip_self_ui_gate=True,
+        )
+    except (ValueError, RuntimeError, OSError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"replied": replied, "analysis": await asyncio.to_thread(screen_observation_service.status)}
 
 
 @router.get("/screen/preview")

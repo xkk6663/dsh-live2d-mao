@@ -273,7 +273,21 @@ def create_app() -> FastAPI:
             await notify_device_online(client, "mao-pet")
             logger.info("已通知云端大肥鱼：桌宠设备上线")
 
-    asyncio.create_task(_notify_feiyu_online())
+    # ★ 只有跑在事件循环里（uvicorn 启动 / lifespan）才能直接 create_task。
+    #   裸 import app.main（自检、脚本、TestClient 之外的探测）时没有 running loop，
+    #   asyncio.create_task 会抛 RuntimeError 把整个模块 import 炸掉——
+    #   表现为「写端点安全栅栏端到端（中间件兜底） RuntimeError: no running event loop」。
+    #   那就退一步用 sync startup 钩子：等服务真正启动时再交给循环。
+    def _kickoff_feiyu_online():
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # 不在循环里：注册一次性 startup 回调，服务起来那一刻再发
+            app.add_event_handler("startup", _notify_feiyu_online)
+            return
+        loop.create_task(_notify_feiyu_online())
+
+    _kickoff_feiyu_online()
 
     if settings.agent_frontend_dir.exists():
         agent_frontend_root = settings.agent_frontend_dir.resolve()

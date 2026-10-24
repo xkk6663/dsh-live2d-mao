@@ -132,6 +132,14 @@ def attachment_media_kind(kind: str, mime_type: str, filename: str) -> str:
 
     为什么要单独判断：AstrBot 点歌发的是 `[FILE]xxx.mp3`（kind=file），
     但它是**能直接播放的音频**；只看 kind 会把它当普通文件给一个下载链接。
+
+    ★★ 2026-10-24 云端排查（`/setu_file` 在电脑端不出图、微信正常）：
+      AstrBot 的 `timed_setu` 插件用 **`File` 组件**发图（为了绕微信图片审核），
+      帧类型是 `file` 而不是 `image`，且 File 组件通常**不带 mime**。
+      旧实现只认 kind=="image" / mime 以 image/ 开头 → 这几张图被判成 "other"，
+      调用方（routes/companion.py）只收 image/audio → **整批静默丢弃**。
+      微信能收到，是因为微信适配器直接吃 File 消息，不走这条分类。
+      现在补上：`file` 类型若扩展名是图片格式，按图片处理（内容真伪由数据头魔数复核）。
     """
     mime = str(mime_type or "").lower()
     name = str(filename or "").lower()
@@ -143,6 +151,12 @@ def attachment_media_kind(kind: str, mime_type: str, filename: str) -> str:
     # 云端常把 mp3 标成 application/octet-stream，用扩展名兜底
     if any(name.endswith(ext) for ext in (".mp3", ".wav", ".ogg", ".m4a", ".aac", ".flac", ".opus", ".webm")):
         return "audio"
+    # file/video 占位符但其实是图片（File 组件发图 / 云端没给 mime）→ 仍按图片
+    if k in ("file", "video") and any(
+        name.endswith(ext)
+        for ext in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".avif", ".jfif")
+    ):
+        return "image"
     return "other"
 
 
@@ -277,6 +291,85 @@ def strip_device_prefix(text: str) -> str:
     return out.strip()
 
 
+# ★ 2026-10-24：正文里"没闭合的 JSON 载荷尾部"的强信号。
+#   真实事故：`{"body":{…"response_format":"wav"})\ncmd=['curl','-s', …]` —— 引号没配对、
+#   花括号没闭合，json.loads 解不开，旧实现直接整段放过（还带着 Bearer sk-… 密钥）。
+#   只看明显不属于人话、却只会出现在载荷里的特征：
+#   `\n` 字面量 + `cmd=[`/`command=[`/`subprocess.` + http 动词 + python 代码痕迹。
+_TOOL_TAIL_RE = re.compile(
+    r"(?:\\ncmd\s*=\s*\[|\\ncommand\s*=\s*\[|\\nsubprocess\.|\"cmd\"\s*:\s*\[|"
+    r"\bsubprocess\.Popen\(|\\nprint\((?:'|\")go|"
+    r"['\"]-X['\"]\s*,\s*['\"](?:POST|GET|PUT|DELETE)['\"]|"
+    r"['\"]Authorization:\s*Bearer\s|"
+    r"['\"]--max-time['\"]|\\nstart_new_session\s*=)",
+    re.IGNORECASE,
+)
+
+# ★★ 2026-10-24 第二轮实拍（更严重）：她手搓 python -c 调 TTS 时，载荷**没有 `{` 开头**，
+#   而且密钥被输出成 `Bearer sk-***` 擦除后的样子，正文长这样：
+#     语音自检通过。'},ensure_ascii=False)\nfor i in range(3):\n    f='/AstrBot/data/temp/sc%d.mp3'…
+#     r=subprocess.run([… 'https://api.siliconflow.cn/v1/audio/speech' …],capture_output=True)
+#     print('rc',r.returncode,…)\n""}, "ts": 1792813233.1964512}语音已发送。
+#   → 这才是"整段载荷残留"的**标准形态**：`'},ensure_ascii=False)` / `\n` 字面量 /
+#     `subprocess.run(` / python 缩进。一律从这里到 `"ts": <数字>}` 整块切掉。
+_CODE_PAYLOAD_RE = re.compile(
+    r"(?:'?\}\s*,\s*ensure_ascii\s*=|\"ts\"\s*:\s*\d|\},\s*ensure_ascii)",
+    re.IGNORECASE,
+)
+_PY_FRAGMENT_RE = re.compile(
+    r"(?:\\n|\n)\s*(?:for\s+\w+\s+in\s+range|if\s+os\.path|if\s+sz|r\s*=\s*subprocess\.|"
+    r"subprocess\.|print\(|import\s+os|import\s+sys|f\s*=\s*['\"]/|body\s*=\s*json\.)"
+)
+
+
+# ★ 2026-10-24：载荷字段特征（出现任意一个就说明正文里混进了工具载荷）。
+#   之所以需要它：实拍的那段载荷**没有开头的 `{`**（正文先说了十遍"我是大肥鱼"，
+#   JSON 头被模型吞掉了，只剩 `','response_format':'wav'})\ncmd=[…` 这半截），
+#   "花括号扫描"根本触发不到，于是那种"半截残片"清理必须另走一条路。
+_TOOL_FIELD_RE = re.compile(
+    r"response_format|\",?\s*ensure_ascii|\}\s*,\s*ensure_ascii|\\ncmd\s*=|\\nsubprocess\.|"
+    r"\bsubprocess\.(?:Popen|run)\(|--max-time|\\nprint\(|\\nstart_new_session\s*=",
+    re.IGNORECASE,
+)
+# 命中 _TOOL_FIELD_RE 之后，按这些形态把残片切掉（顺序有讲究：先长后短）
+_TOOL_FRAGMENT_RE = re.compile(
+    r"\\n(?:cmd|command|subprocess|print|start_new_session)[^\n]*?(?=\\n|\"|\}|$)"
+    r"|['\"]?[,\s]*(?:response_format|\"body\"|'body'|'cmd'|\"cmd\"|'ts'|\"ts\")[^\n]*?"
+    r"(?=\}[\"']?\s*,\s*\"ts\"|[\u4e00-\u9fff]|$)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+# ★★ 2026-10-24 用户实拍（截图）：JSON 头被模型吞了，只剩一段**反序列化残渣**：
+#     「随机二次元图片 涩图"}, "ts": 1792833795.098908}哼，没卡，我在翻图呢…
+#   特征非常干净：`"},` 或 `"}` 收尾的引号 + 一个 `"ts": <数字>}` 时间戳。
+#   上面的 _TOOL_FIELD_RE 只认 response_format/subprocess 这些字段名，**认不出 ts**，
+#   于是整段残渣（连同上一条工具调用的参数）上了屏。
+#   这条规则只看形状不看字段名，所以对"随机图片/搜索/发消息"任何工具都通用。
+#
+#   安全性（宁可少吞不可误伤）：
+#     · 必须同时出现「右引号收尾的残片」**和**「`"ts": 数字`」，缺一不切；
+#     · 只在文本**靠前**（第一个中文字符之前，或整段前 200 字符内）命中才算 ——
+#       用户/角色正常说话里几乎不会连续出现 `"}, "ts": 1792833795.098908}` 这种串；
+#     · 切完若把正文切空了，回退到原文（交给后面的段落处理），不会吐空。
+_TS_RESIDUE_RE = re.compile(r"\"\}\s*,\s*\"ts\"\s*:\s*[\d.eE+-]+\s*\}")
+
+
+def scrub_secrets(text: str) -> str:
+    """把泄漏进正文的密钥/令牌擦成 `sk-***`。
+
+    ★ 2026-10-24 用户实拍事故：她为了做 TTS 自己手搓 curl，
+      整段 `Authorization: Bearer sk-kbmvfnt…` 被当成普通文字显示在对话界面里。
+      这是**真实可用的密钥**，必须保证无论载荷剥没剥干净，它都不会出现在界面上。
+    """
+    if not text:
+        return text
+    out = re.sub(r"(Bearer\s+)([A-Za-z0-9_\-\.]{12,})", r"\1sk-***", text)
+    out = re.sub(r"\b(sk|ak|abk)-[A-Za-z0-9_\-]{12,}", r"\1-***", out)
+    out = re.sub(r"\b(api[_-]?key|token|secret)(\s*[\"']?\s*[:=]\s*[\"']?)([A-Za-z0-9_\-]{16,})",
+                 r"\1\2***", out, flags=re.IGNORECASE)
+    return out
+
+
 def strip_tool_payload(text: str) -> str:
     """去掉正文里夹带的**工具调用原始载荷**。
 
@@ -312,18 +405,62 @@ def strip_tool_payload(text: str) -> str:
                     collect(v, depth + 1)
 
         collect(data)
-        strong = {"tool_calls", "function", "arguments", "args", "result", "call_id"}
+        strong = {"tool_calls", "function", "arguments", "args", "result", "call_id",
+                  # ★ 2026-10-24 实测：她**自己手搓 shell 命令**调 TTS 的那一轮（用
+                  #   siliconflow /audio/speech 生成 fish10.wav），载荷整段是
+                  #   {"body": {"input":"我是大肥鱼。…","response_format":"wav"},
+                  #    "cmd": ["curl","-s","--max-time","90","-X","POST", …],
+                  #    "ts": 1792812592.36}
+                  #   只有一个 `body`+`cmd`+`ts`，上面这些强特征键一个都没有 →
+                  #   整段裸 JSON 漏进了对话界面（用户实拍，一大段 sk- 密钥暴露在屏幕上）。
+                  "cmd", "cmdline", "command", "shell", "exec", "script",
+                  "stdout", "stderr", "body", "headers", "url", "endpoint"}
         if keys & strong:
             return True
         # 回执形态：只有 id/ts/result 这类键、没有自然语言正文
-        return {"id", "ts"} <= keys and len(keys) <= 6
+        if {"id", "ts"} <= keys and len(keys) <= 6:
+            return True
+        # 执行型载荷：cmd / body / command 之一 + 没有一段像人话的正文
+        if keys & {"cmd", "body", "command", "script", "exec"}:
+            has_prose = False
+
+            def find_prose(node, depth=0):
+                nonlocal has_prose
+                if has_prose or depth > 3:
+                    return
+                if isinstance(node, dict):
+                    for v in node.values():
+                        find_prose(v, depth + 1)
+                elif isinstance(node, list):
+                    for v in node[:8]:
+                        find_prose(v, depth + 1)
+                elif isinstance(node, str):
+                    # 有十几个字以上、且不是路径/命令行/URL 的字符串，才当作"人话"。
+                    # ★ 注意 JSON 是**反斜杠转义原始文本**时解不开（`\ncmd=[...`），
+                    #   这时整段会被当普通字符；下面的"未闭合 JSON"兜底负责这种情况。
+                    s = node.strip()
+                    if (len(s) >= 12 and not s.startswith(("/", "http", "-", "curl", "python"))
+                            and not re.match(r"^[\w./:-]+$", s)
+                            and not s.endswith((".wav", ".mp3", ".json"))):
+                        has_prose = True
+
+            find_prose(data)
+            return not has_prose
+        return False
 
     def balanced_json_at(s: str, start: int) -> str | None:
-        """从 s[start] == '{' 起，找配对 '}' 的位置（考虑字符串与转义）。"""
+        """从 s[start] == '{' 起，找配对 '}' 的位置。
+
+        ★ 2026-10-24 放宽了两点（都是为了实拍的那个未闭合载荷）：
+          ① 深度回到 0 时**不要求**它恰好是字符串外 —— 载荷里的引号本身就不配对
+             （`{'response_format':'wav'})` 会让 `in_str` 一直是 True，永远等不到闭合）；
+          ② 扫描上限 8000 字符，避免在一大段正文里白跑。
+        """
         depth = 0
         in_str = False
         esc = False
-        for i in range(start, len(s)):
+        limit = min(len(s), start + 8000)
+        for i in range(start, limit):
             ch = s[i]
             if in_str:
                 if esc:
@@ -339,11 +476,11 @@ def strip_tool_payload(text: str) -> str:
                 depth += 1
             elif ch == "}":
                 depth -= 1
-                if depth == 0:
+                if depth <= 0:
                     return s[start:i + 1]
         return None
 
-    # 扫描全文：把"可解析且判定为工具载荷"的 JSON 对象整块剥掉，
+    # 第 1 段：`{…}` 扫描 —— 能解析且判定为工具载荷的 JSON 整块剥掉，
     # 其余全部原样保留（这样「又怎么了，接着。」和「喏，这张拿去。」都还在）。
     out: list[str] = []
     i = 0
@@ -361,12 +498,132 @@ def strip_tool_payload(text: str) -> str:
                     continue
         out.append(ch)
         i += 1
-    return "".join(out)
+    joined = "".join(out)
+
+    # 第 2 段 ★★ 2026-10-24 两次实拍：**载荷不一定以 `{` 开头**。
+    #   模型把 JSON 头吞了，正文里只剩下半截：
+    #     我是大肥鱼。'},ensure_ascii=False)\nfor i in range(3):\n    f='/AstrBot/…'
+    #   或者 `','response_format':'wav'})\ncmd=['curl',…]`
+    #   花括号扫描对它完全无效（一次 `{` 都没遇到），于是整段（含 Bearer 密钥）上了屏。
+    #   现在的做法：只要正文里出现**载荷字段特征**，就把从特征处（及其前面的引号残片）
+    #   到 `"ts": <数字>}` 之间整块切掉；找不到收尾标记就切到下一个空白行。
+    if not joined.strip():
+        return scrub_secrets(joined)
+
+    # ★★ 第 2.5 段：反序列化残渣（JSON 头丢了，只剩 `…"}, "ts": 1792833795.098908}`）。
+    #   放在字段特征清理**之前**：这种残渣没有 `{` 也没有已知字段名，前面两条都抓不到。
+    #   命中位置必须在正文靠前（前 200 字内），避免误伤正文里偶然出现的类似串。
+    m_res = _TS_RESIDUE_RE.search(joined)
+    if m_res and m_res.start() <= 200:
+        head, tail_text = joined[: m_res.start()], joined[m_res.end() :]
+        # ★ 残渣左边往往挂着半个开引号：`「随机二次元图片 涩图"}, …`
+        #   那是**工具参数值**的起始引号（`"tag": "随机二次元图片 涩图"`），
+        #   它连同参数名一起被模型吞掉了，只剩内容和这个孤零零的左引号。
+        #   不处理就会留下 `「随机二次元图片 涩图哼，没卡…` 这种粘在一起的东西。
+        #   只在这种"左引号后面到残渣之间没有右引号闭合"的形态下才吞，避免误伤正常引用。
+        opened = re.search(r"[\"'\u300c\u300e\u201c]([^\"'\u300d\u300f\u201d]*)$", head)
+        if opened:
+            head = head[: opened.start()]
+        candidate = (head + tail_text).strip()
+        # 切完不能把话切空；只剩标点碎屑也算"切空"，宁可保留原文让下面几段继续处理
+        if re.search(r"[\u4e00-\u9fffA-Za-z]", candidate):
+            candidate = re.sub(r"^[\s\"'`\u300d\u300f\u201d]+", "", candidate)
+            joined = candidate
+
+    # 第 2 段 ★★ 2026-10-24 两次实拍：**载荷不一定以 `{` 开头**。
+    #   模型把 JSON 头吞了，正文里只剩下半截：
+    #     我是大肥鱼。'},ensure_ascii=False)\nfor i in range(3):\n    f='/AstrBot/…'
+    #   或者 `','response_format':'wav'})\ncmd=['curl',…]`
+    #   花括号扫描对它完全无效（一次 `{` 都没遇到），于是整段（含 Bearer 密钥）上了屏。
+    #   现在的做法：只要正文里出现**载荷字段特征**，就把从特征处（及其前面的引号残片）
+    #   到 `"ts": <数字>}` 之间整块切掉；找不到收尾标记就切到下一个空白行。
+    m_field = _TOOL_FIELD_RE.search(joined)
+    if m_field:
+        start = m_field.start()
+        # 往前吃掉紧邻的引号/逗号残片（`','`、`'` 这种），别在正文里留渣
+        while start > 0 and joined[start - 1] in " \t\"',)]}:[({":
+            start -= 1
+        tail = joined[start:]
+        m_ts = re.search(r"\"ts\"\s*:\s*\d[\d.eE+-]*\s*\}", tail)
+        end = start + m_ts.end() if m_ts else (joined.find("\n\n", start) if joined.find("\n\n", start) >= 0 else len(joined))
+        joined = joined[:start] + joined[end:]
+
+    # 第 3 段：python 代码残片（`for i in range(3):` / `r=subprocess.run(` / `print(` …）
+    if _PY_FRAGMENT_RE.search(joined):
+        joined = re.sub(r"(?:\\n|\n)\s*(?:for\s+\w+\s+in\s+range|if\s+os\.path|if\s+sz|"
+                        r"r\s*=\s*subprocess\.|subprocess\.|print\(|import\s+os|import\s+sys|"
+                        r"f\s*=\s*['\"]/|body\s*=\s*json\.)[^\n]*?(?=\\n|\n|$)",
+                        "", joined)
+
+    # 第 4 段：切完之后常留下 `',}` 这种标点碎屑 → 清掉。
+    #   ★ 只在"确实切过载荷"时做：正常的 `{笑}` / `{'a': 1}` 不能被误伤（回归测试里有）。
+    if _TOOL_FIELD_RE.search("".join(out)) or _TS_RESIDUE_RE.search(text):
+        joined = re.sub(r"[\s,'\"{}()\[\]]{2,}(?=[\u4e00-\u9fff])", " ", joined)
+        joined = re.sub(r"^[\s,'\"{}()\[\]\\]+", "", joined)
+        # ★ 2026-10-24：整段都是载荷时，清完会剩下 `tag":` 这类孤立键名残片。
+        #   只在"确实切过载荷"的分支里做，且只删**末尾**的裸键名形态，正常正文不受影响。
+        joined = re.sub(r"[\"'`]?\b(?:tag|id|name|args|ts|type|value|query)\b[\"'`]?\s*:\s*$",
+                        "", joined).strip()
+    # 第 5 段：最后一道保险 —— 密钥/令牌一律不进界面
+    joined = scrub_secrets(joined)
+    # ★ 2026-10-24 兜底：整段都是工具载荷、连一句话都没剩下时（`{"tag":` 这种残渣），
+    #   宁可**返回空串**（上层就不会发气泡）也不要让半截 JSON 上屏。
+    #   判据很保守：清完之后没有任何中文/正常英文单词，只剩下标点和极短残片。
+    if not re.search(r"[\u4e00-\u9fff]{2,}|[A-Za-z]{3,}", joined):
+        return ""
+    return joined
 
 
 def mime_for_filename(filename: str) -> str:
     ext = os.path.splitext(filename or "")[1].lower()
     return _EXT_MIME.get(ext, "application/octet-stream")
+
+
+# ★ 2026-10-24：附件"真实类型"判据。
+#   云端语音插件会把语音当成**图文本体**发下来，SSE 里 record 帧后面紧跟着的
+#   attachment_saved 往往属于下一张表情图，于是"占位符类型"和"下载回来的字节类型"
+#   会错位：`[RECORD]xxx.wav` 实际下到一张 GIF、`[IMAGE]xxx.gif` 实际下到一段语音。
+#   只看占位符 → 用户收到"语音"却显示成图片气泡、点开是 .wav。
+#   这里改为**相信真实字节**：数据头魔数 → 其次 MIME → 最后才看扩展名/占位符。
+_BINARY_MAGIC: tuple[tuple[bytes, str], ...] = (
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+    (b"BM", "image/bmp"),
+    (b"OggS", "audio/ogg"),
+    (b"fLaC", "audio/flac"),
+    (b"ID3", "audio/mpeg"),
+    (b"\x1aE\xdf\xa3", "audio/webm"),
+)
+
+
+def sniff_media_mime(data: bytes) -> str:
+    """按文件头判断真实 MIME（认不出返回空串，交给调用方再用 MIME/扩展名兜底）。"""
+    if not data or len(data) < 4:
+        return ""
+    for magic, mime in _BINARY_MAGIC:
+        if data.startswith(magic):
+            return mime
+    if data[:4] == b"RIFF" and len(data) >= 12:
+        # RIFF 容器：WAVE=音频、WEBP=图片（实测表情包里 .gif/.webp/.wav 都有）
+        form = data[8:12]
+        if form == b"WAVE":
+            return "audio/wav"
+        if form == b"WEBP":
+            return "image/webp"
+    if data[:2] == b"\xff\xfb" or data[:2] == b"\xff\xf3" or data[:2] == b"\xff\xf2":
+        return "audio/mpeg"
+    return ""
+
+
+def media_kind_from_bytes(data: bytes, fallback_mime: str = "", fallback_name: str = "",
+                          fallback_kind: str = "") -> str:
+    """把一份**已下载的字节**归成 image / audio / other（真实字节优先）。"""
+    real_mime = sniff_media_mime(data)
+    if real_mime:
+        return attachment_media_kind("", real_mime, "")
+    return attachment_media_kind(fallback_kind, fallback_mime, fallback_name)
 
 
 @dataclass
@@ -413,10 +670,17 @@ class CloudFeiyuClient:
         self.persona_id = persona_id or os.getenv("ASTRBOT_PERSONA_ID", "333")
         self.username = username or os.getenv("ASTRBOT_USERNAME", "xiao1")
         self.platform_id = platform_id or os.getenv("ASTRBOT_PLATFORM", "mao-pet")
-        # 默认用微信会话的 conversation_id，实现记忆共享
+        # ★★ 2026-10-24 云端排查：原来默认值是**微信会话的 conversation_id**，
+        #   理由是"实现记忆共享"。实测代价远大于收益：
+        #     · 桌宠每一轮都进入 `webchat:FriendMessage:webchat!xiao1!<微信会话>`，
+        #       云端分不清"这是微信还是桌宠"，插件里写死的推送目标也不会因此变，
+        #       反而把桌宠的 /setu_file 结果送去了微信（用户实拍：手机上收到图）。
+        #     · 两边上下文混在一条会话里，记忆/人格互相污染。
+        #   现在默认用**桌宠自己的**会话 ID（可用 ASTRBOT_SESSION_ID 覆盖）。
+        #   想共享记忆请显式设 ASTRBOT_SESSION_ID=微信那个 id —— 那是明确选择，不是默认。
         self.session_id = session_id or os.getenv(
             "ASTRBOT_SESSION_ID",
-            "d93c5ca6-c3d8-47a0-a9ea-124334bcde70",
+            "mao-pet-desktop",
         )
         self.timeout = timeout
 
@@ -484,6 +748,21 @@ class CloudFeiyuClient:
                 if not raw:
                     att.error = "云端返回空文件"
                     return att
+
+                # ★★ 2026-10-24：先按数据头认出**真实类型**，再决定上限和 MIME。
+                #   错位场景下占位符写 record、字节却是 1.6MB 的 GIF；
+                #   旧代码按占位符 kind 选上限，会把大表情图当"音频"放过 MAX_IMAGE_BYTES 检查。
+                real_mime = sniff_media_mime(raw)
+                real_kind = media_kind_from_bytes(raw, mime_for_filename(filename), filename, kind)
+                if real_kind in ("image", "audio"):
+                    att.kind = real_kind
+                ctype = (resp.headers.get("content-type") or "").split(";")[0].strip()
+                if real_mime:
+                    # 魔数比"响应头"和"占位符"都可信；响应头常被云端随手写成 octet-stream
+                    att.mime_type = real_mime
+                elif ctype and ctype not in ("application/octet-stream", "text/plain"):
+                    att.mime_type = ctype
+
                 # 图片用单独的小上限（不需要把 20MB 的图塞进 data: URL），
                 # 其它类型（歌曲/语音/文件）走大上限。
                 limit = MAX_IMAGE_BYTES if att.kind == "image" else MAX_ATTACHMENT_BYTES
@@ -492,10 +771,6 @@ class CloudFeiyuClient:
                     att.size = len(raw)
                     return att
 
-                ctype = (resp.headers.get("content-type") or "").split(";")[0].strip()
-                # 云端有时给 application/octet-stream，此时用扩展名猜的 MIME 更准
-                if ctype and ctype not in ("application/octet-stream", "text/plain"):
-                    att.mime_type = ctype
                 b64 = base64.b64encode(raw).decode("ascii")
                 att.size = len(raw)
                 att.data_url = f"data:{att.mime_type};base64,{b64}"
@@ -645,6 +920,7 @@ class CloudFeiyuClient:
         #   两路都拼会把正文写两遍（实测症状：同一句话重复出现）。
         collected: list[str] = []
         complete_text = ""
+        _seen_names: set[str] = set()
         placeholders: list[tuple[str, str, str]] = []
         current_attachment_id = ""
         async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -671,7 +947,13 @@ class CloudFeiyuClient:
                         continue
                     parsed = self._frame_attachment(frame)
                     if parsed:
-                        placeholders.append((parsed[0], parsed[1], current_attachment_id))
+                        # 2026-10-24：同一条附件会在流式帧 + complete 全文里各出现一次，
+                        # 按云端存储名去重，避免下载/播放两遍。
+                        stored_name = split_attachment_payload(parsed[0], parsed[1])[0].strip()
+                        if not stored_name or stored_name not in _seen_names:
+                            if stored_name:
+                                _seen_names.add(stored_name)
+                            placeholders.append((parsed[0], parsed[1], current_attachment_id))
                         current_attachment_id = ""
 
         content = "".join(collected)
@@ -725,6 +1007,84 @@ class CloudFeiyuClient:
                     if chunk:
                         yield chunk
 
+    async def chat_text_diagnosed(
+        self,
+        message: str,
+        session_id: str | None = None,
+        *,
+        images: list[str] | None = None,
+    ) -> tuple[str, dict[str, Any]]:
+        """只要正文，但把帧级诊断一起带出来（不下载附件、不碰助手气泡）。
+
+        用途：屏幕观察这类"图 + 一句话 → 要一句完整回话"的调用方。
+        与 chat_stream_full 的差别：这里**不下载**云端回传的图片/语音（观察链路用不上，
+        下载一堆附件纯属浪费带宽），但同样认 plain 增量 + complete 兜底。
+
+        ★★ 必须 `enable_streaming: true`（2026-10-24 实测对比，各跑 2 次）：
+          · stream=false → **0/2 有正文**，帧序列只有 agent_stats + record（语音）+ image；
+            云端 TTS 插件在大肥鱼这轮改成"语音输出"时，正文就整个不进 SSE 了。
+          · stream=true  → **2/2 有正文**，逐 token 的 plain 增量齐全，complete 也有全文。
+          即：只有流式请求能稳定拿到她的文字。这也是大肥鱼聊天主链路一直用
+          chat_stream_full(stream=True) 的原因 —— 它从没踩到"只有语音没字"。
+        """
+        if not self.is_configured:
+            raise RuntimeError("ASTRBOT_API_KEY 未配置")
+        payload = self._build_payload(
+            message,
+            session_id or self.session_id,
+            images=images,
+            stream=True,
+        )
+        plain_frames = 0
+        complete_frames = 0
+        streamed_text = ""
+        complete_text = ""
+        agent_stats: dict[str, Any] = {}
+        frames_seen: list[str] = []
+        record_frames = 0
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with client.stream(
+                "POST", f"{self.base_url}/api/v1/chat", headers=self._headers(), json=payload
+            ) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    frame = self._parse_sse_event(line)
+                    if frame is None:
+                        continue
+                    dtype = str(frame.get("type") or "")
+                    # ★ 只记**帧种类**（不含正文），用于排查"云端到底回了什么"。
+                    #   实测过：一轮里只来 agent_stats / record / image，一个正文帧都没有。
+                    if len(frames_seen) < 40:
+                        frames_seen.append(dtype or "?")
+                    if dtype == "plain":
+                        text = self._frame_text(frame)
+                        if text:
+                            streamed_text += text
+                            plain_frames += 1
+                        continue
+                    if dtype == "complete":
+                        complete_text = self._frame_text(frame)
+                        complete_frames += 1
+                        continue
+                    if dtype == "agent_stats":
+                        info = frame.get("data")
+                        if isinstance(info, dict):
+                            agent_stats = info
+                        continue
+                    if dtype == "record":
+                        # 云端把她这轮的话转成了语音：说明"她确实说了话，只是文字没以帧下发"
+                        record_frames += 1
+        content = streamed_text
+        if not content.strip() and complete_text.strip():
+            content = complete_text
+        return strip_tool_payload(strip_reasoning_prefix(content)).strip(), {
+            "plain_frames": plain_frames,
+            "complete_frames": complete_frames,
+            "record_frames": record_frames,
+            "agent_stats": agent_stats,
+            "frames": frames_seen,
+        }
+
     async def chat_stream_full(
         self,
         message: str,
@@ -733,6 +1093,7 @@ class CloudFeiyuClient:
         config_id: str | None = None,
         images: list[str] | None = None,
         session_out: dict[str, Any] | None = None,
+        force_streaming: bool = True,
     ) -> AsyncGenerator[tuple[str, list[str]], None]:
         """流式对话，逐段 yield (文本增量, 附件原始字节列表)。
 
@@ -743,6 +1104,14 @@ class CloudFeiyuClient:
 
         session_out 可选：传入 dict 时，结束时写入 {"attachments": [...]}，
         方便调用方在流结束后拿到结构化附件（不依赖 yield 的第二个元素）。
+
+        force_streaming=False：向云端要**非**流式回复（`enable_streaming: false`）。
+          ★ 2026-10-24 实测：云端 persona 绑的模型是**非流式**时，AstrBot 只回一个
+          `complete` 帧、一个 `plain` 增量都没有，短回复尤其常见；而这条入口的正文只认
+          `plain` 增量（complete 只在"全程没有 plain"时兜底，见下方 streamed_text 注释）。
+          只要前面混进一个非空的 plain 帧，整段正文就会被丢光 —— 屏幕观察这种
+          "要一句完整结论"的调用方必须能显式要非流式，才拿得到正文。
+          函数名仍叫 stream_*：SSE 这条传输没变，只是云端不再逐 token 推。
         """
         if not self.is_configured:
             raise RuntimeError("ASTRBOT_API_KEY 未配置")
@@ -753,12 +1122,29 @@ class CloudFeiyuClient:
             session_id or self.session_id,
             config_id=config_id,
             images=images,
-            stream=True,
+            stream=bool(force_streaming),
         )
 
         pending: list[tuple[str, str, str]] = []
         current_attachment_id = ""
         all_ready: list[FeiyuAttachment] = []
+        # ★★ 2026-10-24 修「对话界面出现两条一模一样的语音」。
+        #   AstrBot 同一条占位符会**发两次**：一次在流式增量里、一次在最后的 complete
+        #   全文里（`complete.chain` 也带着 `[RECORD]xxx.wav`）。旧实现每次 `_frame_attachment`
+        #   命中就 append + 立即下载，于是同一份字节被下载两遍、落盘成同一个哈希文件，
+        #   前端拿到两条 url 完全相同的 agent_audio —— 用户看到就是两个播放器。
+        #   这里按占位符的**云端存储名**去重（同一轮里同名即同一份文件）。
+        _seen_placeholders: set[str] = set()
+
+        def _is_duplicate(parsed: tuple[str, str]) -> bool:
+            stored = split_attachment_payload(parsed[0], parsed[1])[0].strip()
+            if not stored:
+                return False
+            if stored in _seen_placeholders:
+                return True
+            _seen_placeholders.add(stored)
+            return False
+
         # ★ 去重：AstrBot 先逐 token 推 `plain`，最后再推一个 `complete` 帧，
         #   而 complete 的 data 是**整段文本**（实测：15 个 plain 增量 + 1 个 complete 全文）。
         #   如果两边都累加，正文就变成"XXX…XXX…"。策略：
@@ -766,6 +1152,9 @@ class CloudFeiyuClient:
         #     · 全程没有 plain（短回答可能只发 complete）→ 用 complete 的文本。
         streamed_text = ""
         complete_text = ""
+        plain_frames = 0
+        complete_frames = 0
+        last_agent_stats: dict[str, Any] = {}
 
         async def _flush() -> list[str]:
             """把攒下的占位符下载成 data URL，yield 用的就是它的返回。"""
@@ -780,8 +1169,16 @@ class CloudFeiyuClient:
                 #   这里给的是**元信息**，真正的字节由上层落盘成 /api/companion/agent-media/xxx。
                 #   同时留一份带字节的完整对象（下划线前缀 = 内部字段），
                 #   给上层落盘用；**绝不能**直接塞进 HTTP 响应或 WS 帧。
+                # ★★ 2026-10-24 修「语音在这条链路上时有时无」：
+                #   一次回复里可能先后到两张附件（实测：先用图片帧回表情，再用
+                #   record 帧结尾回语音）。旧实现每次 flush 都**整份覆盖**这两个字段，
+                #   后到的那批会把先到的整批顶掉 —— 表现就是"云端明明合成了语音、
+                #   云端日志也写了 Prepare to send [Record]，对话界面却一张音频都没有"。
+                #   这里改成覆盖式重算（从 all_ready 全量重建）：
+                #   字符串键仍然每次刷新，内部字节对象用新列表整体替换，
+                #   上层拿到的永远是"到目前为止全部附件"，不会丢也不会重复。
                 session_out["attachments"] = [a.to_dict(inline_payload=False) for a in all_ready]
-                session_out["_raw_attachments"] = all_ready
+                session_out["_raw_attachments"] = list(all_ready)
             # ★ 第二个返回值只给**图片**：调用方把它当 <img> 的 src 用。
             #   以前把所有附件都塞进来，点歌的 mp3 就被当成图片发了出去
             #   （实测前端收到 `agent_image`，url 却是 `data:audio/mpeg;base64,...`）。
@@ -814,6 +1211,9 @@ class CloudFeiyuClient:
                     text = self._frame_text(frame)
                     parsed = self._frame_attachment(frame)
                     if parsed:
+                        if _is_duplicate(parsed):
+                            # 同一条附件在 complete 全文里又出现了一次：不再下载第二份
+                            continue
                         pending.append((parsed[0], parsed[1], current_attachment_id))
                         current_attachment_id = ""
                         # 有的部署不发 attachment_saved，收到占位符就尝试下载
@@ -826,6 +1226,7 @@ class CloudFeiyuClient:
                         # 完整文本帧：不直接 yield（前面 plain 已经推过同样内容了），
                         # 留到流结束时决定要不要用它兜底。
                         complete_text = text
+                        complete_frames += 1
                         if pending:
                             ready = await _flush()
                             if ready:
@@ -834,7 +1235,13 @@ class CloudFeiyuClient:
 
                     if dtype == "plain" and text:
                         streamed_text += text
+                        plain_frames += 1
                         yield text, []
+
+                    if dtype == "agent_stats":
+                        info = frame.get("data")
+                        if isinstance(info, dict):
+                            last_agent_stats = info
 
                     if dtype == "end" and pending:
                         ready = await _flush()
@@ -861,6 +1268,14 @@ class CloudFeiyuClient:
             yield "", []
         if session_out is not None:
             session_out["text"] = streamed_text
+            # ★ 2026-10-24：把**正文帧**的诊断信息留给调用方。真实事故：一轮里只收到
+            #   agent_stats + record 帧、一个 plain/complete 都没有 → 正文空，而不是"她没说话"。
+            #   调用方（屏幕观察）要能区分"云端没回文字"和"网络/解析出错"，才好给用户交代。
+            session_out["frames"] = {
+                "plain_frames": plain_frames,
+                "complete_frames": complete_frames,
+                "agent_stats": last_agent_stats,
+            }
 
         # 流结束收尾：理论上不会剩，兜底一次
         ready = await _flush()
@@ -947,7 +1362,10 @@ class CloudFeiyuClient:
             return ""
         if dtype in ("plain", "complete"):
             # 在拉流阶段就把控制标记剥掉（见 strip_control_markers 注释）
-            return strip_control_markers(str(frame.get("data") or ""))
+            # ★ 2026-10-24：密钥/令牌擦除必须在**拉流阶段**就做 —— 桌宠横条
+            #   (`agent_stream`) 是逐帧推的，收尾清洗只能修气泡和聊天页，
+            #   早已推出去的帧改不回来。用户那轮就是横条里先出现 sk-…
+            return scrub_secrets(strip_control_markers(str(frame.get("data") or "")))
         choices = frame.get("choices")
         if isinstance(choices, list) and choices and isinstance(choices[0], dict):
             delta = choices[0].get("delta") or {}

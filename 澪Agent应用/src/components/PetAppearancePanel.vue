@@ -103,6 +103,8 @@ const currentPhaseSlots = computed(() => {
       perModel[phase] = { motion: '', expression: '' }
       return
     }
+    // ★ 2026-10-24：显式给键 —— 后端返回的绑定只带"填过的键"（没选动作就没有 motion），
+    //   v-model 往缺键上写会被 Vue 3 静默丢掉，表现为"选了动作/表情，一保存就没了"。
     if (typeof binding.motion !== 'string') binding.motion = ''
     if (typeof binding.expression !== 'string') binding.expression = ''
   })
@@ -158,22 +160,93 @@ async function previewPhase(phase) {
   if (phasePreviewBusy.value) return
   phasePreviewBusy.value = true
   try {
+    // ★ 2026-10-24：把**当前页面上的选择**一起送过去。
+    //   原来只传 { phase }：桌宠端只能拿"已经保存过"的 settings 去播，
+    //   于是用户刚在下拉里换了个表情、还没来得及保存（或保存了但桌宠 5s 轮询还没刷到），
+    //   点「试演」播出来的还是上一张脸 —— 用户报的就是这个「切换表情后试演不对应」。
+    //   动作列是槽位语义，表情列是表达式真名，两列各送各的，后端按 model_id 解析。
+    const binding = currentPhaseSlots.value?.[phase] || {}
     const response = await fetch('/api/companion/live2d/phase/preview', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phase }),
+      body: JSON.stringify({
+        phase,
+        model_id: String(settings.value?.live2d_model_id || ''),
+        motion: String(binding.motion || ''),
+        expression: String(binding.expression || ''),
+      }),
     })
-    if (!response.ok) {
-      const detail = await response.json().catch(() => ({}))
-      throw new Error(String(detail.detail || `HTTP ${response.status}`))
+    const detail = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(String(detail.detail || `HTTP ${response.status}`))
+    // 后端如实回报"送没送出去"，别再一律显示 ✓ 让用户以为播了
+    if (detail.ok === false) {
+      phasePreviewTip.value = `✗ ${detail.detail || '试演没有送达'}`
+      return
     }
-    phasePreviewTip.value = '✓ 已试演'
+    const resolved = detail.expression || {}
+    if (resolved.kind === 'missing') {
+      phasePreviewTip.value = `✗ 表情「${resolved.expression}」不在当前模型里`
+      return
+    }
+    phasePreviewTip.value = `✓ 已试演「${resolved.expression || '自动'}」`
   } catch (error) {
     phasePreviewTip.value = `✗ ${error?.message || error}`
   } finally {
     phasePreviewBusy.value = false
     setTimeout(() => { phasePreviewTip.value = '' }, 2500)
   }
+}
+
+// ★ 2026-10-24 任务状态「表情」列改为**真实表情文件**（用户裁决）：
+//   原来这一列只有 7 个抽象情绪槽（自然/温柔/开心/担心/认真/害羞/警觉），用户选不到
+//   模型里实际存在的「05 O O」「07 流口水」这类 exp3 表情文件，只能碰运气靠语义正则匹配。
+//   现在直接列模型 capabilities.expressions 里的每一条，选项 value 就是表达式真名
+//   （大小写敏感，后端只做 trim/slice(120)，不再小写化）。
+//   动作列保持槽位语义不变（一条状态只能播一个表情，两列都填文件名会互相覆盖）。
+const phaseExpressionChoices = computed(() => {
+  const seen = new Set()
+  return selectedExpressions.value
+    .map((expression) => String(expression?.Name || expression?.name || ''))
+    .filter(Boolean)
+    .filter((name) => (seen.has(name) ? false : seen.add(name)))
+})
+const PHASE_EXPRESSION_SLOT_LABELS = expressionLabels
+// 老配置里存的是情绪槽名（neutral/gentle/...）。下拉里也要能看见它，否则
+// v-model 找不到匹配选项 ⇒ 显示空白，用户会以为"绑错了"。
+function phaseExpressionOptionsFor(value) {
+  const name = String(value || '')
+  if (!name || phaseExpressionChoices.value.includes(name)) return ''
+  return PHASE_EXPRESSION_SLOT_LABELS[name] || ''
+}
+// 换了模型 / 模型重新导入后，老绑定可能指向不存在的表情。静默失效是最坑的体验
+// （"明明选了「07 流口水」，桌宠却毫无反应"），所以这里把每一行标出来。
+function phaseExpressionMissing(phase) {
+  const name = String(currentPhaseSlots.value[phase]?.expression || '')
+  if (!name) return false
+  if (name in PHASE_EXPRESSION_SLOT_LABELS) return false
+  return !phaseExpressionChoices.value.includes(name)
+}
+// ★ 2026-10-24：选「自动表情」时也把**实际会播的那张脸**写在选项里。
+//   原来是光秃秃一个「自动表情」，用户点试演看到表情变了，却不知道那张脸是哪来的、
+//   更不知道"我明明没选"——这正是「切换表情后试演不对应」的一半困惑来源。
+//   与渲染端 PHASE_EMOTION / 后端 PHASE_DEFAULT_EMOTION 同一张表（2026-10-24 已补齐 11 态）。
+const PHASE_DEFAULT_EMOTION_SLOT = {
+  idle: 'gentle',
+  thinking: 'serious',
+  replying: 'gentle',
+  voice: 'gentle',
+  error: 'concerned',
+  awaiting: 'gentle',
+  planning: 'gentle',
+  executing: 'serious',
+  listening: 'gentle',
+  done: 'cheerful',
+  paused: 'gentle',
+}
+function phaseDefaultExpressionLabel(phase) {
+  const slot = PHASE_DEFAULT_EMOTION_SLOT[phase] || ''
+  if (!selectedMotions.value.length && !selectedExpressions.value.length) return '内置默认'
+  return PHASE_EXPRESSION_SLOT_LABELS[slot] || slot || '内置默认'
 }
 </script>
 
@@ -209,7 +282,24 @@ async function previewPhase(phase) {
         </div>
         <div class="live2d-resource-grid"><label v-for="(label, slot) in expressionLabels" :key="slot"><span>{{ label }}</span><select v-model="currentExpressionSlots[slot]"><option value="">自动判断</option><option v-for="expression in selectedExpressions" :key="expression.Name || expression.name" :value="expression.Name || expression.name">{{ expression.Name || expression.name }}</option></select><button type="button" title="预览表情" :disabled="!currentExpressionSlots[slot] || busy" @click="emit('preview-expression', currentExpressionSlots[slot])"><Volume2 :size="13" /></button></label></div>
       </div>
-      <div v-if="selectedMotions.length || selectedExpressions.length" class="live2d-resource-section"><h3>任务状态</h3><small class="live2d-resource-tip">选「自动」= 用内置默认（完成→开心 / 出错→担心 / 聆听→聆听）。点「试演」桌宠会立刻按该状态真实联动一次（动作+表情+音效），不落库不影响配置</small><div class="live2d-phase-grid"><label v-for="(label, phase) in phaseLabels" :key="phase"><span>{{ label }}</span><select v-model="currentPhaseSlots[phase].motion" title="动作槽"><option value="">自动动作</option><option v-for="(slotLabel, slot) in motionLabels" :key="'pm-' + slot" :value="slot">{{ slotLabel }}</option></select><select v-model="currentPhaseSlots[phase].expression" title="表情槽"><option value="">自动表情</option><option v-for="(slotLabel, slot) in expressionLabels" :key="'pe-' + slot" :value="slot">{{ slotLabel }}</option></select><button type="button" class="phase-preview-btn" :title="`按当前绑定试演「${label}」`" :disabled="phasePreviewBusy" @click.prevent="previewPhase(phase)">试演</button></label></div><small v-if="phasePreviewTip" class="live2d-resource-tip">{{ phasePreviewTip }}</small></div>
+      <div v-if="selectedMotions.length || selectedExpressions.length" class="live2d-resource-section">
+        <h3>任务状态</h3>
+        <small class="live2d-resource-tip">动作列选「自动」= 用内置默认动作槽；表情列直接列这个模型里真实的 exp3 表情文件，选哪个状态就亮哪张脸。点「试演」桌宠会立刻按该状态真实联动一次（动作+表情+音效），不落库不影响配置</small>
+        <div class="live2d-phase-grid">
+          <label v-for="(label, phase) in phaseLabels" :key="phase" :class="{ 'phase-row-missing': phaseExpressionMissing(phase) }">
+            <span>{{ label }}</span>
+            <select v-model="currentPhaseSlots[phase].motion" title="动作槽"><option value="">自动动作</option><option v-for="(slotLabel, slot) in motionLabels" :key="'pm-' + slot" :value="slot">{{ slotLabel }}</option></select>
+            <select v-model="currentPhaseSlots[phase].expression" :title="phaseExpressionMissing(phase) ? `绑定的表情不在当前模型中：${currentPhaseSlots[phase].expression}` : '表情文件'">
+              <option value="">自动表情（{{ phaseDefaultExpressionLabel(phase) }}）</option>
+              <option v-if="phaseExpressionOptionsFor(currentPhaseSlots[phase].expression)" :value="currentPhaseSlots[phase].expression">{{ phaseExpressionOptionsFor(currentPhaseSlots[phase].expression) }}（旧情绪槽）</option>
+              <option v-if="phaseExpressionMissing(phase)" :value="currentPhaseSlots[phase].expression">⚠ {{ currentPhaseSlots[phase].expression }}（当前模型没有）</option>
+              <option v-for="expressionName in phaseExpressionChoices" :key="'pe-' + expressionName" :value="expressionName">{{ expressionName }}</option>
+            </select>
+            <button type="button" class="phase-preview-btn" :title="`按当前绑定试演「${label}」`" :disabled="phasePreviewBusy" @click.prevent="previewPhase(phase)">试演</button>
+          </label>
+        </div>
+        <small v-if="phasePreviewTip" class="live2d-resource-tip">{{ phasePreviewTip }}</small>
+      </div>
       <p v-if="!selectedMotions.length && !selectedExpressions.length">模型配置中没有登记动作或表情</p>
     </div>
     <div class="pet-quick-controls">

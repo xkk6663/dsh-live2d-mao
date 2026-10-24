@@ -369,6 +369,23 @@
 .settings-savebar button:disabled { cursor: default; opacity: .45; }
 .settings-actions-row { display: flex; flex-wrap: wrap; gap: 7px; padding: 12px 0 0; }
 .settings-note { margin: 10px 2px 0; color: #718188; font-size: 11px; line-height: 1.6; }
+/* 观察提示词这类多行输入：标题在上，输入框占满整行 */
+.settings-item-stack { display: block; }
+.settings-item-stack > span { display: block; margin-bottom: 6px; }
+.settings-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  color: #2b3a40;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.6;
+  background: #fff;
+  border: 1px solid #d9e1e4;
+  border-radius: 6px;
+  resize: vertical;
+}
+.settings-textarea:focus { border-color: #8bb8c4; outline: none; }
 .privacy-transition-error { margin: 10px 0 0; padding: 9px 11px; color: #8b2f2f; background: #fff2f2; border: 1px solid #efc6c6; font-size: 12px; line-height: 1.55; }
 .settings-empty-state { width: min(940px, 100%); margin: 30px auto; padding: 30px; color: #74838a; text-align: center; background: #fff; border: 1px solid #e0e6e8; border-radius: 8px; }
 .settings-details { width: min(940px, 100%); margin: 0 auto 22px; background: #fff; border: 1px solid #dfe5e8; border-radius: 8px; }

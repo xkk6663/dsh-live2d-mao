@@ -333,6 +333,11 @@
   let modelSwitchTarget = ''
   let modelSwitchAt = 0
   let lastLoad = { gen: 0, target: '', done: true }
+  // ★ 2026-10-24：最近一次试演**指定的**模型 id。
+  //   试演是"给一个模型立刻看效果"，不能被动等 5s 轮询：设置页传了 model_id
+  //   而这个模型还没加载时，当场 loadModel 再播，否则 express() 落到别的模型上
+  //   （甚至 model 还是 null）⇒ 用户听到的永远是"切了表情，点击试演没播放"。
+  let pendingPreviewModel = ''
   let settings = {}
   let latestMessageId = null
   let lastStatusSuccess = Date.now()
@@ -344,6 +349,20 @@
   let speakingUntil = 0
   // 最近一次由「相位」驱动过表情的 agent:phase（同相位 2s 重发不重复打表情）
   let lastPhaseFaceKey = ''
+  // ★ 2026-10-24「任务状态」钉住的那张 exp3 表情（真实文件名）及其到期时刻。
+  //   为什么需要单独一份"锁"：currentEmotion / lastAppliedExpressionEmotion 是**情绪槽**的状态机，
+  //   真实表情文件名（「05 》«」「07 流口水」）既不是情绪槽、也没法反过来还原成情绪，
+  //   只要把它们塞进那套机器（用户报的「切了表情点试演，目标表情没播」），
+  //   就会出现三种互相打架的失败：
+  //     ① 到期判定用的是 currentEmotion !== 'neutral' ⇒ 先把 currentEmotion 置成 neutral 再判，
+  //        判定永远不成立 ⇒ **钉住的表情再也回不到自然脸**，下一次试演脸部毫无变化；
+  //     ② 非 neutral 时 idle 微表情节拍仍会挑白名单里的表情（尾巴消失/耳朵消失…）
+  //        抢在钉住的表情前面落地，看起来就是"播了别的表情"；
+  //     ③ 到期恢复走 expressionForEmotion('neutral')，对没有中文情绪名的模型（大肥鱼这类）
+  //        返回空 ⇒ 直接 resetExpression()，把钉住的表情一起抹掉。
+  //   所以：相位表情只由这两个变量管，期间一律不回收、不被情绪/微表情抢。
+  let phaseExpressionLock = ''
+  let phaseExpressionLockUntil = 0
   // 挂上了 beforeModelUpdate 参数钩子的 internalModel（null = 走 ticker 兜底路径）
   let parameterHookModel = null
   // 钩子最近一次真实触发的时刻（performance.now）：用于识别"挂上但从不触发"的失效钩子
@@ -778,6 +797,10 @@
       bindFrameParameterHook(model.internalModel)
       if (lastLoad.gen === generation) lastLoad.done = true
       lastAppliedExpressionEmotion = ''
+      // 旧模型连同它脸上的表情一起销毁了：相位钉住的锁必须一并作废，
+      // 否则新模型会"继承"一个指向旧模型表情名的锁，期间所有表情都被锁死
+      phaseExpressionLock = ''
+      phaseExpressionLockUntil = 0
       // 必须在模型可见前完成水印消除：await 保证第一帧可见时水印参数已生效
       // （Electron 侧 windowStable 会再延迟显示，双保险无冲突）
       await applyWatermarkRemoval(definition)
@@ -1147,7 +1170,16 @@
     if (Date.now() > emotionUntil && currentActivity === 'idle') {
       // 情绪到期：尝试恢复到自然（neutral）表情；模型表情命名匹配不到时
       // 重置回默认表情，避免任何表情被应用后永久卡住（如大肥鱼）
-      if (currentEmotion !== 'neutral' && lastAppliedExpressionEmotion && lastAppliedExpressionEmotion !== 'neutral') {
+      // ★ 2026-10-24：先看「任务状态」钉住的表情是否还在有效期内——在期内一律不动它
+      //   （原来是 currentEmotion !== 'neutral' 才恢复，而钉住路径恰好把 currentEmotion
+      //   置成 neutral，于是条件永远不成立 ⇒ 表情永久卡住、下次试演看不到变化）。
+      if (phaseExpressionLock) {
+        if (Date.now() < phaseExpressionLockUntil) {
+          // 期内：续命，不让任何"到期"逻辑碰它
+        } else {
+          releasePhaseExpressionLock()
+        }
+      } else if (currentEmotion !== 'neutral' && lastAppliedExpressionEmotion && lastAppliedExpressionEmotion !== 'neutral') {
         const restore = expressionForEmotion('neutral')
         if (restore) {
           Promise.resolve(model.expression(restore)).catch(() => {})
@@ -1155,8 +1187,10 @@
           resetModelExpression()
         }
         lastAppliedExpressionEmotion = 'neutral'
+      } else if (currentEmotion !== 'neutral') {
+        // 没有残留表情要收，但情绪标记还脏着（钉住期间被置过）⇒ 回正，别让它卡住后续判定
+        currentEmotion = 'neutral'
       }
-      currentEmotion = 'neutral'
     }
     // ★ 参数写入已迁到 applyFrameParameters()，由 InternalModel 的 beforeModelUpdate 钩子驱动。
     //   库的每帧顺序是：motionManager.update → saveParameters → 表情/眨眼/视线/呼吸/物理/pose
@@ -1336,6 +1370,71 @@
     return motionForSlot(MOTION_SLOT_ALIAS[hint] || hint)
   }
 
+  // ★ 2026-10-24「任务状态-表情」改为直接选真实表情文件后需要的两个词表：
+  //   · availableExpressionNames()：当前模型真实存在的 exp3 表情名（大小写敏感，原样返回）
+  //   · EXPRESSION_SLOT_NAME_SET：老配置里的情绪槽名（neutral/gentle/...），仍走 applyEmotion
+  const EXPRESSION_SLOT_NAMES = ['neutral', 'gentle', 'cheerful', 'concerned', 'serious', 'shy', 'alert']
+  const EXPRESSION_SLOT_NAME_SET = new Set(EXPRESSION_SLOT_NAMES)
+
+  function availableExpressionNames() {
+    return window.MioLive2DExpression.expressionNames(currentCapabilityPayload().expressions)
+  }
+
+  // 落地一张「真实表情文件」（相位绑定/试演专用）。返回是否真的交由模型执行。
+  // 注意必须在 model 就绪后才调用：loadModel 期间 model 还是上一个实例。
+  function applyPhaseExpressionFile(name, holdMs = 9000) {
+    const expressionName = String(name || '')
+    if (!expressionName || !model || typeof model.expression !== 'function') return false
+    try {
+      Promise.resolve(model.expression(expressionName)).catch(() => {})
+    } catch (_) {
+      return false
+    }
+    phaseExpressionLock = expressionName
+    phaseExpressionLockUntil = Date.now() + Math.max(1200, Number(holdMs) || 9000)
+    // 让情绪状态机让路：钉住期间它不是这张脸的主人，但仍要标一个"脏"值，
+    // 好让下面 tick 里的到期判定认得出"该恢复了"。
+    lastAppliedExpressionEmotion = expressionName
+    return true
+  }
+
+  // 钉住到期 → 回自然脸（并清锁）。只由 tick 调用一次/到期时一次。
+  function releasePhaseExpressionLock() {
+    if (!phaseExpressionLock) return
+    const released = phaseExpressionLock
+    phaseExpressionLock = ''
+    phaseExpressionLockUntil = 0
+    if (lastAppliedExpressionEmotion === released) lastAppliedExpressionEmotion = ''
+    currentEmotion = 'neutral'
+    if (!model) return
+    const restore = expressionForEmotion('neutral')
+    if (restore) Promise.resolve(model.expression(restore)).catch(() => {})
+    else resetModelExpression()
+  }
+
+  // 模型换了以后，老绑定可能指向已经不存在的表情。静默失败最坑（"选了但没反应"），
+  // 所以攒齐一轮去抖后回传一条说明给设置页（同一轮只报一次，避免 2s 重发刷屏）。
+  let pendingPhaseSlotIssue = ''
+  let phaseSlotIssueAgentId = ''
+  let phaseSlotIssueModelId = ''
+  let phaseSlotIssueTimer = 0
+  function schedulePhaseSlotIssueReport(agentId, modelId) {
+    if (agentId === 'phase-preview') return   // 试演不落库，不打扰
+    phaseSlotIssueAgentId = agentId || ''
+    phaseSlotIssueModelId = modelId || ''
+    window.clearTimeout(phaseSlotIssueTimer)
+    phaseSlotIssueTimer = window.setTimeout(() => {
+      const message = pendingPhaseSlotIssue
+      if (!message) return
+      pendingPhaseSlotIssue = ''
+      fetch('/api/companion/live2d/phase-slots/invalid', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agent_id: phaseSlotIssueAgentId, model_id: phaseSlotIssueModelId, message }),
+      }).catch(() => {})
+    }, 1500)
+  }
+
   function expressionForEmotion(emotion) {
     const cap = currentCapabilityPayload()
     const names = window.MioLive2DExpression.expressionNames(cap.expressions)
@@ -1404,6 +1503,8 @@
 
   function applyEmotion(emotion, durationMs = 10000) {
     const nextEmotion = String(emotion || 'neutral')
+    // 需要换脸 → 先把这个相位钉住的旧脸放掉（否则新情绪被锁挡住，看起来又是"点试演没反应"）
+    if (phaseExpressionLock) releasePhaseExpressionLock()
     const expressionChanged = nextEmotion !== lastAppliedExpressionEmotion
     currentEmotion = nextEmotion
     emotionUntil = Date.now() + Math.max(2000, Number(durationMs || 10000))
@@ -1421,6 +1522,9 @@
     const visualDuration = Math.max(2500, 2500 + importance * 4500)
     activityUntil = Date.now() + visualDuration
     startVisualPerformanceWindow(visualDuration)
+    // 显式情绪（visual 事件/Agent 表情）本来就要换脸：
+    // 锁在场时先放掉，否则同名情绪会被 applyEmotion 的"同名不重播"吞掉
+    if (phaseExpressionLock) releasePhaseExpressionLock()
     applyEmotion(emotion, Math.max(4000, 4500 + importance * 5500))
     const motionHint = String(event.motion_hint || 'observe')
     const motionGroup = semanticMotion(motionHint)
@@ -1505,8 +1609,18 @@
     waiting_input: 'gentle',
     complete: 'cheerful',
     error: 'concerned',
+    // ★ 2026-10-24 设置页 11 行状态都要能「试演」成一张真实的脸：
+    //   原来只有上面 8 个键，待机/聆听/暂停/语音/待确认 五个落回旧语义，
+    //   用户看到的是"点试演，脸没变"。这里补齐，与后端 PHASE_DEFAULT_EMOTION 一一对应。
+    idle: 'gentle',
+    listening: 'gentle',
+    paused: 'gentle',
+    voice: 'gentle',
+    awaiting: 'gentle',
   }
 
+  // 相位 → 表情：这些都是"独立的 Live2D 表现"，不是旧语义，理论上永远有牌可打
+  const PHASE_EXPRESSION_EMOTIONS = new Set(['gentle', 'cheerful', 'concerned', 'serious', 'shy', 'alert'])
   // 徽标开关（菜单可切换，localStorage 持久化）：默认开，仅在状态变化时短暂显示
   const agentBadgeEnabled = () => localStorage.getItem('mio_agent_badge_enabled') !== '0'
 
@@ -1770,6 +1884,10 @@
 
   // 随机换一个表情（走"表情即动作"通道：playMotion 内部 4s 后自动回自然脸）
   function playIdleExpressionBeat() {
+    // ★ 2026-10-24：相位钉住的表情（任务状态绑定的 exp3 文件）在场时一律不抢。
+    //   这个节拍挑的是白名单里的表情（尾巴消失/耳朵消失/水印消除…），
+    //   抢在钉住的表情之前落地，用户看到的就是"切了表情却播了别的/什么都没变"。
+    if (phaseExpressionLock) return false
     const cap = currentCapabilityPayload()
     const whitelist = Array.isArray(cap.idleExpressions) ? cap.idleExpressions : []
     if (!whitelist.length) return false
@@ -1801,8 +1919,9 @@
     idleBeatTimer = window.setTimeout(() => {
       idleBeatTimer = null
       try {
-        // 情绪表演未过期时不抢表情：Agent 的"认真/担心"优先于随机表情
-        if (!idleQuiet() && Date.now() >= emotionUntil) playIdleExpressionBeat()
+        // 情绪表演未过期时不抢表情：Agent 的"认真/担心"优先于随机表情。
+        // 相位钉住的表情同理（锁在场时 playIdleExpressionBeat 自己也会拒绝，这里再挡一道）
+        if (!idleQuiet() && Date.now() >= emotionUntil && !phaseExpressionLock) playIdleExpressionBeat()
       } catch (_) {}
       scheduleIdleBeat()
     }, waitMs)
@@ -1825,7 +1944,9 @@
       })
       if (item) {
         // 台词自带表情/动作：让"说话"和"脸上"配成一次完整表演
-        if (item.expression && motionIsExpression(item.expression)) playMotion(item.expression)
+        // ★ 相位钉住的表情优先：台词带的随机表情不得把它顶掉（否则"选了表情，过会儿脸又变了"）
+        const keepPhaseFace = Boolean(phaseExpressionLock)
+        if (!keepPhaseFace && item.expression && motionIsExpression(item.expression)) playMotion(item.expression)
         else if (item.motion) {
           const group = semanticMotion(item.motion)
           if (group) playMotion(group)
@@ -2247,12 +2368,56 @@
     const phaseChanged = faceKey !== lastPhaseFaceKey
     lastPhaseFaceKey = faceKey
 
-    // 表情：phase → 情绪槽（这条链路 2026-10-19 才补上）。
+    // 表情：phase → 表达式。
     // override 来自管理界面「任务状态」区块：settings.live2d_phase_slots[模型][phase]
+    // ★ 2026-10-24 起覆盖值有两种写法，必须先分辨：
+    //   ① 真实表情文件名（新）—— 如「05 O O」「07 流口水」，直接用 model.expression() 落地；
+    //   ② 情绪槽名（老配置）—— neutral/gentle/...，仍走 applyEmotion 的槽位/正则解析。
+    //   没覆盖时回落 PHASE_EMOTION 的内置默认（情绪槽）。
     const phaseOverride = settings.live2d_phase_slots?.[currentModelId]?.[phase] || {}
-    const emotionSlot = String(phaseOverride.expression || PHASE_EMOTION[phase] || '')
-    if (phaseChanged && emotionSlot && phase !== 'voice' && Date.now() >= speakingUntil) {
-      applyEmotion(emotionSlot, 4200)
+    // 若把「05 O O」直接丢给 applyEmotion，它会当情绪名再走一遍槽位/正则解析，
+    //   在 expression-utils 里必然匹配不上 ⇒ 选好的表情永远不生效。
+    //   所以先把「真名」钉住：命中了就落地一次，再把 currentEmotion 留成中性，
+    //   让 applyEmotion 只负责计时/兜底（防止后续文字情绪把这张脸改走）。
+    const phaseExpression = String(phaseOverride.expression || '').trim()
+    const modelExpressionNames = availableExpressionNames()
+    const phaseExpressionIsFile = Boolean(phaseExpression) && modelExpressionNames.includes(phaseExpression)
+    if (modelExpressionNames.length) {
+      // 换了模型后老绑定可能指向不存在的表情：显式返回，避免用户以为"选了没反应"
+      if (phaseExpression && !phaseExpressionIsFile && !EXPRESSION_SLOT_NAME_SET.has(phaseExpression)) {
+        pendingPhaseSlotIssue = `${PHASE_LABELS[phase] || phase} 绑定的表情「${phaseExpression}」不在当前模型中`
+        schedulePhaseSlotIssueReport(agentId, currentModelId)
+      } else {
+        pendingPhaseSlotIssue = ''
+      }
+    }
+    if (phaseExpressionIsFile) {
+      if (phaseChanged) {
+        // 试演按一次 = 放一次，姿态要看得出来（用户会连点对比），给 6s；
+        // 真实状态则要撑住这一整段状态，按住 9s 再回自然脸（期间 tick 不会回收它）。
+        // ⚠ 必须在 model 就绪时才落地：模型切换/刚启动时 model 还指向上一个实例，
+        //   这时调 expression() 要么报错、要么落到旧模型上 ⇒「点了试演没反应」。
+        if (model?.expression) {
+          applyPhaseExpressionFile(phaseExpression, previewOnly ? 6000 : 9000)
+        } else if (previewOnly) {
+          // 试演是有反馈按钮的操作：渲染端还没就绪就明说，别让用户干瞪眼
+          previewFeedback({ kind: 'expression', expression: phaseExpression, played: false })
+        }
+      }
+      currentEmotion = 'neutral'
+      emotionUntil = Date.now() + 4200
+    } else {
+      const emotionSlot = String(phaseOverride.expression || PHASE_EMOTION[phase] || '')
+      // ★ 2026-10-24：原来是 `Date.now() >= speakingUntil` 一刀切在相位表情上，
+      //   连点「试演」时正赶上上一轮试演/说话窗口（speakingUntil 还有 4s），
+      //   于是"自动表情"那一侧有时候根本不换脸。说话窗口只该拦真实回复流程，
+      //   不该拦试演 previewOnly；而且换"另一个"情绪本身就等于用户要看的变化。
+      const speakingWindowOpen = Date.now() < speakingUntil
+      const sameFace = emotionSlot === lastAppliedExpressionEmotion && !phaseExpressionLock
+      if (phaseChanged && emotionSlot && phase !== 'voice'
+        && (!speakingWindowOpen || previewOnly) && (!sameFace || previewOnly)) {
+        applyEmotion(emotionSlot, 4200)
+      }
     }
 
     // 动作：槽位 → 动作名。两条判据缺一不可：
@@ -2516,7 +2681,14 @@
     // 每次 5s 轮询都会误判"还没切过去"而重新加载一遍（形象不停重载）。
     // 用 lastLoad（发起即记）判断「目标已在加载中」，跳过重复发起；
     // 加载失败时 lastLoad.done = true，轮询仍会重试（保留失败自愈）。
-    if (!model || previousModel !== nextModel
+    // ★ 试演指定了模型（pendingPreviewModel）时，即使设置里还没切过去，也要先把那个模型
+    //   载进来——否则试演结果永远落在旧模型上（旧模型没有这张表情 ⇒ 脸上毫无变化）。
+    const previewTarget = pendingPreviewModel
+    const wantPreviewModel = Boolean(previewTarget) && currentModelId !== previewTarget
+      && !(lastLoad.target === previewTarget && !lastLoad.done)
+    if (wantPreviewModel) {
+      await loadModel(previewTarget)
+    } else if (!model || previousModel !== nextModel
       || (currentModelId !== nextModel && !(lastLoad.target === nextModel && !lastLoad.done))) {
       await loadModel(nextModel)
     } else {
@@ -2714,22 +2886,25 @@
    *     （顺带说明：本仓库按裁决 D1 没有 TTS 服务，`/api/companion/voice/stream` 在后端
    *      根本不存在；语音播放链路目前是断的。点歌走这条新通路，不依赖不存在的接口。）
    *   · 复用 currentAudio / voice_volume / analyser：音量设置、口型取频谱都跟说话一致。
-   *   · 播放期间气泡显示"正在播放：<歌名>"，用身份色，且**不会**被 DSH 的工具播报顶掉
-   *     （跨身份抢占保护已经在 showSpeechBubble 里做了）。
-   *   · `audio_autoplay: false` 时不自动出声，只在气泡里提示一句 —— 尊重"别突然放歌"。
+   *   · 播放期间**不再占用气泡**（2026-10-24 用户裁决：不要显示"正在播放"气泡）。
+   *     原因：这条提示每 3 秒要重显一次，长期霸占同一个气泡框，
+   *     把她真正说的话和表情包挤掉了。现在只出声，不出气泡。
+   *   · `audio_autoplay: false` 时不自动出声，只在控制台记一条 —— 尊重"别突然放歌"。
    */
   function playAgentAudio(payload) {
     const url = String(payload?.url || '')
     const agentId = String(payload?.agent_id || '')
     const accent = String(payload?.accent || '')
     const title = String(payload?.display || payload?.filename || '音频')
-    const label = `♪ 正在播放：${title}`
     if (!url) return false
 
     applyBubbleAgentAccent(agentId, accent)
 
     if (settings.audio_autoplay === false) {
-      showSpeechBubble(`${label}（自动播放已关闭）`, 5000, String(payload?.response_id || ''), agentId, accent)
+      // ★ 2026-10-24：同样不占用气泡（理由见下方"不显示正在播放"的注释）。
+      //   这条只在"用户自己关了自动播放"时出现，用控制台日志提示即可，
+      //   不要让一次点歌把桌面气泡框长期占住。
+      console.info(`[pet-audio] 自动播放已关闭，跳过：${title}`)
       return false
     }
 
@@ -2768,7 +2943,13 @@
         lastSpeechError = '点歌音频播放失败'
         finish()
       }
-      showSpeechBubble(label, 0, String(payload?.response_id || ''), agentId, accent)
+      // ★★ 2026-10-24 用户裁决：**不要显示「正在播放」的音频气泡**。
+      //   原因（实拍）：点歌/观察语音播放时，这个 label 会以 durationMs=0 调进来，
+      //   而 showSpeechBubble 把 0 当"未指定"→ 兜底成 3 秒；3 秒后气泡收起，
+      //   但音频还在放，于是这条提示反复出现、一直占着同一个气泡框，
+      //   把她真正说的话（agent_bubble）和表情包（agent_image）挤掉。
+      //   现在：只播放声音，不再占用气泡。想让用户知道在放什么，走播放器/横条，不走气泡。
+      void agentAudioPlaying
       void audio.play().catch(() => finish())
       return true
     } catch (error) {
@@ -2779,7 +2960,7 @@
         currentAudio = audio
         agentAudioPlaying = { title, agentId }
         audio.onended = finish
-        showSpeechBubble(label, 0, String(payload?.response_id || ''), agentId, accent)
+        // 同上：不再用气泡播报"正在播放"
         void audio.play().catch(() => finish())
         return true
       } catch (_) {
@@ -2838,11 +3019,22 @@
     activeSpeechPriority = -1
     activeSpeechText = ''
     if (['finished', 'error'].includes(reason) && !speechBubble.hidden) {
-      // ★ 2026-10-22 用户裁决：气泡**统一 3 秒后消失**。
-      //   这里以前按 settings.bubble_seconds（默认 9s）重设计时器，
-      //   于是"说完话"之后气泡又续命 9 秒 —— 这就是"3 秒没有自行消失"的来源。
+      // ★ 2026-10-24 用户裁决：说完话后气泡再停留 6~8 秒（原 3 秒看不清就没了）。
+      //   统一走 bubbleHoldMs()，和 showSpeechBubble 用的是同一套上下限。
       window.clearTimeout(speechBubbleHideTimer)
-      speechBubbleHideTimer = window.setTimeout(hideSpeechBubble, 3000)
+      speechBubbleHideTimer = window.setTimeout(hideSpeechBubble, bubbleHoldMs(0, speechBubbleCharacterCount))
+    } else if (reason === 'interrupted') {
+      // ★★ 2026-10-24 用户实拍「文字气泡和表情包都不显示」的真根因之一：
+      //   以前 `interrupted` 也走 hideSpeechBubble()，而 playAgentAudio() 开头就是
+      //   `stopSpeech('interrupted')` —— 于是**每来一条云端语音/点歌，就把桌面上
+      //   正在显示的文字气泡清空**。观察结果、表情包刚弹出就被下一段音频抹掉，
+      //   用户看到的就是"气泡从来不出现"。
+      //   interrupted 的语义是"被新音频接管播放"，与"该不该清屏"无关：
+      //   这里保留现有气泡，只让它按自己的计时器正常收起。
+      //   （新音频本身如果要说点什么，showSpeechBubble 会照常顶掉旧的，不受影响。）
+      if (!speechBubble.hidden && !speechBubbleHideTimer) {
+        speechBubbleHideTimer = window.setTimeout(hideSpeechBubble, bubbleHoldMs(0, speechBubbleCharacterCount))
+      }
     } else {
       hideSpeechBubble()
     }
@@ -3259,6 +3451,61 @@
     } catch (_) {}
   }
 
+  // ★ 2026-10-24：试演指定的模型还没加载好时，先把这条试演挂起，等模型就绪后自动重播。
+  //   抽成函数是为了让"立即播"和"等模型再播"共用同一段判定，避免两处逻辑漂移。
+  const armedPreview = { timer: null }
+  function armPreviewAfterModelReady(waitFn, preview) {
+    window.clearTimeout(armedPreview.timer)
+    const started = Date.now()
+    armedPreview.timer = window.setTimeout(async function check() {
+      let ready = false
+      try { ready = await waitFn() } catch (_) { ready = false }
+      if (!ready) {
+        if (Date.now() - started < 12000) {
+          armedPreview.timer = window.setTimeout(check, 250)
+        } else {
+          previewFeedback({ ...preview, kind: 'phase-expression', played: false, reason: 'model-load-timeout' })
+        }
+        return
+      }
+      playPhasePreview(preview)
+      pendingPreviewModel = ''
+    }, 150)
+  }
+
+  // 一次性"按设置页选择播一张脸"：requested 为表情文件名 / 情绪槽名 / 空（自动）。
+  function playPhasePreview({ phase: previewPhase, expression: requested, kind: resolvedKind }) {
+    const isSlot = EXPRESSION_SLOT_NAME_SET.has(requested)
+    let ok = false
+    if (!model?.expression) {
+      ok = false
+    } else if (!requested) {
+      // 该状态没绑表情：按内置默认情绪播，至少让用户看见"这个状态长什么样"
+      const slot = String(PHASE_EMOTION[previewPhase] || '')
+      if (slot) { applyEmotion(slot, 6000); ok = true }
+    } else if (isSlot) {
+      applyEmotion(requested, 6000)
+      ok = true
+    } else if (availableExpressionNames().includes(requested) || resolvedKind === 'file') {
+      // kind=file：后端已按 model_id 确认这是该模型登记过的表情文件（真名），直接落地
+      ok = applyPhaseExpressionFile(requested, 6000)
+    } else {
+      // kind=missing：后端拿到的名字既不是本模型表情、也不是情绪槽 —— 别装作播了
+      ok = false
+    }
+    previewFeedback({
+      kind: 'phase-expression', phase: previewPhase, expression: requested, played: ok,
+      resolved: resolvedKind || '', model_id: currentModelId,
+    })
+    if (!ok) {
+      console.warn('[MioLive2D] 相位表情试演未落地', {
+        phase: previewPhase, expression: requested, resolved: resolvedKind, model: currentModelId,
+        modelReady: Boolean(model?.expression),
+      })
+    }
+    return ok
+  }
+
   function connectSocket() {
     if (!electronRuntime) return
     window.clearTimeout(socketRetryTimer)
@@ -3375,7 +3622,30 @@
           playMotion(semanticMotion('idle'), undefined, { force: true })
         }, 8000)
       } else if (message.type === 'expression_preview') {
-        if (payload.expression && model?.expression) {
+        // ★ 2026-10-24：带 phase 的试演（任务状态「试演」按钮）走后端下发的绑定，
+        //   而不是渲染端缓存 —— 设置页点了「保存」后端已落库，但渲染端 settings 可能还没
+        //   被 settings_changed/poll 刷新到（或者根本还没保存），用它缓存的值必播错表情。
+        //   后端按 model_id 解析后直接给最终结果：expression = 表情文件名或情绪槽名。
+        if (payload.phase) {
+          const previewPhase = String(payload.phase)
+          const requested = String(payload.expression || '')
+          // 试演指定的模型：先记下来并等它就绪（就绪后立刻重播一次），再判定播放结果
+          const previewModel = String(payload.model_id || '')
+          if (previewModel && previewModel !== currentModelId) {
+            pendingPreviewModel = previewModel
+            const target = previewModel
+            armPreviewAfterModelReady(async () => {
+              // 等模型真的换成 target 再播；最多 12s（大模型 28MB 也够）
+              for (let i = 0; i < 60; i += 1) {
+                if (currentModelId === target && model?.expression) return true
+                await new Promise((resolve) => window.setTimeout(resolve, 200))
+              }
+              return false
+            }, { phase: previewPhase, expression: requested, kind: String(payload.kind || '') })
+            return
+          }
+          playPhasePreview({ phase: previewPhase, expression: requested, kind: String(payload.kind || '') })
+        } else if (payload.expression && model?.expression) {
           const previewExpression = String(payload.expression)
           Promise.resolve(model.expression(previewExpression))
             .then(() => previewFeedback({ kind: 'expression', expression: previewExpression, played: true }))
@@ -3625,13 +3895,32 @@
     speechBubbleVisibleCount = characters.length
     speechBubbleCharacterCount = characters.length
     updateSpeechBubblePosition(true)
-    // 停留时长（2026-10-22 用户裁决：**3 秒后自动消失**）。
-    // 以前：有 duration_ms 才定时、没有就常驻等调用方来收 ——
-    // 结果长回复会一直挂在桌面上挡视线。现在**必须有上限**：
-    //   · 调用方给了 duration_ms → 用它（后端现在给 3000）
-    //   · 没给 → 兜底 3 秒
-    const holdMs = Number(durationMs) > 0 ? Number(durationMs) : 3000
-    speechBubbleHideTimer = window.setTimeout(hideSpeechBubble, Math.max(1200, holdMs))
+    // 停留时长（2026-10-24 用户裁决：**6~8 秒**，原来是 3 秒太快看不清）。
+    //   规则：调用方给了 duration_ms → 用它（并夹到 6~8 秒）；
+    //         没给 → 按字数取：短句 6 秒、长句最多 8 秒。
+    speechBubbleHideTimer = window.setTimeout(hideSpeechBubble, bubbleHoldMs(durationMs, characters.length))
+  }
+
+  /**
+   * 气泡该停留多久（毫秒）。★ 2026-10-24 用户裁决：6~8 秒。
+   *
+   * 为什么不直接用调用方给的 duration_ms：后端各处还硬编码着 3000（观察 3 秒、
+   * 大肥鱼回复 3 秒、DSH 工具播报 4 秒），逐个改容易漏。这里统一收口：
+   *   · 下限 BUBBLE_HOLD_MIN_MS —— 再短就"看不清就没了"（用户原话）；
+   *   · 上限 BUBBLE_HOLD_MAX_MS —— 再长会一直挡在桌面上。
+   * 字数多的稍停久一点，但也只到上限为止。
+   */
+  const BUBBLE_HOLD_MIN_MS = 6000
+  const BUBBLE_HOLD_MAX_MS = 8000
+
+  function bubbleHoldMs(requested, charCount = 0) {
+    const asked = Number(requested) > 0 ? Number(requested) : 0
+    // 没给时长：按字数在 6→8 秒之间线性过渡（约 40 字到顶）
+    const byLength = BUBBLE_HOLD_MIN_MS + Math.round(
+      Math.min(1, Math.max(0, Number(charCount) || 0) / 40) * (BUBBLE_HOLD_MAX_MS - BUBBLE_HOLD_MIN_MS),
+    )
+    const value = asked > 0 ? Math.max(asked, byLength) : byLength
+    return Math.min(BUBBLE_HOLD_MAX_MS, Math.max(BUBBLE_HOLD_MIN_MS, value))
   }
 
   function _legacyTypingBubble(text, durationMs, responseId, agentId, accent) {
@@ -3941,13 +4230,13 @@
     speechBubble.style.width = '232px'
     speechBubble.hidden = false
     updateSpeechBubblePosition(true)
-    // 气泡停留（2026-10-22 用户裁决最终版：**显示完 3 秒就消失**）。
-    // 演进：点击图 3s → Agent 图按 holdMs(6~30s) → 图3s后切文字再停3s（共6s）
-    //      → **现在统一 3 秒收掉，不再做"图→文字"的接力**。
-    // 为什么去掉接力：用户要的是"看一眼就走"，一段 6 秒的连环展示反而要等两轮；
-    // 文字本身已经在对话界面完整保留，不需要在气泡里再念一遍。
-    const baseHold = isAgentImage ? (Number(entry.holdMs) > 0 ? Number(entry.holdMs) : 3000) : 3000
-    speechBubbleHideTimer = window.setTimeout(hideSpeechBubble, Math.max(1200, baseHold))
+    // 气泡停留（2026-10-24 用户裁决：**6~8 秒**，原 3 秒看不清就没了）。
+    // Agent 图带了 hold_ms 就尊重它（同样夹在 6~8 秒之间）；点击互动的随机图按字数取。
+    const baseHold = bubbleHoldMs(
+      isAgentImage ? Number(entry.holdMs) || 0 : 0,
+      speechBubbleCharacterCount,
+    )
+    speechBubbleHideTimer = window.setTimeout(hideSpeechBubble, baseHold)
   }
 
   async function showClickTalk() {

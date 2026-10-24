@@ -787,6 +787,12 @@
 .live2d-phase-grid .phase-preview-btn { height: 26px; padding: 0 9px; font-size: 11px; color: var(--accent-dark, #315f70); background: var(--accent-soft, #e4eff2); border: 1px solid color-mix(in srgb, var(--accent, #4c8798) 35%, transparent); border-radius: 6px; cursor: pointer; white-space: nowrap; }
 .live2d-phase-grid .phase-preview-btn:hover { background: color-mix(in srgb, var(--accent, #4c8798) 16%, var(--surface, #fff)); }
 .live2d-phase-grid .phase-preview-btn:disabled { opacity: .55; cursor: default; }
+/* 表情列现在是真实表情文件名（可能较长，「08 担心嘴」「05 》«」），第二列给多一点宽度，
+   否则中文名会被 select 截断成「08 担…」，用户分不清选了哪个 */
+.live2d-phase-grid label { grid-template-columns: 56px minmax(0, .9fr) minmax(0, 1.1fr) auto; }
+/* 绑定的表情在当前模型里不存在（换过模型）时整行标黄：静默失效是最坑的体验 */
+.live2d-phase-grid label.phase-row-missing > span { color: #b26a00; font-weight: 600; }
+.live2d-phase-grid label.phase-row-missing select { border-color: #e0a52e; background: #fff8e8; }
 .live2d-resource-tip { color: var(--muted); font-size: 11px; }
 .settings-provider-panel { padding-bottom: 0; }
 .settings-provider-panel .provider-group-heading { background: var(--surface-soft); }

@@ -102,13 +102,14 @@ class ConfigurationService:
     def _normalize_live2d_phase_slots(self, value: object) -> dict[str, dict[str, dict[str, str]]]:
         """任务状态（phase）→ 表现绑定：{模型id: {phase: {"motion": 槽名, "expression": 槽名}}}。
 
-        与 motion/expression 槽位的区别：这里存的是**槽名**而不是具体动作/表情名。
-        这样同一个状态换模型时不用重配，且渲染端仍然走槽位解析（模型级默认 → 用户覆盖）。
+        motion 存的是**动作槽名**（含具体动作名直通），expression 存 **具体表情文件名**
+        （2026-10-24 起：设置页「任务状态-表情」列改为直接选模型里真实的 exp3 表情文件，
+        如「05 O O」「07 流口水」；老配置里的情绪槽名 neutral/gentle/... 继续原样保留，
+        渲染端仍按「真实表情名 → 情绪槽 → 语义正则」三级解析，不回退老数据）。
         """
         if not isinstance(value, dict):
             return {}
         motion_slots = self._dep_LIVE2D_MOTION_SLOT_IDS()
-        expression_slots = self._dep_LIVE2D_EXPRESSION_SLOT_IDS()
         phases = self._dep_LIVE2D_PHASE_IDS()
         normalized: dict[str, dict[str, dict[str, str]]] = {}
         for raw_model_id, raw_phases in list(value.items())[:30]:
@@ -121,11 +122,16 @@ class ConfigurationService:
                 if phase not in phases or not isinstance(raw_binding, dict):
                     continue
                 motion = str(raw_binding.get("motion") or "").strip().lower()[:60]
-                expression = str(raw_binding.get("expression") or "").strip().lower()[:60]
+                expression = str(raw_binding.get("expression") or "").strip()[:120]
                 binding: dict[str, str] = {}
                 if motion in motion_slots:
                     binding["motion"] = motion
-                if expression in expression_slots:
+                if expression:
+                    # ★ 2026-10-24：表情列改为「真实表情文件名」——它在模型之间是任意字符串，
+                    #   不可能是固定白名单，所以只做长度/trim 清洗（上限 120，与表情槽同档）。
+                    #   ⚠ 绝对不能 lower()：Live2D 的表达式名大小写敏感（「05 O O」「06 X X」），
+                    #   老版本这里统一小写化，等于把用户选的表达式名悄悄改坏。
+                    #   老数据（情绪槽名 neutral/gentle/...）天然落在这个分支里，继续兼容。
                     binding["expression"] = expression
                 if binding:
                     per_model[phase] = binding
@@ -155,14 +161,30 @@ class ConfigurationService:
         screen_audio_language = str(data.get("screen_audio_language") or "auto").strip().lower()
         data["screen_audio_language"] = screen_audio_language if screen_audio_language in {"auto", "zh", "ja", "en"} else "auto"
         data["screen_audio_chunk_seconds"] = max(4, min(15, int(data.get("screen_audio_chunk_seconds", 5))))
-        screen_vision_route = str(data.get("screen_vision_route") or "local").strip().lower()
-        data["screen_vision_route"] = screen_vision_route if screen_vision_route in {"local", "cloud"} else "local"
+        # ★ 2026-10-24 用户裁决：桌宠端不需要任何模型 API，模型全走云端服务器。
+        #   识图通路只剩 feiyu（云端大肥鱼）；旧配置里的 local/cloud 一律归一到 feiyu，
+        #   避免升级后还残留"本机跑视觉模型"的分支。
+        data["screen_vision_route"] = "feiyu"
         data["screen_vision_model_id"] = (
             str(data.get("screen_vision_model_id") or "auto-fast").strip()[:200] or "auto-fast"
         )
         data["screen_direct_voice_enabled"] = bool(data.get("screen_direct_voice_enabled", True))
         data["screen_change_threshold"] = max(1.0, min(50.0, float(data.get("screen_change_threshold", 4.0))))
         data["screen_analysis_interval_seconds"] = max(5, min(600, int(data.get("screen_analysis_interval_seconds", 5))))
+        # 2026-10-24 用户裁决（m02056）：屏幕观察改成「可设最长/最短间隔，区间内均匀随机触发」，
+        # 面向"1~2 小时后看一眼"这种长周期，秒级档位不够用。单位统一为秒，上限 24 小时。
+        data["screen_trigger_random_enabled"] = bool(data.get("screen_trigger_random_enabled", True))
+        data["screen_trigger_min_minutes"] = max(1, min(1440, int(data.get("screen_trigger_min_minutes", 60))))
+        data["screen_trigger_max_minutes"] = max(
+            data["screen_trigger_min_minutes"],
+            min(1440, int(data.get("screen_trigger_max_minutes", 120))),
+        )
+        # 观察结果是否转语音（用户裁决：做成开关，有语音就都带文字，不再按概率抽）
+        data["screen_observation_voice_enabled"] = bool(data.get("screen_observation_voice_enabled", True))
+        data["screen_observation_voice_probability"] = max(
+            0.0, min(1.0, float(data.get("screen_observation_voice_probability", 1.0)))
+        )
+        data["screen_observation_prompt"] = str(data.get("screen_observation_prompt") or "")[:2000]
         data["screen_request_timeout_seconds"] = max(5, min(60, int(data.get("screen_request_timeout_seconds", 25))))
         data["screen_voice_cooldown_seconds"] = max(5, min(600, int(data.get("screen_voice_cooldown_seconds", 5))))
         data["screen_minimum_importance"] = max(0.1, min(1.0, float(data.get("screen_minimum_importance", 0.62))))
@@ -307,14 +329,27 @@ class ConfigurationService:
         screen_audio_language = str(normalized.get("screen_audio_language") or "auto").strip().lower()
         normalized["screen_audio_language"] = screen_audio_language if screen_audio_language in {"auto", "zh", "ja", "en"} else "auto"
         normalized["screen_audio_chunk_seconds"] = max(4, min(15, int(normalized.get("screen_audio_chunk_seconds", 5))))
-        screen_vision_route = str(normalized.get("screen_vision_route") or "local").strip().lower()
-        normalized["screen_vision_route"] = screen_vision_route if screen_vision_route in {"local", "cloud"} else "local"
+        # 同上：识图通路固定云端大肥鱼（用户裁决：本机不跑任何模型）
+        normalized["screen_vision_route"] = "feiyu"
         normalized["screen_vision_model_id"] = (
             str(normalized.get("screen_vision_model_id") or "auto-fast").strip()[:200] or "auto-fast"
         )
         normalized["screen_direct_voice_enabled"] = bool(normalized.get("screen_direct_voice_enabled", True))
         normalized["screen_change_threshold"] = max(1.0, min(50.0, float(normalized.get("screen_change_threshold", 4.0))))
         normalized["screen_analysis_interval_seconds"] = max(5, min(600, int(normalized.get("screen_analysis_interval_seconds", 5))))
+        normalized["screen_trigger_random_enabled"] = bool(normalized.get("screen_trigger_random_enabled", True))
+        normalized["screen_trigger_min_minutes"] = max(1, min(1440, int(normalized.get("screen_trigger_min_minutes", 60))))
+        normalized["screen_trigger_max_minutes"] = max(
+            normalized["screen_trigger_min_minutes"],
+            min(1440, int(normalized.get("screen_trigger_max_minutes", 120))),
+        )
+        normalized["screen_observation_voice_enabled"] = bool(
+            normalized.get("screen_observation_voice_enabled", True)
+        )
+        normalized["screen_observation_voice_probability"] = max(
+            0.0, min(1.0, float(normalized.get("screen_observation_voice_probability", 1.0)))
+        )
+        normalized["screen_observation_prompt"] = str(normalized.get("screen_observation_prompt") or "")[:2000]
         normalized["screen_request_timeout_seconds"] = max(5, min(60, int(normalized.get("screen_request_timeout_seconds", 25))))
         normalized["screen_voice_cooldown_seconds"] = max(5, min(600, int(normalized.get("screen_voice_cooldown_seconds", 5))))
         normalized["screen_minimum_importance"] = max(0.1, min(1.0, float(normalized.get("screen_minimum_importance", 0.62))))

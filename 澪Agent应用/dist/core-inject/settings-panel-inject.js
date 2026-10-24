@@ -293,6 +293,33 @@
     return '当前：' + api.label(lv) + ' · ' + api.preview(lv)
   }
 
+  // 触发间隔的可选档位（分钟）。与后端 configuration.py 的 1..1440 钳制范围一致，
+  // 最长间隔多给一个 12 小时档（用户想要"一整天看一眼"时用）。
+  var TRIGGER_MINUTE_OPTIONS = [
+    { v: 15, t: '15分钟' }, { v: 30, t: '30分钟' }, { v: 60, t: '1小时' },
+    { v: 90, t: '1.5小时' }, { v: 120, t: '2小时' }, { v: 180, t: '3小时' },
+    { v: 360, t: '6小时' },
+  ]
+  var TRIGGER_MINUTE_OPTIONS_LONG = TRIGGER_MINUTE_OPTIONS.concat([{ v: 720, t: '12小时' }])
+
+  // 识图通路（screen_vision_route）
+  //   ★ 2026-10-24 用户裁决：**桌宠端完全不需要任何模型 API，模型全部走云端服务器**。
+  //     所以这里只剩一条路：
+  //       feiyu = 云端大肥鱼直连：一帧图 + 一段自然语言提示词直接发 AstrBot，她亲自看图回话
+  //     原来的 local（本机 Ollama 跑视觉）与 cloud（本机拼 JSON、让某个云端 VL 模型吐 JSON）
+  //     两条都要本机持有模型配置/凭据，按裁决移除。
+  var VISION_ROUTE_OPTIONS = [
+    { v: 'feiyu', t: '云端大肥鱼（图+提示词直发）' },
+  ]
+
+  /** 立刻按当前通路看一眼（不等随机触发），结果同时进气泡和对话。 */
+  function makeLookNow(btnLabel) {
+    var btn = document.createElement('button')
+    btn.textContent = btnLabel || '看一眼'
+    btn.style.cssText = 'flex:none;border:1px solid var(--line, #d9e2e6);border-radius:8px;background:var(--surface-soft, #f2f6f7);color:var(--ink, #20303a);font-size:12px;padding:5px 12px;cursor:pointer;'
+    return btn
+  }
+
   function makeSelect(value, options) {
     var sel = document.createElement('select')
     sel.style.cssText = 'flex:none;border:1px solid var(--line, #d9e2e6);border-radius:8px;background:var(--surface-soft, #f2f6f7);color:var(--ink, #20303a);font-size:12px;padding:4px 8px;'
@@ -522,7 +549,93 @@
       ))
       body.appendChild(row('回复语言', '小智语音与文字语言', makeSelect(s.pet_speech_language || 'zh', [{ v: 'zh', t: '中文' }, { v: 'ja', t: '日语' }]), 'pet_speech_language'))
       body.appendChild(section('屏幕观察播报'))
-      body.appendChild(row('观察时语音播报', '屏幕观察分析后语音播报', makeSwitch(!!s.speak_screen_observations, '观察语音播报'), 'speak_screen_observations'))
+      // ★ 2026-10-24「气泡不显示」的真凶（用户实测）：真正决定**观察结果要不要主动开口**
+      //   的是 speak_screen_observations（后端 _deliver_observation 的 speak_on），
+      //   可它在两个设置页里都**没有控件**，只能靠默认值。
+      //   下面这个「观察语音播报」只控制"要不要额外合成一条语音"，文字气泡本该照常显示；
+      //   用户以为它管文字，实际文字那条被前一个键静默关着 —— 所以这里先把总开关补出来。
+      body.appendChild(row(
+        '屏幕观察播报',
+        '关掉后观察结果只记录、不进对话也不出气泡；打开才会主动说一句话（下面的语音开关只管要不要额外出声）',
+        makeSwitch(s.speak_screen_observations !== false, '屏幕观察播报'),
+        'speak_screen_observations',
+      ))
+      // ★ 2026-10-24：用户反馈「设置页看不到触发间隔 / 想自己写观察提示词」。
+      //   之前这里只有一个 speak_screen_observations 开关，而**真正在用的**
+      //   触发间隔(screen_trigger_*) 与提示词(screen_observation_prompt)
+      //   只做在了 澪Agent应用 的 Vue 设置页里 —— 用户日常用的是这个注入面板，
+      //   所以两套 UI 里都得有，否则"改了半天没反应"。
+      body.appendChild(row(
+        '随机触发',
+        '在下面区间里随机挑一个时刻看一眼；关掉后回到"画面变了才分析"',
+        makeSwitch(s.screen_trigger_random_enabled !== false, '随机触发'),
+        'screen_trigger_random_enabled',
+      ))
+      body.appendChild(row(
+        '最短间隔',
+        '两次观察之间至少隔多久',
+        makeSelect(Number(s.screen_trigger_min_minutes) || 60, TRIGGER_MINUTE_OPTIONS),
+        'screen_trigger_min_minutes',
+      ))
+      body.appendChild(row(
+        '最长间隔',
+        '与最短间隔之间均匀随机',
+        makeSelect(Number(s.screen_trigger_max_minutes) || 120, TRIGGER_MINUTE_OPTIONS_LONG),
+        'screen_trigger_max_minutes',
+      ))
+      body.appendChild(row(
+        '观察语音播报',
+        '观察结果同时发语音；文字气泡照常显示',
+        makeSwitch(s.screen_observation_voice_enabled !== false, '观察语音播报'),
+        'screen_observation_voice_enabled',
+      ))
+      body.appendChild(row(
+        '观察提示词',
+        '每次观察额外交代给模型的话，例如「锐评一下此刻的电脑屏幕画面」；留空用默认口吻',
+        makeText(s.screen_observation_prompt || ''),
+        'screen_observation_prompt',
+      ))
+      // ★ 2026-10-24（用户裁决 m02071）：识图通路 + 立即看一眼。
+      //   以前「哪条路在看屏幕」只能改配置文件；换成云端大肥鱼直连后，
+      //   用户需要能在这里当场切换、当场验证（不等 30~90 分钟的随机触发）。
+      body.appendChild(row(
+        '识图通路',
+        '云端大肥鱼 = 一帧图 + 提示词直接发云端，由她亲自看图回话；普通云端/本地两条是老链路（要求模型吐 JSON）',
+        makeSelect(s.screen_vision_route || 'local', VISION_ROUTE_OPTIONS),
+        'screen_vision_route',
+      ))
+      var lookNowBtn = makeLookNow('立即看一眼')
+      var lookNowStatus = document.createElement('span')
+      lookNowStatus.style.cssText = 'flex:1;font-size:12px;color:var(--muted,#687984);margin-left:10px;'
+      lookNowBtn.addEventListener('click', function () {
+        lookNowBtn.disabled = true
+        lookNowStatus.textContent = '正在截图并等待云端…'
+        // 先保存当前控件值（尤其是刚改的通路/提示词），再立刻观察，避免"改了没生效"
+        var patchPromise = Object.keys(settingsBodyFromPanel()).length
+          ? apiSend('/api/companion/settings', 'PATCH', settingsBodyFromPanel())
+          : Promise.resolve({})
+        patchPromise
+          .then(function () {
+            return apiSend('/api/companion/screen/look-now', 'POST', {})
+          })
+          .then(function (res) {
+            var analysis = (res && res.analysis) || {}
+            if (res && res.replied) {
+              lookNowStatus.textContent = '已回话：' + String(analysis.last_reply || '').slice(0, 60)
+            } else {
+              lookNowStatus.textContent = '没开口：' + String(analysis.last_error || '本轮没有取得新画面或未达到开口条件').slice(0, 80)
+            }
+          })
+          .catch(function (err) {
+            lookNowStatus.textContent = '失败：' + String((err && err.message) || err).slice(0, 80)
+          })
+          .finally(function () {
+            lookNowBtn.disabled = false
+          })
+      })
+      var lookNowRow = row('立即看一眼', '不用等下一次随机触发，马上截一帧按当前通路观察一次（建议先改完上面的通路/提示词再点）', lookNowBtn, '')
+      lookNowRow.appendChild(lookNowStatus)
+      body.appendChild(lookNowRow)
     // DSH 专用化：原 'observe' / 'prompts' / 'xz' 三个 tab 的渲染分支已随小智插件删除
     } else if (id === 'theme') {
       // ★ 主题页（2026-10-17 用户裁决）：原「泡泡」「横条」两 tab 合并。
@@ -626,13 +739,13 @@
     return vals
   }
 
-  function saveAll() {
-    var vals = collectValues()
-    var btn = $q('#mioSetSave', panel)
-    var st = $q('#mioSetStatus', panel)
-    if (btn) { btn.disabled = true; btn.textContent = '保存中…' }
-    // 1) 桌宠 + 语音 + 观察键 → PATCH /api/companion/settings
-    var settingsBody = {}
+  /**
+   * 本页保存时允许提交的按键白名单 → PATCH /api/companion/settings 的 body。
+   * ★ 抽成函数是因为「立即看一眼」要先保存再观察：两处必须用**同一份**白名单，
+   *   否则一边改了另一边没跟上，又会出现"控件能点、保存被静默丢掉"。
+   */
+  function settingsBodyFromValues(vals) {
+    var body = {}
     var settingsKeys = [
       'pet_size_percent', 'live2d_scale', 'live2d_vertical_offset',
       'live2d_follow_cursor', 'live2d_always_on_top', 'live2d_smart_passthrough',
@@ -643,6 +756,13 @@
       //   （本页保存是按这份表挑值的）→ 表现为"关了还是会自动播放"。
       'audio_autoplay',
       'screen_ai_enabled',
+      // ★ 屏幕观察触发与提示词（2026-10-24）：用户在用注入面板设置，
+      //   必须列进白名单，否则控件能改、点保存被静默丢掉 →「设了没反应」。
+      'screen_trigger_random_enabled', 'screen_trigger_min_minutes', 'screen_trigger_max_minutes',
+      'screen_observation_voice_enabled', 'screen_observation_prompt',
+      // ★ 识图通路（2026-10-24）：feiyu = 图+提示词直发云端大肥鱼。
+      //   同样必须进白名单，否则下拉框能选、点保存被静默丢掉（"改了没反应"的老坑）。
+      'screen_vision_route',
       // ★ 横条个性化（2026-10-17）。2026-10-19 起皮肤并入 live2d_bubble_style，
       //   这里不再收集 live2d_strip_style（留着只会让"改了没反应"更难查）。
       'live2d_strip_width', 'live2d_strip_rows',
@@ -652,7 +772,21 @@
       //   缺这几个键 = 滑块能拖、点保存没反应（本页保存是按这份白名单挑值的）。
       'pet_talkativeness', 'pet_idle_beat_enabled', 'pet_quotes_enabled', 'pet_poke_enabled',
     ]
-    settingsKeys.forEach(function (k) { if (vals[k] !== undefined) settingsBody[k] = vals[k] })
+    settingsKeys.forEach(function (k) { if (vals[k] !== undefined) body[k] = vals[k] })
+    return body
+  }
+
+  /** 从当前面板控件直接收集一次保存体（「立即看一眼」用，不依赖别处传值）。 */
+  function settingsBodyFromPanel() {
+    return settingsBodyFromValues(collectValues())
+  }
+
+  function saveAll() {
+    var vals = collectValues()
+    var btn = $q('#mioSetSave', panel)
+    var st = $q('#mioSetStatus', panel)
+    if (btn) { btn.disabled = true; btn.textContent = '保存中…' }
+    var settingsBody = settingsBodyFromValues(vals)
     // 2) 自动观察 → observe/start or stop
     var observeBody = {}
     if (vals.observe_interval) {

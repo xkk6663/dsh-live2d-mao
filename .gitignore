@@ -1,4 +1,10 @@
 **/.env
+# ★ 2026-10-24：`.env` 的**备份**同样含真实密钥（ASTRBOT_API_KEY 等），
+#   原来只挡 `**/.env`，`.env.bak_vision_20261024_155706` 这类旁路文件就漏过去了。
+#   一旦 `git add .` 就会把密钥写进 git 历史，撤不干净。
+**/.env.*
+**/.env-*
+!**/.env.example
 **/.venv/
 **/node_modules/
 **/release/
@@ -101,6 +107,10 @@ pip-install-*/
 pip-unpack-*/
 _pet_*.log*
 _env_probe.ps1
+# 一次性排查脚本的堆放处（正式诊断工具在 backend/tools/diag/）
+**/probe_tmp/
+# 单个复现脚本（一次性排查用，价值确认后再提炼进 tools/diag/）
+**/backend/repro_*.py
 _env_probe.py
 本地视觉/
 

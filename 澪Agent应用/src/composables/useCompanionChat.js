@@ -531,8 +531,58 @@ export function useCompanionChat(deps) {
       //   streamingRequestId → 图片被整条丢掉，对话界面于是"连占位都没有"。
       //   现在：不依赖 streamingRequestId —— 只要大肥鱼这个身份的图/音频到了，
       //   就挂到"当前最后一条助手回复"上（没有就新建一条）。
+      // ★ 2026-10-24 修「屏幕观察的文字不进对话界面」：
+      //   后端 screen_observation_service 用 agent_id="screen" 推 agent_bubble / agent_audio，
+      //   而这里以前只认 cloud_feiyu，且**根本没有 agent_bubble 分支** —— 观察结果全被丢弃。
+      //   屏幕观察是"桌宠主动说的那句话"，和云端回复一样要进对话，单独成一条消息。
+      const agentId = String(payload.agent_id || '')
+      if (message?.type === 'agent_bubble') {
+        const text = String(payload.text || '').trim()
+        if (!text) return
+        // ★ 2026-10-24 用户裁决（第三次）：**工具播报不进对话界面**。
+        //   DSH 那条「正在用 grep / read / ops_bash 干活…」是桌宠上给存在感的轻提示
+        //   （dsh_signals.py 的 tool-start 播报），既不是她的话，也不是一轮对话。
+        //   以前这里会兜出 sourceLabel='屏幕观察' 的假消息，用户看到满屏"正在用 xx 干活…"。
+        //   现在只认**真正主动说的话**：
+        //     · source === 'screen' | 'game'（屏幕观察的结果）
+        //     · DSH 的提问/等待授权（问答类，不是工具状态）
+        //     · 大肥鱼（云端直通，她的话当然要进对话）
+        //   其余身份（dsh 的 tool-start 等）一律只在气泡出现，不写进消息列表。
+        const conversationSource = String(payload.source || '').trim()
+        const isScreenObservation = conversationSource === 'screen' || conversationSource === 'game'
+        const isQuestionLike = Boolean(payload.question) || Boolean(payload.awaiting_input)
+        const isFeiyu = agentId === 'cloud_feiyu'
+        if (!isScreenObservation && !isQuestionLike && !isFeiyu) return
+        // 大肥鱼那条链路已经有流式正文在管，气泡帧只做兜底，避免重复
+        if (isFeiyu && streamingRequestId) return
+        // 只有「屏幕观察」才打身份标签；其它身份不硬套这个标签
+        const sourceLabel = isScreenObservation
+          ? (conversationSource === 'game' ? '游戏观察' : '屏幕观察')
+          : ''
+        const bubbleId = `bubble-${String(payload.request_id || '') || Date.now()}`
+        const existing = messages.value.findIndex((m) => m.id === bubbleId)
+        if (existing >= 0) {
+          setMessages(messages.value.map((m, i) => (i === existing ? { ...m, text } : m)))
+          return
+        }
+        setMessages([...messages.value, {
+          id: bubbleId,
+          role: 'assistant',
+          text,
+          images: [],
+          attachments: [],
+          ts: Date.now(),
+          timeLabel: formatChatTime(new Date().toISOString()),
+          ...(sourceLabel ? { sourceLabel } : {}),
+          optimistic: false,
+          requestId: String(payload.request_id || ''),
+        }])
+        lastAttachMessageId = bubbleId
+        void scroll()
+        return
+      }
       if (message?.type === 'agent_image' || message?.type === 'agent_audio') {
-        if (String(payload.agent_id || '') !== 'cloud_feiyu') return
+        if (agentId !== 'cloud_feiyu' && agentId !== 'screen') return
         const item = normalizeAttachments([{
           media: message.type === 'agent_audio' ? 'audio' : 'image',
           url: payload.url,

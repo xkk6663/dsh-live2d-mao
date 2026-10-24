@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import ctypes
+import sys
 from datetime import datetime
 import os
 import threading
@@ -112,6 +113,9 @@ class PetEventHub:
         self._lock = threading.Lock()
         self._last_connected_at = ""
         self._last_disconnected_at = ""
+        # 最后一次 WebSocket 会话结束时的异常堆栈（排查"连接悄无声息消失"用）
+        self._ws_last_trace = ""
+        self._ws_connected_count = 0
         self._last_event_at = ""
         self._last_error = ""
         self._renderer_errors: list[str] = []
@@ -165,6 +169,7 @@ class PetEventHub:
                 "foreground": dict(self._foreground),
                 "last_voice_started": dict(self._last_voice_started),
                 "last_voice_ended": dict(self._last_voice_ended),
+                "ws_last_trace": self._ws_last_trace,
             }
 
     async def register(self, websocket: WebSocket) -> None:
@@ -220,6 +225,26 @@ class PetEventHub:
         if loop is None or loop.is_closed() or not has_clients:
             return
         asyncio.run_coroutine_threadsafe(self.broadcast(event_type, payload), loop)
+
+    def publish_deliverable(self, event_type: str, payload: dict[str, Any]) -> bool:
+        """可回执的 publish：真的交给事件循环投递才返回 True。
+
+        ★ 2026-10-24：任务状态「试演」用它。原来的 publish() 在没有客户端/没有 loop 时
+        静默 return，设置页拿到的是 HTTP 200「已提交」，用户只看到桌宠毫无反应 ——
+        所以这里把"到底有没有送出去"如实回传，让前端能说清是"桌宠没连上"还是"已投递"。
+        """
+        with self._lock:
+            loop = self._loop
+            has_clients = bool(self._clients)
+        if loop is None or loop.is_closed() or not has_clients:
+            return False
+        future = asyncio.run_coroutine_threadsafe(self.broadcast(event_type, payload), loop)
+        # 只等"已排队"这一小步，不等真正送达（广播本身很快，0.3s 足够）
+        try:
+            future.result(timeout=0.3)
+        except Exception:  # noqa: BLE001 - 排队结果不影响"已提交"这一事实
+            pass
+        return True
 
     async def serve(self, websocket: WebSocket) -> None:
         await self.register(websocket)
@@ -321,7 +346,24 @@ class PetEventHub:
                         ttl_seconds=0,
                     )
         except (WebSocketDisconnect, RuntimeError, ValueError):
-            pass
+            # ★ 2026-10-24：原来这里是 `pass`，把异常类型也吞掉了。排查「气泡不显示」时
+            #   出现过一个极难查的现象：uvicorn 只打了 `connection open`、**没有** `closed`，
+            #   但 hub 里 _clients 是 0 —— 说明连接是在这里被静默摘掉的，谁都不知道为什么。
+            #   现在至少把异常类型与消息记进 _last_error（status 面板可见），不改变行为。
+            import traceback
+
+            with self._lock:
+                self._last_error = (
+                    "WebSocket 会话结束："
+                    + str(sys.exc_info()[1])[:300]
+                )
+                self._ws_last_trace = traceback.format_exc()[-1500:]
+        except Exception as exc:  # noqa: BLE001 - 绝不让单个连接把服务打挂
+            import traceback
+
+            with self._lock:
+                self._last_error = f"WebSocket 异常（未预期）：{type(exc).__name__}: {str(exc)[:300]}"
+                self._ws_last_trace = traceback.format_exc()[-1500:]
         finally:
             await self.unregister(websocket)
 
@@ -472,6 +514,11 @@ def has_desktop_renderer() -> bool:
 
 def publish(event_type: str, payload: dict[str, Any]) -> None:
     hub.publish(event_type, payload)
+
+
+def publish_deliverable(event_type: str, payload: dict[str, Any]) -> bool:
+    """模块级便捷：真的交给事件循环投递才 True（见 PetEventHub.publish_deliverable）。"""
+    return hub.publish_deliverable(event_type, payload)
 
 
 def status() -> dict[str, Any]:

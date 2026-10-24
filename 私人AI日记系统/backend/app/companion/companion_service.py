@@ -87,11 +87,20 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "screen_audio_model": "base",
     "screen_audio_language": "auto",
     "screen_audio_chunk_seconds": 5,
-    "screen_vision_route": "local",
+    # ★ 2026-10-24 用户裁决：桌宠端不需要任何模型 API，识图全走云端大肥鱼
+    "screen_vision_route": "feiyu",
     "screen_vision_model_id": "auto-fast",
     "screen_direct_voice_enabled": True,
     "screen_change_threshold": 4.0,
     "screen_analysis_interval_seconds": 5,
+    # 2026-10-24 用户裁决（m02056）：随机长间隔触发（默认 60~120 分钟看一眼）
+    "screen_trigger_random_enabled": True,
+    "screen_trigger_min_minutes": 60,
+    "screen_trigger_max_minutes": 120,
+    # 观察结果转语音：做成开关（有语音就都带文字），概率保留作扩展位
+    "screen_observation_voice_enabled": True,
+    "screen_observation_voice_probability": 1.0,
+    "screen_observation_prompt": "",
     "screen_request_timeout_seconds": 25,
     "screen_voice_cooldown_seconds": 5,
     "screen_minimum_importance": 0.62,
@@ -292,6 +301,34 @@ PET_ACTIVITY_LABELS: dict[str, str] = {
 }
 MAX_SPRITE_SHEET_BYTES = 24 * 1024 * 1024
 MAX_SPRITE_SHEET_PIXELS = 40_000_000
+
+# ★ 任务状态表情绑定失效回报（2026-10-24）：设置页现在直接列模型的 exp3 表情文件，
+#   换模型后老绑定会指向不存在的表情。桌宠端把这类情况回传过来，这里只**记录**（内存态、
+#   不看配置、不改配置），供设置页显示提示。为什么要落这里而不是直接改配置：
+#   用户很多时候只是临时换模型看看，换回来还要用原绑定，自动删绑定是不可接受的破坏。
+_phase_slot_invalid_lock = threading.Lock()
+_phase_slot_invalid: dict[str, Any] = {}
+
+
+def record_phase_slot_invalid(*, agent_id: str = "", model_id: str = "", message: str = "") -> None:
+    """记一条「任务状态表情绑定失效」的实时回报（同一条消息只留最新一条）。"""
+    text = str(message or "").strip()[:200]
+    if not text:
+        return
+    with _phase_slot_invalid_lock:
+        _phase_slot_invalid.clear()
+        _phase_slot_invalid.update({
+            "message": text,
+            "agent_id": str(agent_id or "")[:40],
+            "model_id": str(model_id or "")[:100],
+            "at": time.time(),
+        })
+
+
+def phase_slot_invalid_snapshot() -> dict[str, Any]:
+    """无条件返回最近一条失效回报（空 dict = 没有）。"""
+    with _phase_slot_invalid_lock:
+        return dict(_phase_slot_invalid)
 
 
 def _electron_pet_command() -> list[str] | None:
