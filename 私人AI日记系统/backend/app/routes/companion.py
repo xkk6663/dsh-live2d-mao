@@ -209,8 +209,6 @@ class CompanionSettingsRequest(BaseModel):
     #   设置页开关能点、config 默认表里也有，但 PATCH 永远写不进去 ——
     #   表现为"改完点保存就弹回默认值"（用户实拍）。
     audio_autoplay: bool = True
-    # ★ 2026-10-24：跟着系统扬声器输出呼吸/摆动（纯本地，不联网）
-    audio_react_enabled: bool = True
     pet_speech_language: str = Field(default="zh", pattern="^(zh|ja)$")
     speak_screen_observations: bool = True
     speak_game_observations: bool = True
@@ -617,45 +615,6 @@ async def companion_status():
 async def companion_agents():
     """跨 Agent 总线快照：全部 Agent 状态 + 当前活跃者。"""
     return agent_bus_service.snapshot()
-
-
-@router.get("/renderer")
-async def companion_renderer_status():
-    """桌宠渲染端的状态快照（含音频反应是否接上）。"""
-    return pet_event_service.status()
-
-
-@router.get("/audio-bands")
-async def companion_audio_bands():
-    """音频反应（跟随系统扬声器呼吸/摆动）的状态与当前能量。
-
-    ★ 2026-10-24 方案 A：后端常驻子进程用 WASAPI 回环采集声卡输出，
-      算三段能量后经 WS 推给渲染端。纯本地，不联网、不耗额度。
-
-    排查顺序：
-      running=false + last_error 有值 → 采集进程起不来（看 last_error）
-      running=true  但 bands 全 0    → 系统此刻没声音，或挑错回环端点（看 device）
-    """
-    from ..companion import audio_spectrum_service
-
-    return audio_spectrum_service.status()
-
-
-class AudioBandsRequest(BaseModel):
-    enabled: bool
-    device: str = ""
-
-
-@router.post("/audio-bands")
-async def companion_audio_bands_set(payload: AudioBandsRequest):
-    """开/关音频反应采集（即时生效，无需重启）。"""
-    from ..companion import audio_spectrum_service
-
-    return await asyncio.to_thread(
-        audio_spectrum_service.set_enabled,
-        payload.enabled,
-        device=payload.device,
-    )
 
 
 @router.get("/agents/{agent_id}/inspect")

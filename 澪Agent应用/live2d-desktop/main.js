@@ -1356,47 +1356,6 @@ else {
       const originAllowed = webContents.getURL().startsWith(`${API_BASE}/`)
       callback(permission === 'media' && originAllowed)
     })
-    // ★ 2026-10-24 音频反应（舞蹈/呼吸摆动）所需：允许渲染端**采集系统输出音频**。
-    //
-    //   为什么需要这个处理器：Chromium 的 getDisplayMedia 默认会弹「选择共享内容」对话框，
-    //   而在 Electron 里**不注册这个处理器就只会拿到黑屏/静音流**（甚至直接 reject）。
-    //   我们要的不是"录屏"，而是"声卡输出端点的回环音频" —— 也就是用户正在听的声音
-    //   （浏览器/播放器/游戏/她自己发的语音），所以这里：
-    //     · video 给一个占位来源（桌宠窗口自身），因为 API 要求必须有 video 轨道；
-    //       渲染端拿到后立刻 stop 掉 videoTrack，只留 audio，不产生任何录制/开销；
-    //     · audio: 'loopback' → Chromium 原生 WASAPI 回环，全频段 44.1k 立体声。
-    //
-    //   安全：只对 `${API_BASE}/` 来源放行（和上面两个权限处理器一致），
-    //   外部网页拿不到系统音频。
-    //
-    //   ★ Electron 43 实测要点：getDisplayMedia **必须**能拿到 video 轨，
-    //     只回 `{audio:'loopback'}` 会被判为"没有可用来源"而 reject。
-    //     所以必须同时给一个视频源（这里用桌宠自己的窗口），渲染端拿到后
-    //     立刻 stop 掉 videoTrack —— 既不录屏，也不产生额外编码开销。
-    session.defaultSession.setDisplayMediaRequestHandler(
-      (request, callback) => {
-        const origin = String((request && request.securityOrigin) || '')
-        const allowed = origin.startsWith(`${API_BASE}/`) || origin.startsWith('http://127.0.0.1:')
-        if (!allowed) {
-          log('audio.loopback', `拒绝来源 ${origin || '(unknown)'}`)
-          callback({})
-          return
-        }
-        // video 只是"占位"，用来满足 getDisplayMedia 的来源校验；音频才是我们要的
-        const videoSource = mainWindow && !mainWindow.isDestroyed()
-          ? mainWindow
-          : (BrowserWindow.getAllWindows()[0] || null)
-        const options = { audio: 'loopback' }
-        if (videoSource && typeof videoSource.getMediaSourceId === 'function') {
-          options.video = videoSource.getMediaSourceId()
-        } else if (videoSource) {
-          options.video = videoSource
-        }
-        log('audio.loopback', `授权系统音频回环 origin=${origin} video=${Boolean(options.video)}`)
-        callback(options)
-      },
-      { useSystemPicker: false },
-    )
     await startModelServer()
     log('runtime.ready', `modelServer=${modelServerOrigin}`)
     registerIpc()

@@ -150,8 +150,6 @@ class ConfigurationService:
         data["voice_enabled"] = bool(data.get("voice_enabled", True))
         data["voice_volume"] = max(0, min(100, int(data.get("voice_volume", 85))))
         data["voice_streaming_enabled"] = bool(data.get("voice_streaming_enabled", True))
-        # ★ 2026-10-24：桌宠跟着系统扬声器输出呼吸/摆动（纯本地）
-        data["audio_react_enabled"] = bool(data.get("audio_react_enabled", True))
         pet_speech_language = str(data.get("pet_speech_language") or "zh").strip().lower()
         data["pet_speech_language"] = pet_speech_language if pet_speech_language in {"zh", "ja"} else "zh"
         data["speak_screen_observations"] = bool(data.get("speak_screen_observations", True))
@@ -320,8 +318,6 @@ class ConfigurationService:
         normalized["voice_enabled"] = bool(normalized.get("voice_enabled", True))
         normalized["voice_volume"] = max(0, min(100, int(normalized.get("voice_volume", 85))))
         normalized["voice_streaming_enabled"] = bool(normalized.get("voice_streaming_enabled", True))
-        # ★ 2026-10-24：桌宠跟着系统扬声器输出呼吸/摆动（纯本地）
-        normalized["audio_react_enabled"] = bool(normalized.get("audio_react_enabled", True))
         pet_speech_language = str(normalized.get("pet_speech_language") or "zh").strip().lower()
         normalized["pet_speech_language"] = pet_speech_language if pet_speech_language in {"zh", "ja"} else "zh"
         normalized["speak_screen_observations"] = bool(normalized.get("speak_screen_observations", True))

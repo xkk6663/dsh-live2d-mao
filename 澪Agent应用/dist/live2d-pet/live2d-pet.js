@@ -657,9 +657,6 @@
       model_id: currentModelId,
       model_name: String(definition?.name || currentModelId),
       capabilities: currentCapabilityPayload(),
-      // ★ 2026-10-24：音频反应（方案 A）由**后端**采集并推送，渲染端只消费。
-      //   这里打一个标记，后端状态面板可据此确认"渲染端具备驱动能力"。
-      audio_react: { mode: 'backend-bands', enabled: settings.audio_react_enabled !== false },
     })
   }
 
@@ -1225,8 +1222,6 @@
     setParameter('ParamCheek', emotion.cheek, 0.5)
     setParameter('ParamAngleZ', emotion.angle, 0.15)
     updateProceduralMotion()
-    // ★ 音频反应：在情绪/程序化动作之后、口型之前叠加（叠加式，不覆盖上面写过的参数）
-    updateAudioReaction()
 
     let nextMouth = 0
     if (Date.now() - xzMouthAt < 350 && xzMouthLevel >= 0) {
@@ -1252,151 +1247,6 @@
         setParameter(paramId, watermarkParamMap[paramId])
       }
     }
-  }
-
-  // ══════════════════════════════════════════════════════════════════════════
-  // 音频反应（2026-10-24 · 方案 A）：跟着电脑**扬声器输出**呼吸、摆动
-  //
-  // 需求原话：「让桌宠有种随着音乐呼吸摆动的效果就行，越细腻越好」
-  //   —— 参数驱动（不是编舞/播动作），任何模型都能跑，不需要舞蹈素材。
-  //
-  // 数据来源（为什么不用 Web Audio 自己采）：
-  //   Electron 的 getDisplayMedia(loopback) 在本机实测报 "Invalid capture constraints"，
-  //   且需要改外壳、申请屏幕捕获权限，链路重且脆。
-  //   现在改由**后端子进程**用 WASAPI 回环采集（soundcard），本地算好三段能量，
-  //   经 WS 事件 `audio_bands` 推过来（约 200 字节/帧，30fps）。
-  //   好处：不动 Electron 外壳、全本地、音频数据**从不上传**。
-  //
-  // 为什么"细腻"要靠四层叠加而不是一个总音量：
-  //   一个音量变量驱动所有部位 → 全身同频缩放，像心跳不像呼吸。
-  //   真实的人听音乐时，低频先到（身体）、中频其次（头）、高频最后（头发/细节），
-  //   而且每个部位有各自的**惯性与延迟**。分层 + 相位滞后才像"活人"。
-  //
-  //   ① 呼吸  ← 低频能量包络，缓慢起伏，驱动身体 Y 轴
-  //   ② 摇摆  ← 低频相位，身体 X/Z 轴左右摆（节拍感的主要来源）
-  //   ③ 头部  ← 中频 + **滞后**的低频，产生"被带动的惯性"
-  //   ④ 头发  ← 高频，只在有镲片/齿音时轻动
-  // ══════════════════════════════════════════════════════════════════════════
-  const audioReact = {
-    // 后端推来的原始能量（0~1，服务端已做对数压缩与初段缓动）
-    target: { low: 0, mid: 0, high: 0, level: 0 },
-    // 本地二次平滑后的能量（再柔化一次，杜绝 WS 抖动直接传导到骨骼）
-    low: 0,
-    mid: 0,
-    high: 0,
-    level: 0,
-    // 低频相位：由能量驱动前进速度 → 音乐停、相位停，天然不会"空转"
-    phase: 0,
-    // 头部滞后缓冲（约 120ms@60fps）
-    lowHistory: [],
-    lastAt: 0,
-    lastPeak: 0,
-  }
-  const AUDIO_REACT_HEAD_LAG = 7
-  const AUDIO_REACT_MIN_ON = 0.02
-  // 超过这么久没收到新数据就认为采集断了，逐渐归零（避免"卡在最后一帧一直抖"）
-  const AUDIO_REACT_STALE_MS = 600
-
-  /** 收到后端 audio_bands 帧：只存目标值，真正的参数写入在每帧 updateAudioReaction。 */
-  function applyAudioBands(payload) {
-    if (!payload) return
-    audioReact.target.low = Math.max(0, Math.min(1, Number(payload.low) || 0))
-    audioReact.target.mid = Math.max(0, Math.min(1, Number(payload.mid) || 0))
-    audioReact.target.high = Math.max(0, Math.min(1, Number(payload.high) || 0))
-    audioReact.target.level = Math.max(0, Math.min(1, Number(payload.level) || 0))
-    audioReact.lastAt = performance.now()
-    try {
-      window.__mioAudioReact = window.__mioAudioReact || {}
-      window.__mioAudioReact.lastBands = { ...audioReact.target, at: audioReact.lastAt }
-    } catch (_) {}
-  }
-
-  /**
-   * 每帧调用：把能量换算成 Live2D 参数（叠加式，不覆盖别的动画）。
-   * 缓动系数区分上下行：起得快（跟得住节拍）、落得慢（不抽搐）。
-   */
-  function updateAudioReaction() {
-    const now = performance.now()
-    const fresh = audioReact.lastAt > 0 && now - audioReact.lastAt < AUDIO_REACT_STALE_MS
-    const t = fresh ? audioReact.target : { low: 0, mid: 0, high: 0, level: 0 }
-    const ease = (cur, target, up, down) => {
-      const k = target > cur ? up : down
-      return cur + (target - cur) * k
-    }
-    // 本地再柔化一次（服务端已经缓动过一轮，这里是"双保险"，让过渡更像肌肉而非弹簧）
-    audioReact.low = ease(audioReact.low, t.low, 0.5, 0.12)
-    audioReact.mid = ease(audioReact.mid, t.mid, 0.44, 0.10)
-    audioReact.high = ease(audioReact.high, t.high, 0.36, 0.085)
-    audioReact.level = ease(audioReact.level, t.level, 0.5, 0.12)
-    if (audioReact.level > audioReact.lastPeak) audioReact.lastPeak = audioReact.level
-    else audioReact.lastPeak *= 0.995
-
-    const low = audioReact.low
-    const mid = audioReact.mid
-    const high = audioReact.high
-    const intensity = audioReact.level
-    if (intensity < AUDIO_REACT_MIN_ON && low < AUDIO_REACT_MIN_ON && mid < AUDIO_REACT_MIN_ON) {
-      return // 没有声音：不写任何参数，把身体完全让给待机动画
-    }
-
-    // 相位：由低频能量驱动前进速度 → 音乐停、相位停
-    //   基准 0.055 rad/帧 ≈ 0.52 拍/秒的"呼吸感"，随低音加强最多翻倍
-    audioReact.phase += 0.055 + low * 0.075
-    if (audioReact.phase > Math.PI * 2) audioReact.phase -= Math.PI * 2
-
-    // 头部滞后：环形缓冲取 7 帧前的低频 → 头比身体慢半拍（细腻感的关键）
-    audioReact.lowHistory.push(low)
-    if (audioReact.lowHistory.length > AUDIO_REACT_HEAD_LAG + 1) audioReact.lowHistory.shift()
-    const laggedLow = audioReact.lowHistory[0] || 0
-
-    const sin = Math.sin(audioReact.phase)
-    const sin2 = Math.sin(audioReact.phase * 2)
-
-    // ★★ 2026-10-25 回滚后的最终版（在 4779fd81「能摇」的实现上做两处最小改动）
-    //
-    //   为什么保留 addParameter 而不是改 setParameter：
-    //     实测这条路径下 addParameter **确实能让模型动**（4779fd81 用户确认"能摇"），
-    //     而后续几次改用 setParameter/blend 的尝试虽然参数值看起来正常，
-    //     模型却反而不动了（phase 冻结）。既然已知哪种写法有效，就用有效的，
-    //     只把"太大"和"碰眼睛"这两处改掉。
-    //
-    //   改动一：幅度整体 ×0.40（原值会让幅度叠加到钳位、看起来抽搐）
-    //   改动二：**删除眼睛驱动** —— addParameter 是累加，往 ParamEyeLOpen 加负值
-    //           会和 Live2D 自动眨眼的 0→1 打开互相打架，导致眼睛闭着睁不开。
-    //           眼睛归表情/眨眼系统管，音频反应不该碰。
-    //
-    //   ★★ 2026-10-25 二次回滚（用户实测「这版不会摇」）：
-    //     上一版我在恢复 4779fd81 的同时加了 `* AMP`（0.40）并把 weight 从 0.72
-    //     降到 0.55 —— 结果模型**完全不摇了**。
-    //     addParameter 的 weight 不是"音量"，它是权重：weight 越小，
-    //     写入越容易被 motion/saveParameters 覆盖；再叠加 0.40 的幅度缩放，
-    //     实际生效值约等于原来的 0.18 倍，肉眼看不见。
-    //     **现在完全恢复 4779fd81 的原始数值与权重，一个字都不改**，
-    //     只保留"删除眼睛驱动"这一项（那是真 bug）。
-    //     如果之后觉得幅度过大，请只调 weight（0.72→0.6 是安全的），
-    //     不要动幅度系数本身 —— 两者同时降会直接变成"不摇"。
-
-    // ── ① 呼吸：低频包络驱动身体上下（量要小，否则像跳） ──
-    addParameter('ParamBodyAngleY', 1.5 + low * 2.6, 0.6)
-
-    // ── ② 摇摆：身体左右，主节拍感在这里 ──
-    addParameter('ParamBodyAngleX', sin * low * 9.5, 0.72)
-    addParameter('ParamBodyAngleZ', sin2 * low * 3.2, 0.55)
-
-    // ── ③ 头部：滞后低频 + 中频，产生惯性跟随 ──
-    addParameter('ParamAngleX', sin * laggedLow * 11 + mid * 1.6, 0.7)
-    addParameter('ParamAngleY', -mid * 3.4, 0.5)
-    addParameter('ParamAngleZ', sin2 * laggedLow * 5.2, 0.6)
-
-    // ── ④ 头发：高频轻动，幅度小；无高音时不写 ──
-    if (high > 0.06) {
-      const hairWave = Math.sin(audioReact.phase * 1.7) * high * 0.55
-      addParameter('ParamHairFront1', hairWave, 0.35)
-      addParameter('ParamHairFront2', hairWave * 0.8, 0.35)
-      addParameter('ParamHairSide1', hairWave * 0.6, 0.3)
-      addParameter('ParamHairSide2', hairWave * 0.5, 0.3)
-    }
-    // 注意：这里**不写任何眼睛参数**（见上方"改动二"）。
   }
 
   // 把参数写入挂到 Cubism 的 beforeModelUpdate 钩子上（每次换模型重挂一次）。
@@ -3684,10 +3534,6 @@
         await applySettings(payload.settings || {})
         applyActivity(payload.activity || {})
         fetchAgentsSnapshot()
-      } else if (message.type === 'audio_bands') {
-        // ★ 2026-10-24 方案 A：后端常驻子进程采集系统扬声器输出，算好三段能量推过来。
-        //   这里只存目标值，真正的参数写入在每帧 updateAudioReaction() 里（叠加式）。
-        applyAudioBands(payload)
       } else if (message.type === 'settings_changed') {
         await applySettings(payload)
       } else if (message.type === 'activity') {

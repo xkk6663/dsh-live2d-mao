@@ -123,17 +123,6 @@ async def app_lifespan(app: FastAPI):
     agent_task_service.recover_interrupted()
     await creation_service.resume_active_jobs()
     await _start_background_tasks(app)
-    # ★ 2026-10-24 音频反应（方案 A）：常驻采集系统扬声器输出，
-    #   算三段能量后经 WS 推给桌宠，驱动"跟着音乐呼吸/摆动"。
-    #   纯本地（WASAPI 回环 + 本地 FFT），不联网、不消耗任何模型额度。
-    #   开关在设置里（audio_react_enabled），关掉即停子进程。
-    try:
-        from .companion import audio_spectrum_service
-
-        if companion_service.load_config().get("audio_react_enabled", True):
-            await asyncio.to_thread(audio_spectrum_service.set_enabled, True)
-    except Exception:  # noqa: BLE001 —— 采集失败不能拖垮整个服务
-        logger.exception("启动音频频谱采集失败")
     # DSH 专用化：小智 TTS 预合成任务已移除（xiaozhi 插件整体阉割，符合裁决 D1）
     maintenance_lock = asyncio.Lock()
 
