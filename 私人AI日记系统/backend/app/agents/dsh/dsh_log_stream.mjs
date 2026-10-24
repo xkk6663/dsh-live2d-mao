@@ -75,6 +75,16 @@ const DECODE_CHUNK = 1024 * 1024
 const PING_MS = 5000
 const HEADER_PROBE_BYTES = 64 * 1024
 const DEFAULT_TAKEOVER_MS = 2500
+// ★ 2026-10-24：切换会话的两个时间窗（见 pickTarget 注释）
+//   ACTIVE_WINDOW_MS —— "最近这段时间被写过"就算活跃会话。用户切工作区后
+//     发第一条消息时，新会话立刻进入活跃、旧会话不再活跃 → 立即接管。
+//     取 120s：够宽松（一次思考+工具循环可能十几秒不写日志），又不至于
+//     把几十分钟前动过的旧会话误判成"正在用"。
+//   STALE_WINDOW_MS —— 超过这么久没动过，视为"用户已经离开了"。
+//     取 5min：覆盖正常发呆/看文档的停顿，但不至于把挂着不管的旧会话
+//     一直当成当前工作区。
+const ACTIVE_WINDOW_MS = 120 * 1000
+const STALE_WINDOW_MS = 5 * 60 * 1000
 
 // ---------------------------------------------------------------------------
 // 参数
@@ -86,6 +96,8 @@ function parseArgs(argv) {
     sessionId: '',
     pollMs: 150,
     takeoverMs: DEFAULT_TAKEOVER_MS,
+    activeWindowMs: ACTIVE_WINDOW_MS,
+    staleWindowMs: STALE_WINDOW_MS,
     once: false,
   }
   for (let i = 0; i < argv.length; i++) {
@@ -95,6 +107,9 @@ function parseArgs(argv) {
     else if (a === '--session-id') out.sessionId = argv[++i] || ''
     else if (a === '--poll-ms') out.pollMs = Math.max(100, Number(argv[++i]) || 150)
     else if (a === '--stale-takeover-ms') out.takeoverMs = Math.max(0, Number(argv[++i]) || 0)
+    // ★ 2026-10-24：切工作区时的接管灵敏度（见 pickTarget 注释）
+    else if (a === '--active-window-ms') out.activeWindowMs = Math.max(1000, Number(argv[++i]) || ACTIVE_WINDOW_MS)
+    else if (a === '--stale-window-ms') out.staleWindowMs = Math.max(1000, Number(argv[++i]) || STALE_WINDOW_MS)
     else if (a === '--once') out.once = true
   }
   if (!out.sessionsRoot) {
@@ -236,6 +251,15 @@ function readHeader(logPath) {
   }
 }
 
+/** 目录 mtime（失败返回 0，绝不让它影响主流程）。 */
+function dirMtimeMs(dir) {
+  try {
+    return fs.statSync(dir).mtimeMs || 0
+  } catch (_) {
+    return 0
+  }
+}
+
 /** 枚举候选会话日志。 */
 function listCandidates() {
   const out = []
@@ -278,6 +302,10 @@ function listCandidates() {
       }
       const header = readHeader(logPath)
       const cwd = header.cwd || ''
+      // ★ 2026-10-24：cwd 为空时不能用 `path.resolve('.')` —— 那会解析成**边车进程
+      //   自己所在的目录**（backend/app/agents/dsh），拿它跟目标工作区比必然不等，
+      //   而且是个毫无意义的路径。空就当作"没有工作区信息"，inWorkspace=false。
+      const cwdResolved = cwd ? path.resolve(cwd).toLowerCase() : ''
       out.push({
         logPath,
         sessionId: s.name,
@@ -286,15 +314,24 @@ function listCandidates() {
         agentPreset: header.agentPreset || '',
         mtimeMs: st.mtimeMs,
         size: st.size,
-        inWorkspace: Boolean(wantCwd) && path.resolve(cwd || '.').toLowerCase() === wantCwd,
+        inWorkspace: Boolean(wantCwd && cwdResolved) && cwdResolved === wantCwd,
+        // ★ 2026-10-24：会话**目录**的 mtime 也是"用户刚动过这里"的信号。
+        //   日志文件在 turn 中途会持续追加（mtime 一直新），turn 结束后就静止；
+        //   而 DSH 新建会话 / 写附属文件时会更新目录 mtime。
+        //   两者取最大，作为"这个会话最近被碰过"的时间。
+        touchedMs: Math.max(st.mtimeMs, dirMtimeMs(dir)),
       })
     }
   }
-  // 排序优先级：本工作区 > 主会话(depth=0) > 最近修改
+  // 排序优先级：本工作区 > 主会话(depth=0) > 最近被碰过
+  // ★ 2026-10-24：末位判据从"日志 mtime"改成 touchedMs（日志与目录取最大）。
+  //   用户切到另一个 GUI 工作区时，DSH 会在那边写日志/建文件；
+  //   只比日志 mtime 时，若旧工作区上一轮的日志刚写完、新工作区那条才几个字节，
+  //   旧的可能仍然更"新"，于是永远排第一 → 边车不切 → 桌宠卡在旧状态。
   out.sort((a, b) => {
     if (a.inWorkspace !== b.inWorkspace) return a.inWorkspace ? -1 : 1
     if (a.delegationDepth !== b.delegationDepth) return a.delegationDepth - b.delegationDepth
-    return b.mtimeMs - a.mtimeMs
+    return b.touchedMs - a.touchedMs
   })
   return out
 }
@@ -882,10 +919,37 @@ function pickTarget() {
   if (!current) return cands[0] // 当前会话消失：立即改附
   const best = cands[0]
   if (best.logPath === current.logPath) return current
-  // 迟滞：仅当排序更优的候选明显更新，或它才是本工作区主会话时才切换
+
+  // ★★ 2026-10-24 修「切到别的工作区后，桌宠就看不到工作状态」：
+  //   旧逻辑只有三条切换路径：
+  //     · betterScope —— 新候选在 --workspace 里；但适配器恒传空串，
+  //       inWorkspace 永远 false，**这条永远不成立**；
+  //     · betterDepth —— 还要 best.inWorkspace，同样永远不成立；
+  //     · advantage > takeoverMs(2500) —— 唯一可能生效的路径。
+  //   问题：advantage 是"两边 mtime 的差值"。用户在新工作区**偶尔**发一条消息时，
+  //   差值只有几百毫秒~一两秒，永远达不到 2500ms；而每次轮询都会重新比较，
+  //   只要旧会话不再更新、新会话也不再写，差值就冻结在那一刻 → **永远切不过去**。
+  //   实测：切到 esp32 工作区后，桌宠一直显示上一个工作区的状态。
+  //
+  //   修复原则：**"谁正在被写入"优先，而不是"谁比谁新多少"**。
+  //   新增两条判据（任一成立就切换）：
+  //     ① best 在最近 ACTIVE_WINDOW_MS 内被写过，而 current 没有 → 说明用户
+  //        已经在新工作区干活了，直接接管（不受 2500ms 差值限制）；
+  //     ② current 已经 STALE_WINDOW_MS 没动过（用户显然离开它了），
+  //        而 best 比它新 → 接管。
+  //   保留原来的 advantage 判据作为第三条，三条并行，行为只放宽不收紧。
+  const now = Date.now()
+  const bestFresh = now - best.touchedMs <= ACTIVE_WINDOW_MS
+  const currentFresh = now - current.touchedMs <= ACTIVE_WINDOW_MS
+  const currentStale = now - current.touchedMs >= STALE_WINDOW_MS
   const betterScope = best.inWorkspace && !current.inWorkspace
   const betterDepth = best.delegationDepth < current.delegationDepth && best.inWorkspace
-  const advantage = best.mtimeMs - current.mtimeMs
+  const advantage = best.touchedMs - current.touchedMs
+  // ① 新候选是"活跃会话"，旧候选不是
+  if (bestFresh && !currentFresh) return best
+  // ② 旧候选早就没人写了，而新候选确实更新
+  if (currentStale && advantage > 0) return best
+  // ③ 原有判据：本工作区 / 主会话 / 明显更新
   if (betterScope || betterDepth || advantage > ARGS.takeoverMs) return best
   return current
 }

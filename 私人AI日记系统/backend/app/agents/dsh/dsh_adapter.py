@@ -797,6 +797,27 @@ class DshAdapter:
         except (TypeError, ValueError):
             poll_ms = 150
         args += ["--poll-ms", str(poll_ms)]
+        # ★ 2026-10-24 修「切到别的工作区后桌宠看不到工作状态」：
+        #   边车靠 pickTarget() 决定「现在跟哪个会话」。它原来看的就两样：
+        #   --workspace（适配器恒传空串 → 本工作区判据永远失效）+ mtime 差值 2500ms
+        #   （用户在新工作区偶发一条消息时，差值到不了 → 永远切不过去）。
+        #   现在把两个时间窗显式传下去，让"正在被写入的会话"能直接接管；
+        #   默认值由边车定义（120s 活跃 / 5min 陈旧），这里只在用户显式配置时覆盖。
+        for _key, _flag in (
+            ("active_window_ms", "--active-window-ms"),
+            ("stale_window_ms", "--stale-window-ms"),
+            ("stale_takeover_ms", "--stale-takeover-ms"),
+        ):
+            _raw = config.get(_key)
+            if _raw in (None, ""):
+                continue
+            try:
+                _val = int(_raw)
+            except (TypeError, ValueError):
+                continue
+            if _val >= 0:
+                args.append(_flag)
+                args.append(str(_val))
 
         if self.sidecar is not None and self.sidecar.alive():
             return True
@@ -1131,6 +1152,16 @@ class DshAdapter:
         if kind == "switch":
             self.session_id = str(msg.get("session") or "")
             self.last_phase = ""  # 新会话：允许立即上报
+            # ★★ 2026-10-24 修「切工作区后桌宠看不到状态」：
+            #   以前这里只换 session_id 就 return。但边车紧接着会推一条
+            #   `facts(source=replay)` —— 那才是新会话折叠出来的事实。
+            #   问题在**中间这段空窗**：_handle_message 对 switch 直接返回，
+            #   而主循环在静默期会 `_publish_facts(self.facts)` 补发**上一个会话**的
+            #   facts（见主循环 idle 分支）。于是切换后的一小段时间里，
+            #   桌宠显示的仍是旧工作区的工具/进度。
+            #   现在显式清空 facts，让切换后的第一次 publish 一定是新会话的。
+            self.facts = {}
+            logger.info("DSH 会话已切换：%s", self.session_id)
             return
 
         if kind == "offline":

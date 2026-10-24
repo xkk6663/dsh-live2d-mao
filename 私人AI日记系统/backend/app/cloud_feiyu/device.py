@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import platform
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -89,38 +90,87 @@ def get_system_info() -> dict[str, Any]:
 #
 # 修复：命令类消息**原样发送**（不加任何前缀），闲聊才带设备上下文。
 # 命令本来就由插件直接处理、不经过 LLM 判断，丢掉设备上下文没有损失。
+#
+# ★★ 2026-10-24 二次修正（用户反馈「来」「看」这两个关键词没进表）：
+#   上一版只登记了 `/xxx` 形式和少数几个词，漏掉了最常用的两个**自然语言命令族**：
+#     · 「来N张千恋万花」   —— koiuta 的 @filter.regex(r"来(\d+)?张千恋万花")
+#     · 「看看色色/看看甜妹/看看腿…」 —— apis 插件按 parts[0] 精确查关键词表
+#   两个族的判定规则**不同**，必须分开处理（详见 is_plugin_command 注释）。
+
+# ① 斜杠命令（AstrBot 标准前缀，直接放行）
+_SLASH_PREFIXES = ("/", "!", "！")
+
+# ② 斜杠命令名（不含 `/`，用于 `!余额` 这类另一种前缀；也便于补登记新命令）
 _PLUGIN_COMMANDS = (
     "setu_now", "setu_file", "setu",
     "p", "签到", "签到状态", "签到成就", "签到日历", "刷新背景", "签到帮助",
-    "余额", "birthday_now", "reset", "help", "帮助",
+    "余额", "birthday_now", "reset", "help", "帮助", "查看api", "api列表",
     "启用api", "禁用api", "开启解析", "关闭解析", "lmem", "表情管理",
-    "点歌", "画",
+    "点歌",
+)
+
+# ③ 「来…」族之一：koiuta 资源包，regex `来(\d+)?张千恋万花`
+_LAI_RESOURCE_RE = re.compile(r"来\s*\d*\s*张\s*千恋万花")
+
+# ③b 「来…」族之二：**get_px 的 AUTO_TRIGGER_PATTERN**（这才是"来"字最常用的归属）
+#     插件原文：`r"^/?(来\s*(.*?)(份|个|张|点))(.*?)(福利|色|瑟|涩|塞)?图$"`
+#     覆盖：来张涩图 / 来一份图 / 来三张初音ミク图 / 来点色图 …
+#     它是**用户实测"来张涩图"没响应的直接原因** —— 上一版只登记了千恋万花。
+_LAI_IMAGE_RE = re.compile(
+    r"^/?(?:来\s*(?:.*?)(?:份|个|张|点))(?:.*?)(?:福利|色|瑟|涩|塞)?图$"
+)
+
+# ④ 「听听XX」族：koiuta 的 @filter.regex(r"听听(茉子|小春|蕾娜|丛雨|芦花|芳乃)")
+_LISTEN_RE = re.compile(r"听听\s*(?:茉子|小春|蕾娜|丛雨|芦花|芳乃)")
+
+# ⑤ 「看看XX」族：apis 插件 `on_message` 取 `parts[0]`（**第一个空格前的一整段**）
+#    去查关键词表（presets/api_pool_default.json，76 条）。
+#    这些关键词本身就是完整词组（`看看色色`、`看看腿`、`看看甜心`…），
+#    所以：**消息以某个「看看XX」开头、且该词组后面没有多余内容**才算命中。
+#    注意「看看」后面的词必须是真实关键词之一，不能只凭"看看"两字就放行，
+#    否则「看看这个视频」也会被当成命令。
+_APIS_PEEK_RE = re.compile(
+    r"^看看(?:色色|甜妹|小姐姐|腿|妞|女大|骚的|玉足|帅哥|腹肌|漫画|治愈|emo)"
+    r"(?:\s+.*)?$",
+    re.IGNORECASE,
 )
 
 
 def is_plugin_command(message: str) -> bool:
     """这条消息是不是发给 AstrBot 插件的命令。
 
+    为什么必须识别准：
+      · 判成**命令** → 原样发（不加设备前缀），插件才能命中；
+      · 判成**闲聊** → 加设备上下文，让"一个灵魂多个身体"成立。
+    两边判错都有代价，所以按各插件**真实 filter 规则**分别匹配，而不是靠猜关键词。
+
     判据（任一即算）：
-      1. 以 `/` 或 `！`/`!` 开头 —— AstrBot 的标准命令前缀；
-      2. 以表格里登记的插件命令名开头（覆盖「来3张千恋万花」「听听茉子」这类
-         **自然语言命令**：它们的 filter 是 regex/关键词，同样要求出现在开头）。
+      1. 以 `/`、`!`、`！` 开头（AstrBot 标准命令前缀）；
+      2. 以登记过的命令名开头（`余额`、`签到`、`点歌`…）；
+      3. 「来N张千恋万花」类资源拉取（koiuta regex）；
+      4. 「听听茉子/小春/…」角色语音（koiuta regex）；
+      5. 「看看XX」关键词表（apis 插件，XX 必须是真实关键词）。
     """
     text = str(message or "").strip()
     if not text:
         return False
-    if text[0] in "/!！":
+    if text.startswith(_SLASH_PREFIXES):
         return True
+
     lowered = text.lower()
     for name in _PLUGIN_COMMANDS:
         token = name.lower()
         if lowered == token or lowered.startswith(token + " "):
             return True
-        # 中文命令后面直接跟数字/标点（`来3张千恋万花` 这种把数字夹在中间的另算）
-        if lowered.startswith(token) and len(token) > 1 and not token.isascii():
+        if not token.isascii() and lowered.startswith(token):
             return True
-    # 「来3张千恋万花」「听听茉子」这类：动词 + 数量/角色名，交给关键词兜底
-    if any(key in text for key in ("千恋万花", "听听茉子", "听听小春", "听听蕾娜",
-                                   "听听丛雨", "听听芦花", "听听芳乃")):
+
+    if _LAI_RESOURCE_RE.search(text):
+        return True
+    if _LAI_IMAGE_RE.match(text):
+        return True
+    if _LISTEN_RE.search(text):
+        return True
+    if _APIS_PEEK_RE.match(text):
         return True
     return False
