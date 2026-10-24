@@ -1364,27 +1364,37 @@
     //   改动二：**删除眼睛驱动** —— addParameter 是累加，往 ParamEyeLOpen 加负值
     //           会和 Live2D 自动眨眼的 0→1 打开互相打架，导致眼睛闭着睁不开。
     //           眼睛归表情/眨眼系统管，音频反应不该碰。
-    const AMP = 0.40
+    //
+    //   ★★ 2026-10-25 二次回滚（用户实测「这版不会摇」）：
+    //     上一版我在恢复 4779fd81 的同时加了 `* AMP`（0.40）并把 weight 从 0.72
+    //     降到 0.55 —— 结果模型**完全不摇了**。
+    //     addParameter 的 weight 不是"音量"，它是权重：weight 越小，
+    //     写入越容易被 motion/saveParameters 覆盖；再叠加 0.40 的幅度缩放，
+    //     实际生效值约等于原来的 0.18 倍，肉眼看不见。
+    //     **现在完全恢复 4779fd81 的原始数值与权重，一个字都不改**，
+    //     只保留"删除眼睛驱动"这一项（那是真 bug）。
+    //     如果之后觉得幅度过大，请只调 weight（0.72→0.6 是安全的），
+    //     不要动幅度系数本身 —— 两者同时降会直接变成"不摇"。
 
     // ── ① 呼吸：低频包络驱动身体上下（量要小，否则像跳） ──
-    addParameter('ParamBodyAngleY', (1.5 + low * 2.6) * AMP, 0.45)
+    addParameter('ParamBodyAngleY', 1.5 + low * 2.6, 0.6)
 
     // ── ② 摇摆：身体左右，主节拍感在这里 ──
-    addParameter('ParamBodyAngleX', sin * low * 9.5 * AMP, 0.55)
-    addParameter('ParamBodyAngleZ', sin2 * low * 3.2 * AMP, 0.42)
+    addParameter('ParamBodyAngleX', sin * low * 9.5, 0.72)
+    addParameter('ParamBodyAngleZ', sin2 * low * 3.2, 0.55)
 
     // ── ③ 头部：滞后低频 + 中频，产生惯性跟随 ──
-    addParameter('ParamAngleX', (sin * laggedLow * 11 + mid * 1.6) * AMP, 0.55)
-    addParameter('ParamAngleY', -mid * 3.4 * AMP, 0.40)
-    addParameter('ParamAngleZ', sin2 * laggedLow * 5.2 * AMP, 0.45)
+    addParameter('ParamAngleX', sin * laggedLow * 11 + mid * 1.6, 0.7)
+    addParameter('ParamAngleY', -mid * 3.4, 0.5)
+    addParameter('ParamAngleZ', sin2 * laggedLow * 5.2, 0.6)
 
     // ── ④ 头发：高频轻动，幅度小；无高音时不写 ──
     if (high > 0.06) {
-      const hairWave = Math.sin(audioReact.phase * 1.7) * high * 0.55 * AMP
-      addParameter('ParamHairFront1', hairWave, 0.30)
-      addParameter('ParamHairFront2', hairWave * 0.8, 0.30)
-      addParameter('ParamHairSide1', hairWave * 0.6, 0.25)
-      addParameter('ParamHairSide2', hairWave * 0.5, 0.25)
+      const hairWave = Math.sin(audioReact.phase * 1.7) * high * 0.55
+      addParameter('ParamHairFront1', hairWave, 0.35)
+      addParameter('ParamHairFront2', hairWave * 0.8, 0.35)
+      addParameter('ParamHairSide1', hairWave * 0.6, 0.3)
+      addParameter('ParamHairSide2', hairWave * 0.5, 0.3)
     }
     // 注意：这里**不写任何眼睛参数**（见上方"改动二"）。
   }
