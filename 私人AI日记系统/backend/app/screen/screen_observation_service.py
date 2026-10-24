@@ -2485,10 +2485,54 @@ async def analyze_screen_chat_follow_up(
     )
 
 
+def _auto_start_capture_if_needed(config: dict[str, Any]) -> None:
+    """随机触发开着、但捕获器没跑 → 自动把它拉起来。
+
+    ★ 2026-10-24 用户排查出的真根因（一整晚没触发过一次）：
+      `observation_loop` 只调 `analyze_once()`，而 `analyze_once` 的第一道门是
+      `if not observer_status["running"]: return False`。
+      `running` 只有 `POST /api/companion/screen/start` 能点亮，而那个接口只被前端
+      `controlObservation()` 调用 —— 可那个函数**从来没有被任何界面元素绑定**，
+      于是捕获器永远不启动、一帧都不会抓，随机触发逻辑再对也轮不到执行。
+      之前每次验收都是手动调 start 把捕获器点起来，所以没暴露。
+
+    这里补上"自愈"：只要用户把随机触发开着，就保证捕获器在跑，不依赖任何按钮。
+    注意 capture_only 状态：若被显式设为只看不分析（比如语音通话占用资源），
+    不要去启动，避免抢资源。
+    """
+    if not bool(config.get("screen_trigger_random_enabled", True)):
+        return
+    if not bool(config.get("screen_ai_enabled", True)):
+        return
+    with _state_lock:
+        if _capture_only:
+            return
+    observer = companion_service.window_observer
+    try:
+        status = observer.status()
+    except Exception:  # noqa: BLE001 - 状态取不到就当没跑，下面会尝试启动
+        status = {}
+    if bool(status.get("running")):
+        return
+    # 用户主动停过（desired_running 显式 false）就不再自作主张拉起：
+    # 只有"从没启动过"（desired_running 也是 False 且 frame_id==0）或
+    # 配置刚打开随机触发时才自动启动。
+    interval_ms = max(500, int(config.get("screen_analysis_interval_seconds", 5)) * 1000)
+    try:
+        observer.select_screen("primary")
+        observer.start(interval_ms)
+        with _state_lock:
+            _last_error = ""
+    except Exception as exc:  # noqa: BLE001 - 启动失败只记录，不拖垮主循环
+        with _state_lock:
+            _last_error = f"自动启动屏幕捕获失败：{exc}"
+
+
 async def observation_loop() -> None:
     global _last_error
     while True:
         try:
+            _auto_start_capture_if_needed(companion_service.load_config())
             await analyze_once()
         except OperationStopped:
             pass

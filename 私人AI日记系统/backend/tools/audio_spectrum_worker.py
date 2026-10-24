@@ -178,11 +178,14 @@ def run(device_name: str = "") -> int:
                     level = max(low, mid, high)
 
                     # 服务端也做一次缓动：上行快、下行慢 = 跟得住节拍又不抽搐
+                    # ★ 2026-10-24 用户反馈「抽搐太夸张」：上行系数整体调慢
+                    #   （0.45→0.20 等），并把高音压得更低。真正的柔和感
+                    #   主要由渲染端的二次缓动提供，这里只做粗筛。
                     for key, target, up, down in (
-                        ("low", low, 0.45, 0.10),
-                        ("mid", mid, 0.38, 0.085),
-                        ("high", high, 0.30, 0.065),
-                        ("level", level, 0.42, 0.09),
+                        ("low", low, 0.20, 0.055),
+                        ("mid", mid, 0.16, 0.045),
+                        ("high", high, 0.10, 0.030),
+                        ("level", level, 0.18, 0.055),
                     ):
                         cur = smooth[key]
                         k = up if target > cur else down
