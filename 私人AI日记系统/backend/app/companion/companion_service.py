@@ -87,6 +87,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "screen_audio_model": "base",
     "screen_audio_language": "auto",
     "screen_audio_chunk_seconds": 5,
+    # ★ 2026-10-24：桌宠跟着**系统扬声器输出**呼吸/摆动（纯本地，不联网、不耗额度）
+    #   渲染端用 Electron getDisplayMedia(audio:loopback) 采回环，参数驱动 Live2D。
+    "audio_react_enabled": True,
     # ★ 2026-10-24 用户裁决：桌宠端不需要任何模型 API，识图全走云端大肥鱼
     "screen_vision_route": "feiyu",
     "screen_vision_model_id": "auto-fast",
@@ -831,6 +834,13 @@ def shutdown() -> None:
     if callable(close_observer):
         run("屏幕观察进程", close_observer)
     run("系统声音", system_audio_service.stop)
+    # ★ 2026-10-24：音频反应采集子进程（跟随系统扬声器呼吸/摆动）
+    try:
+        from . import audio_spectrum_service
+
+        run("音频频谱采集", audio_spectrum_service.stop_all)
+    except Exception:
+        logger.exception("关闭音频频谱采集失败")
     run("临时预览", cleanup_legacy_preview)
     run("Live2D 桌宠", stop_pet)
     try:

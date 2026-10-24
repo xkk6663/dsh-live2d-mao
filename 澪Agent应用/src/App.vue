@@ -1304,6 +1304,8 @@ const companionStatus = ref({
       voice_volume: 85,
       voice_streaming_enabled: true,
       pet_speech_language: 'zh',
+      // ★ 2026-10-24：跟着系统扬声器输出呼吸/摆动（纯本地分析，不上传音频）
+      audio_react_enabled: true,
       speak_proactive: false,
       speak_screen_observations: false,
       // ★ 2026-10-24：feiyu = 图 + 提示词直接发云端大肥鱼（她亲自看图回话）
@@ -1762,6 +1764,8 @@ const companionSettingKeys = {
     'pet_call_min_speech_ms', 'pet_call_max_turn_seconds',
     'voice_enabled', 'voice_startup_enabled', 'voice_idle_timeout_seconds', 'voice_engine', 'local_voice_runtime', 'voice_volume', 'voice_streaming_enabled', 'speak_proactive',
     'default_voice_profile_id', 'voice_profiles',
+    // ★ 2026-10-24 音频反应开关（跟着系统扬声器输出呼吸/摆动，纯本地）
+    'audio_react_enabled',
     'pet_speech_language', 'qq_voice_mode', 'gpt_sovits_url', 'gpt_sovits_text_language',
     'gpt_sovits_translate_to_japanese', 'screen_ai_enabled', 'screen_audio_enabled',
     'screen_audio_model', 'screen_audio_language', 'screen_audio_chunk_seconds', 'screen_vision_route',

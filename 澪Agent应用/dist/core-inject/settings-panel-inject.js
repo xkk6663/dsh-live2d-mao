@@ -548,6 +548,15 @@
         'audio_autoplay',
       ))
       body.appendChild(row('回复语言', '小智语音与文字语言', makeSelect(s.pet_speech_language || 'zh', [{ v: 'zh', t: '中文' }, { v: 'ja', t: '日语' }]), 'pet_speech_language'))
+      // ★ 2026-10-24 音频反应：桌宠跟着电脑扬声器输出的声音呼吸/摆动。
+      //   完全本地（Electron getDisplayMedia 回环 + Web Audio 分析），不联网、不耗额度。
+      body.appendChild(section('音频反应'))
+      body.appendChild(row(
+        '跟着音乐摆动',
+        '监听电脑扬声器正在播放的声音，让桌宠随节拍呼吸、摇摆、轻微摆头（纯本地分析，不上传音频）',
+        makeSwitch(s.audio_react_enabled !== false, '跟着音乐摆动'),
+        'audio_react_enabled',
+      ))
       body.appendChild(section('屏幕观察播报'))
       // ★ 2026-10-24「气泡不显示」的真凶（用户实测）：真正决定**观察结果要不要主动开口**
       //   的是 speak_screen_observations（后端 _deliver_observation 的 speak_on），
@@ -755,6 +764,8 @@
       //   **必须列进本白名单**，否则开关能点、保存后值被这里静默丢掉
       //   （本页保存是按这份表挑值的）→ 表现为"关了还是会自动播放"。
       'audio_autoplay',
+      // ★ 音频反应（2026-10-24）：不进白名单就会「开关能点、保存后静默丢失」
+      'audio_react_enabled',
       'screen_ai_enabled',
       // ★ 屏幕观察触发与提示词（2026-10-24）：用户在用注入面板设置，
       //   必须列进白名单，否则控件能改、点保存被静默丢掉 →「设了没反应」。

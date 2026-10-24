@@ -307,6 +307,10 @@ class PetEventHub:
                             "capabilities": payload.get("capabilities")
                             if isinstance(payload.get("capabilities"), dict)
                             else {},
+                            # ★ 2026-10-24 音频反应状态（跟着系统扬声器呼吸/摆动）
+                            "audio_react": payload.get("audio_react")
+                            if isinstance(payload.get("audio_react"), dict)
+                            else {},
                             "ready_at": self._now(),
                         }
                 elif event_type == "voice_started":
