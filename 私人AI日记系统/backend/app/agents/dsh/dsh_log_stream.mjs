@@ -945,6 +945,20 @@ function pickTarget() {
   const betterScope = best.inWorkspace && !current.inWorkspace
   const betterDepth = best.delegationDepth < current.delegationDepth && best.inWorkspace
   const advantage = best.touchedMs - current.touchedMs
+  // ★★ 2026-10-25 用户实拍「换了工作区、发了消息，桌宠还是显示上一个工作区的 turn 数」：
+  //   前三条判据在"两边都算活跃"时会僵持 —— 用户切了工作区，但旧会话的
+  //   dirMtime 因为 DSH 收尾写文件也刚更新过，于是 currentFresh 仍为 true，
+  //   判据① 的 !currentFresh 不成立；旧会话又没到 300s 陈旧线，判据② 也不成立；
+  //   而 advantage 只有几百毫秒（两条消息间隔很短），判据③ 的 2.5s 也够不着。
+  //   结果：**明明已经在新工作区干活了，边车就是不切**。
+  //
+  //   新增判据⓪（最强，优先于其它三条）：
+  //     "谁最近 ACTIVE_WINDOW 内被写过、且比当前会话新" → 直接接管。
+  //   与判据① 的区别：不再要求当前会话**不**活跃。
+  //   DSH 是单实例的，"最近被写入的那个会话"就是用户此刻所在的会话 ——
+  //   这条比任何基于 inWorkspace/深度 的推断都更接近真相。
+  //   仍在 ACTIVE_WINDOW 内的旧会话即便也"活跃"，只要没被写过就会被比下去。
+  if (bestFresh && advantage > 0) return best
   // ① 新候选是"活跃会话"，旧候选不是
   if (bestFresh && !currentFresh) return best
   // ② 旧候选早就没人写了，而新候选确实更新
