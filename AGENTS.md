@@ -91,7 +91,12 @@ cd ..\..\私人AI日记系统\backend
 # 4. 插件契约 + 市场面板（改 plugins/** 或 kernel/** 后必跑）
 cd ..\..\私人AI日记系统\backend\probe_tmp
 node check_plugin_contract.cjs          # R7 / nav 一致性 / kernel 无 agentId 字面量
-node market_panel_harness.cjs           # 市场面板假 DOM 回归
+
+# 5. 插件市场回归（真浏览器，需后端在跑）—— 脚本已入仓库
+cd ..\..\澪Agent应用\tests\market
+node run-all.cjs                        # 一键跑全部（含 harness 假 DOM 单测）
+#   找不到 playwright 时：NODE_PATH=<repo>\澪Agent应用\node_modules node run-all.cjs
+#   浏览器不在默认位置时：PET_CHROME=<chrome.exe 路径>
 ```
 
 ---
@@ -104,6 +109,7 @@ node market_panel_harness.cjs           # 市场面板假 DOM 回归
 | `澪Agent应用/dist/live2d-pet/` | 桌宠渲染端（核心 UI + 横条 + Live2D） |
 | `澪Agent应用/dist/core-inject/` `kernel/` `plugins/` | MIO 管理窗注入层（手写，受保护）。**`kernel/plugin-loader.js` = 清单加载器**（按 `数据/插件市场.json` 动态插 `<script>`），`kernel/plugin-registry.js` = 注册表 |
 | `澪Agent应用/dist/plugins/market/` | **插件市场本体**（内置 builtin）：卡片网格 / 启停 / 上架 / 下架，只调 `/api/plugin/market/*` |
+| `澪Agent应用/tests/market/` | **插件市场回归测试**（真浏览器）：`run-all.cjs` 一键全跑；`_config.cjs` 负责浏览器探测与路径（可移植，已入仓库） |
 | `澪Agent应用/live2d-desktop/` | Electron 主进程（窗口/穿透/托盘） |
 | `私人AI日记系统/backend/app/kernel/` | 12 态统一状态总线 + **`plugin_market_service.py`（插件清单层）** |
 | `私人AI日记系统/backend/app/routes/plugin_market.py` | 插件市场 HTTP 面（`/api/plugin/market/*`） |

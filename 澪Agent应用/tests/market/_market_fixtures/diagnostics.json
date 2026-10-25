@@ -1,0 +1,55 @@
+{
+  "ok": false,
+  "catalog_path": "C:\\Users\\xiao1\\Mao-dsh-pet\\私人AI日记系统\\backend\\app\\kernel\\__pycache__\\_market_probe\\数据\\插件市场.json",
+  "frontend_root": "C:\\Users\\xiao1\\Mao-dsh-pet\\私人AI日记系统\\backend\\app\\kernel\\__pycache__\\_market_probe\\dist",
+  "plugins_root": "C:\\Users\\xiao1\\Mao-dsh-pet\\私人AI日记系统\\backend\\app\\kernel\\__pycache__\\_market_probe\\dist\\plugins",
+  "count": 5,
+  "checks": [
+    {
+      "agentId": "dsh",
+      "name": "DSH",
+      "ok": false,
+      "problems": [
+        "not_registered"
+      ],
+      "builtin": false,
+      "registered": false
+    },
+    {
+      "agentId": "cloud_feiyu",
+      "name": "大肥鱼",
+      "ok": false,
+      "problems": [
+        "not_registered"
+      ],
+      "builtin": false,
+      "registered": false
+    },
+    {
+      "agentId": "pet",
+      "name": "桌宠",
+      "ok": true,
+      "problems": [],
+      "builtin": true,
+      "registered": false
+    },
+    {
+      "agentId": "brokenplug",
+      "name": "坏插件（演示异常角标）",
+      "ok": false,
+      "problems": [
+        "panel_missing_panel"
+      ],
+      "builtin": false,
+      "registered": true
+    },
+    {
+      "agentId": "market",
+      "name": "插件市场",
+      "ok": true,
+      "problems": [],
+      "builtin": false,
+      "registered": true
+    }
+  ]
+}

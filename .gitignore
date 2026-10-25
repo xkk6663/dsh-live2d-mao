@@ -238,3 +238,7 @@ _probe*.py
 
 # --- 本地运行时数据 ---
 /pet-data/
+
+# --- 插件市场回归测试的截图产物（测试自己生成，不进仓库）---
+澪Agent应用/tests/market/.screenshots/
+澪Agent应用/tests/market/.ui-shots/

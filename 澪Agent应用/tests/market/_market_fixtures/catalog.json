@@ -1,0 +1,118 @@
+{
+  "ok": true,
+  "version": 1,
+  "updated": "2026-10-25T22:46:01+08:00",
+  "plugins": [
+    {
+      "agentId": "dsh",
+      "name": "DSH",
+      "entry": "plugins/dsh/manifest.js",
+      "panel": "plugins/dsh/dsh-panel.js",
+      "accent": "#4F6BED",
+      "description": "DSH 实时工作状态页 + 12 态图例 + 体检条目",
+      "category": "agent",
+      "builtin": false,
+      "version": "1.0.0",
+      "author": "Mio",
+      "enabled": true,
+      "added": "2026-10-25T22:46:01+08:00",
+      "bus": null,
+      "health": {
+        "ok": true,
+        "problems": [
+          "not_registered"
+        ]
+      }
+    },
+    {
+      "agentId": "cloud_feiyu",
+      "name": "大肥鱼",
+      "entry": "plugins/feiyu/manifest.js",
+      "panel": "plugins/feiyu/feiyu-panel.js",
+      "accent": "#E08A9B",
+      "description": "大肥鱼屏幕观察 / 语音 / 设置 tab",
+      "category": "agent",
+      "builtin": false,
+      "version": "1.0.0",
+      "author": "Mio",
+      "enabled": true,
+      "added": "2026-10-25T22:46:01+08:00",
+      "bus": null,
+      "health": {
+        "ok": true,
+        "problems": [
+          "not_registered"
+        ]
+      }
+    },
+    {
+      "agentId": "pet",
+      "name": "桌宠",
+      "entry": "plugins/pet/manifest.js",
+      "panel": "plugins/pet/pet-panel.js",
+      "accent": "#4C8798",
+      "description": "桌宠本体：形象 / 外观 / 行为 / 横条 / 泡泡",
+      "category": "pet",
+      "builtin": true,
+      "version": "1.0.0",
+      "author": "Mio",
+      "enabled": true,
+      "added": "2026-10-25T22:46:01+08:00",
+      "bus": null,
+      "health": {
+        "ok": true,
+        "problems": []
+      }
+    },
+    {
+      "agentId": "brokenplug",
+      "name": "坏插件（演示异常角标）",
+      "version": "1.0.0",
+      "author": "Mio",
+      "entry": "plugins/brokenplug/manifest.js",
+      "panel": "plugins/brokenplug/gone-panel.js",
+      "accent": "#C0392B",
+      "description": "面板文件被删掉：健康检查应报 missing_panel",
+      "category": "tool",
+      "builtin": false,
+      "enabled": true,
+      "added": "2026-10-25T22:46:01+08:00",
+      "bus": {
+        "registered": true,
+        "enabled": true,
+        "status": "offline",
+        "phase": "idle"
+      },
+      "health": {
+        "ok": false,
+        "problems": [
+          "missing_panel"
+        ]
+      }
+    },
+    {
+      "agentId": "market",
+      "name": "插件市场",
+      "version": "1.0.0",
+      "author": "Mio",
+      "entry": "plugins/market/manifest.js",
+      "panel": "plugins/market/market-panel.js",
+      "accent": "#8B5CF6",
+      "description": "卡片网格 / 启停 / 上架 / 下架",
+      "category": "ui",
+      "builtin": false,
+      "enabled": true,
+      "added": "2026-10-25T22:46:01+08:00",
+      "bus": {
+        "registered": true,
+        "enabled": true,
+        "status": "offline",
+        "phase": "idle"
+      },
+      "health": {
+        "ok": true,
+        "problems": []
+      }
+    }
+  ]
+}

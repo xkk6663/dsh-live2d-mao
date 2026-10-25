@@ -1,0 +1,24 @@
+{
+  "ok": true,
+  "plugin": {
+    "agentId": "cloud_feiyu",
+    "name": "大肥鱼",
+    "entry": "plugins/feiyu/manifest.js",
+    "panel": "plugins/feiyu/feiyu-panel.js",
+    "accent": "#E08A9B",
+    "description": "大肥鱼屏幕观察 / 语音 / 设置 tab",
+    "category": "agent",
+    "builtin": false,
+    "version": "1.0.0",
+    "author": "Mio",
+    "enabled": true,
+    "added": "2026-10-25T22:46:01+08:00",
+    "bus": null,
+    "health": {
+      "ok": true,
+      "problems": [
+        "not_registered"
+      ]
+    }
+  }
+}
