@@ -2,18 +2,77 @@
  * 统一聚合各插件 manifest + 后端 enabled 状态，供 kernel 组件（导航/体检等）查询。
  * 插件零相互依赖：各自 manifest.js 独立声明，registry 只做聚合与查询。
  * 暴露：window.__mioPluginRegistry
+ *
+ * 插件市场（2026-10-25，见 docs/插件市场-契约.md §3.1/§3.4）：
+ *   manifest 不再只从 index.html 里写死的 <script> 来，而是由 kernel/plugin-loader.js
+ *   按清单动态注入。所以这里必须补上「反向」能力 ——
+ *     · unregister(id)  卸载时把 manifest 摘掉（否则 nav/体检一直记得它）；
+ *     · all()           返回全部 manifest（loader/reload 自检用）；
+ *     · onChanged(cb)   任何增删都广播，nav 据此立即重算（不必等 8s 轮询）。
+ *   ★ 本文件仍然**不认识任何具体插件**：新增的接口全是通用机制，不含任何 agentId 字面量。
  */
 (function () {
   if (window.__mioPluginRegistry) return
 
   var manifests = {}   // agentId -> manifest
   var enabled = {}     // agentId -> bool（以 /api/companion/agents enabled 为准）
+  var listeners = []   // onChanged 订阅者；派发载荷 {type, id}
+
+  /** 广播 manifest 增删。监听器抛错不能影响注册流程本身（nav 挂了也不能让插件注册失败）。 */
+  function emitChanged(type, id) {
+    for (var i = 0; i < listeners.length; i++) {
+      try { listeners[i]({ type: type, id: id }) } catch (e) {
+        try { console.error('[plugin-registry] onChanged 监听器抛错', e) } catch (e2) { /* ignore */ }
+      }
+    }
+  }
 
   var registry = {
     // 插件包自身调用：注册 manifest（幂等，同名覆盖）
     register: function (m) {
       if (!m || !m.agentId) return
+      var isNew = !manifests[m.agentId]
       manifests[m.agentId] = m
+      // 同名覆盖也派发：manifest 可能被重新加载（版本变了、nav 声明变了），nav 需要重算
+      emitChanged('manifest-registered', String(m.agentId))
+      return isNew
+    },
+
+    /**
+     * 卸载时摘掉 manifest（loader/plugin-loader.js 调用）。
+     * 同时清掉该 id 的 enabled 记录，避免下次同 id 注册时继承上一次的启停态。
+     * @returns {boolean} 是否真的删掉了东西（不存在时返回 false，幂等）
+     */
+    unregister: function (id) {
+      var key = String(id || '')
+      if (!key || !manifests[key]) {
+        if (key && key in enabled) delete enabled[key]
+        return false
+      }
+      delete manifests[key]
+      delete enabled[key]
+      emitChanged('manifest-removed', key)
+      return true
+    },
+
+    /** 全部 manifest 数组（只读副本语义：返回新数组，元素是 manifest 本身）。 */
+    all: function () {
+      var out = []
+      for (var id in manifests) if (manifests[id]) out.push(manifests[id])
+      return out
+    },
+
+    /**
+     * 订阅 manifest 增删。返回退订函数（loader 不需要退订，但留给测试/热重载用）。
+     * 载荷：{type: 'manifest-registered'|'manifest-removed', id}
+     */
+    onChanged: function (cb) {
+      if (typeof cb !== 'function') return function () {}
+      listeners.push(cb)
+      return function () {
+        var i = listeners.indexOf(cb)
+        if (i >= 0) listeners.splice(i, 1)
+      }
     },
 
     get: function (id) { return manifests[id] || null },
@@ -90,6 +149,17 @@
         if (m && m.health && m.health.connection === true) return id
       }
       return null
+    },
+
+    // 聚合：声明 settingsTab 的插件（插件市场需要把 tab 收回；与 plugin-nav 的收集口径一致）
+    settingsTabs: function () {
+      var out = []
+      for (var id in manifests) {
+        var m = manifests[id]
+        if (m && m.settingsTab) out.push({ agentId: id, tab: m.settingsTab })
+      }
+      out.sort(function (a, b) { return (a.tab.order || 100) - (b.tab.order || 100) })
+      return out
     },
   }
 

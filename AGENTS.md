@@ -41,6 +41,7 @@ DSH 专用 Live2D 桌宠：桌宠本体只认统一状态总线上的 12 态 pha
 |---|---|
 | 桌宠渲染端 `live2d-pet.js` / `live2d-pet.css` | `SRC-MAP-源码地图.md` §2、§6（手改压缩产物必知：block patch 跳过） |
 | 横条 `#pet-strip` / `__mioPetStrip` | `docs/M7-7.6-横条通道契约.md` + `SRC-MAP` §2.1 |
+| **插件市场 / 热插拔 / 上架下架** | ★ **`docs/插件市场-契约.md`**（清单格式 + `/api/plugin/market/*` + loader 加载协议 + 事件名；前端/后端/渲染端三方实现的**唯一出处**） |
 | 插件 `packages/dsh-live2d-mao/lib/**` | `docs/M7-协议测绘-源码级.md`（事件→phase 映射）+ `docs/DSH专用化阉割计划.md` |
 | 后端 `app/agents/dsh/**` | `dsh_adapter.py` 头部注释 + `dsh_adapter_selftest.py` |
 | 桌宠外壳 `live2d-desktop/main.js` | `docs/DSH专用化阉割记录.md` §7.4（**外壳起不来三层真根因**：ELECTRON_RUN_AS_NODE / pet-instance 锁 / 工作目录回落 Mao） |
@@ -64,6 +65,7 @@ DSH 专用 Live2D 桌宠：桌宠本体只认统一状态总线上的 12 态 pha
 | **三通道独立** | 说话气泡 / 流式横条 / 状态徽标 各自菜单开关独立显示隐藏 |
 | **横条=流式正文** | 流式正文走横条，气泡只显示工具状态（用户二次对齐） |
 | **两仓库隔离** | 本仓库 `Mao-dsh-pet` 独立；`C:\Users\xiao1\Mao` 保持 v4.2.1 原样，绝不污染 |
+| **插件清单化**（2026-10-25） | 插件不再写死在 `dist/index.html`，改由 `数据/插件市场.json` 清单驱动动态加载；**市场本身内置（builtin）** —— 它若可停用，点一下就会把"重新启用"的入口一起关掉（自我锁死）。清单格式见 `docs/插件市场-契约.md` |
 
 ---
 
@@ -83,6 +85,13 @@ cd ..\packages/dsh-live2d-mao; npm run test:fast; npm run test:e2e
 cd ..\..\私人AI日记系统\backend
 .venv\Scripts\python.exe -m app.agents.dsh.dsh_adapter_selftest
 .venv\Scripts\python.exe -m app.agents.dsh.ingest_selftest
+# 插件市场清单层（改 market / loader / catalog 后必跑）
+.venv\Scripts\python.exe -m app.kernel.plugin_market_selftest
+
+# 4. 插件契约 + 市场面板（改 plugins/** 或 kernel/** 后必跑）
+cd ..\..\私人AI日记系统\backend\probe_tmp
+node check_plugin_contract.cjs          # R7 / nav 一致性 / kernel 无 agentId 字面量
+node market_panel_harness.cjs           # 市场面板假 DOM 回归
 ```
 
 ---
@@ -93,8 +102,11 @@ cd ..\..\私人AI日记系统\backend
 |---|---|
 | `packages/dsh-live2d-mao/` | DSH 插件本体（Cordis，只推事件） |
 | `澪Agent应用/dist/live2d-pet/` | 桌宠渲染端（核心 UI + 横条 + Live2D） |
-| `澪Agent应用/dist/core-inject/` `kernel/` `plugins/` | MIO 管理窗注入层（手写，受保护） |
+| `澪Agent应用/dist/core-inject/` `kernel/` `plugins/` | MIO 管理窗注入层（手写，受保护）。**`kernel/plugin-loader.js` = 清单加载器**（按 `数据/插件市场.json` 动态插 `<script>`），`kernel/plugin-registry.js` = 注册表 |
+| `澪Agent应用/dist/plugins/market/` | **插件市场本体**（内置 builtin）：卡片网格 / 启停 / 上架 / 下架，只调 `/api/plugin/market/*` |
 | `澪Agent应用/live2d-desktop/` | Electron 主进程（窗口/穿透/托盘） |
-| `私人AI日记系统/backend/app/kernel/` | 12 态统一状态总线 |
+| `私人AI日记系统/backend/app/kernel/` | 12 态统一状态总线 + **`plugin_market_service.py`（插件清单层）** |
+| `私人AI日记系统/backend/app/routes/plugin_market.py` | 插件市场 HTTP 面（`/api/plugin/market/*`） |
+| `私人AI日记系统/数据/插件市场.json` | **插件清单（运行时数据，不进仓库）**：上架/下架写的就是它 |
 | `私人AI日记系统/backend/app/agents/dsh/` | DSH 适配器 + 边车 + 摄入端点 |
 | `docs/` | 文档（见 `docs/INDEX.md` 若有） |

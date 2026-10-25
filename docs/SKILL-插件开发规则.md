@@ -100,15 +100,32 @@ window.__mioPluginManifests['<agent_id>'] = {
 
 ### 1.3 `dist/index.html` 加两行
 
-```html
-<!-- manifest 必须晚于 kernel/plugin-registry.js -->
-<script defer src="./plugins/<name>/manifest.js?v=YYYYMMDD-x1"></script>
-<!-- panel 只要晚于 manifest 即可 -->
-<script defer src="./plugins/<name>/<name>-panel.js?v=YYYYMMDD-x1"></script>
+> ★ **2026-10-25 起这一步变了**：插件脚本不再写进 `index.html`。
+> `index.html` 只保留 `kernel/*` 与**内置**插件（`pet`）；其余插件由
+> `kernel/plugin-loader.js` 按清单动态加载。所以新插件**不要**再改 `index.html`。
+
+新插件的正确装法是**上架进清单**（三种方式任选）：
+
+```powershell
+# ① 网页上装（推荐）：设置页「插件市场」→「＋ 上架插件」→ 填 agentId / name / entry / panel
+# ② 命令行（本机）：
+Invoke-WebRequest -Uri http://127.0.0.1:8000/api/plugin/market/plugins -Method Post `
+  -ContentType application/json -Body '{"agentId":"myplug","name":"我的插件","entry":"plugins/myplug/manifest.js","panel":"plugins/myplug/myplug-panel.js"}'
+# ③ 手改清单：私人AI日记系统/数据/插件市场.json（改完点市场里的「重新扫描」）
 ```
 
-**加载顺序是硬约束**：
-`plugin-registry.js` → `plugins/*/manifest.js` → `kernel/plugin-nav.js` → `plugins/*/*-panel.js`
+`entry` / `panel` 都是**相对 `澪Agent应用/dist/` 的路径**，且必须落在 `dist/plugins/` 之内
+（后端用 realpath 校验，`../` 与软链逃逸一律 400）。
+
+### 1.2 加载顺序（改由 loader 保证）
+
+```
+plugin-registry.js → plugin-loader.js → plugins/pet/manifest.js(内置，index.html 直引)
+  → …loader 异步加载清单内插件… → kernel/plugin-nav.js（MutationObserver + 轮询自愈）
+```
+
+loader 每次 load/reload 完成后会主动调 `__mioPluginNav.refresh()`，
+所以插件**晚于** `plugin-nav.js` 到达也能正确挂上导航与设置 tab。
 
 ---
 
@@ -165,11 +182,15 @@ kernel 的行为：
 
 | 症状 | 最可能的原因 |
 |---|---|
-| **设置页完全没有我的 tab** | ① 导出名 ≠ `manifest.settingsTab.panel`（R7）；② panel 对象没有 `renderInto`；③ panel 脚本在 `defer` 里但 kernel 先跑了（轮询/500ms 重试应自动补上）|
+| **插件装了但界面什么都没有** | ① `agentId` 与后端 `/api/companion/agents` 的 `agent_id` 不一致（R1，大肥鱼经典坑）；② **清单里没有它** —— 检查 `GET /api/plugin/market/catalog` 里有没有这条；③ `health.ok=false`（文件缺失 / 路径越界 / 重名），loader 会整个跳过 |
+| **`health.problems` 里有 `not_registered`** | 这不是故障：表示该插件还没注册进总线（适配器未跑 / 没占用总线身份）。**它不阻断加载**，`health.ok` 仍为 true。纯粹是提示 |
+| **报"entry 与插件 X 共用同一个 manifest 文件"** | 清单里两个不同 `agentId` 指向了同一个 `entry`。脚本只会注册它自己那个 id，第二个永远加载不出来 —— 给新插件写自己的 manifest |
+| **设置页完全没有我的 tab** | ① 导出名 ≠ `manifest.settingsTab.panel`（R7）；② panel 对象没有 `renderInto`；③ panel 脚本 404（后端 SPA 兜底返回 index.html → MIME 错）|
 | 设置页 tab 跑到最左边了 | 用了 `insertBefore(firstChild)` 而不是 `appendChild`（R8）|
 | tab 有、点了空白 | `renderInto` 抛异常了；打开控制台看报错 |
 | 左侧导航没有入口 | `manifest.nav.keywords` 与按钮文本对不上，或 agentId 不对导致被判定为 disabled |
 | 入口偶尔消失 | 没做 R4 的自愈（Vue 重渲染删掉了节点）|
+| **停用后整个界面白了** | 2026-10-25 已修：`reload()` 曾"先卸载全部再拉清单"，清单请求失败时界面已空。现在改成**先取清单、成功才动手**。若再出现，查 `__mioPluginLoader.status().lastError` |
 | 改了设置没生效 | 提交的键不在后端 `CompanionSettings` 白名单里（被 pydantic 静默丢弃）|
 | 调接口 404 | 端点名是凭想象写的 —— **先 `grep @router` 确认真实路径再写**（踩过：`/control` 实际是 `/start`/`/stop`）|
 | 两个插件互相影响 | 违反 R2/R3：读了别人的接口或写了别人的键 |
@@ -209,11 +230,32 @@ npm run guard          # 必须 exit 0
 
 ## 7. 现有插件清单
 
-| 插件 | 目录 | 类型 | 提供能力 | 强调色 |
-|---|---|---|---|---|
-| 桌宠 `pet` | `plugins/pet/` | **内置**（不可热插拔）| 设置页「桌宠」本体面板（**接管**原生同名 tab）：形象/外观/交互 + 与托盘右键菜单同源的操作 | `#4C8798` 青 |
-| 大肥鱼 `feiyu` | `plugins/feiyu/` | 可热插拔 | **仅**设置页「大肥鱼」tab（观察/提示词/语音/成本）| `#E08A9B` 鲑鱼粉 |
-| DSH `dsh` | `plugins/dsh/` | 可热插拔 | 左侧导航「DSH」实时状态页、体检条目 | `#4F6BED` 靛蓝 |
+> ⚠ **2026-10-25 起，插件不再写死在 `dist/index.html`。**
+> 清单（`私人AI日记系统/数据/插件市场.json`）才是"装了什么"的唯一来源，
+> `kernel/plugin-loader.js` 按清单里的 `entry` 动态插 `<script>`。
+> 完整格式与接口见 **`docs/插件市场-契约.md`**。
+
+| 插件 | 目录 | agentId | 类型 | 提供能力 | 强调色 |
+|---|---|---|---|---|---|
+| 桌宠 `pet` | `plugins/pet/` | `pet` | **内置**（不可停用/下架）| 设置页「桌宠」本体面板（**接管**原生同名 tab）| `#4C8798` 青 |
+| 大肥鱼 `feiyu` | `plugins/feiyu/` | ★ **`cloud_feiyu`** | 可热插拔 | **仅**设置页「大肥鱼」tab | `#E08A9B` 鲑鱼粉 |
+| DSH `dsh` | `plugins/dsh/` | `dsh` | 可热插拔 | 左侧导航「DSH」实时状态页、体检条目 | `#4F6BED` 靛蓝 |
+| **插件市场 `market`** | `plugins/market/` | `market` | **内置**（不可停用/下架）| 左侧「插件市场」页 + 设置页 tab：卡片网格 / 启停 / 上架 / 下架 / 清单诊断 | `#8B5CF6` 紫 |
+
+### 为什么 `market` 必须是内置
+
+市场是**所有插件的管理入口**。若它可以被停用或下架：点一下"停用" → loader 立刻卸掉它的
+manifest 与面板 → 所有插件的启停/上架/下架入口**全部消失**，而"重新启用"这个动作恰好也只在
+市场里 → 除非手改 `数据/插件市场.json` 或重装，否则永远回不来。这叫**把自己锁在门外**，
+与 `pet` 内置的裁决同一条原则：「停用它等于把宿主拆了」的插件，一律 `builtin: true`。
+
+市场内置**只**影响"启停/下架"两个按钮（渲染成灰态），它照样作为一张卡片参与市场列表。
+
+### 目录名 ≠ agentId（踩过的坑）
+
+`feiyu` 的目录叫 `plugins/feiyu/`，但它的 **agentId 是 `cloud_feiyu`**（必须与
+`/api/companion/agents` 的 `agent_id` 一致，否则启停联动永远对不上）。
+所以：**`entry`/`panel` 用目录名拼路径，`agentId` 取 manifest 里声明的值，两者分开写、不要互相推**。
 
 ### 关于「左侧功能页」的现状
 

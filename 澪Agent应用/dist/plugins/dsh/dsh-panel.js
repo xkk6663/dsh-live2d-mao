@@ -420,13 +420,57 @@
   //
   // 修法：监听 body 的 childList 变化，发现 nav 里没有 .dsh-nav 就补回。
   // 用微任务去抖 + 重入保护，避免自己的 append 又触发 observer 造成死循环。
+  //
+  // ★★ 2026-10-25 补第二个条件（真机实测暴露）：**自愈必须知道自己已经被卸载了**。
+  //   loader 停用插件时会主动摘掉 nav 按钮，但这段自愈看到"nav 里没有 .dsh-nav"
+  //   就当成"Vue 把它删了"，立刻又补一个回来 —— 表现为「插件停用了，左侧 DSH 入口还在」，
+  //   而且会跟 loader 打乒乓（拔了补、补了拔），只是它以 2.5s 的间隔慢慢补，用户看到的是"关不掉"。
+  //   所以先看 registry：这个 id 已经不在注册表里 = 插件被卸载了，自愈必须停手。
+  var disposed = false
+  function isDisposed() {
+    return disposed
+  }
+
+  // 供 loader 卸载时调用：彻底停止自愈（否则轮询会一直把它加回来）
+  function dispose() {
+    disposed = true
+    try {
+      var nav = $q('nav')
+      var b = nav && nav.querySelector('.dsh-nav')
+      if (b && b.parentNode) b.parentNode.removeChild(b)
+    } catch (e) { /* ignore */ }
+    if (pollTimer) { window.clearInterval(pollTimer); pollTimer = null }
+    try { if (mo) mo.disconnect() } catch (e) { /* ignore */ }
+  }
+
+  /** 复活：从停用恢复启用时由 loader 调用（脚本幂等守卫不会重跑）。 */
+  function revive() {
+    if (!disposed) { ensureNav(); return }
+    disposed = false
+    if (typeof MutationObserver === 'function') {
+      try {
+        mo = new MutationObserver(scheduleRepair)
+        mo.observe(document.body, { childList: true, subtree: true })
+      } catch (e) { /* ignore */ }
+    }
+    if (!pollTimer) {
+      pollTimer = window.setInterval(function () {
+        if (isDisposed()) { window.clearInterval(pollTimer); pollTimer = null; return }
+        var nav = $q('nav')
+        if (nav && !nav.querySelector('.dsh-nav')) scheduleRepair()
+      }, 2500)
+    }
+    ensureNav()
+  }
+
   var repairScheduled = false
   function scheduleRepair() {
-    if (repairScheduled) return
+    if (repairScheduled || isDisposed()) return
     repairScheduled = true
     Promise.resolve().then(function () {
       repairScheduled = false
       try {
+        if (isDisposed()) return
         var nav = $q('nav')
         if (!nav) return
         // 已有就什么都不做（防抖的核心：append 自己也会触发 mutation）
@@ -435,17 +479,20 @@
       } catch (e) { /* 忽略：自愈失败不应影响页面 */ }
     })
   }
+  var mo = null
   if (typeof MutationObserver === 'function') {
     try {
-      new MutationObserver(scheduleRepair).observe(document.body, { childList: true, subtree: true })
+      mo = new MutationObserver(scheduleRepair)
+      mo.observe(document.body, { childList: true, subtree: true })
     } catch (e) { /* 忽略 */ }
   }
   // 兜底轮询：极少数情况下 MutationObserver 观察不到（或 body 被整体替换）
-  window.setInterval(function () {
+  var pollTimer = window.setInterval(function () {
+    if (isDisposed()) { window.clearInterval(pollTimer); pollTimer = null; return }
     var nav = $q('nav')
     if (nav && !nav.querySelector('.dsh-nav')) scheduleRepair()
   }, 2500)
 
   // 供其它脚本（如桌宠气泡）查询本插件强调色，保证配色口径一致
-  window.__mioDshPanel = { accent: ACCENT, show: showPanel, hide: hidePanel, refresh: refresh, ensureNav: ensureNav }
+  window.__mioDshPanel = { accent: ACCENT, show: showPanel, hide: hidePanel, refresh: refresh, ensureNav: ensureNav, dispose: dispose, revive: revive }
 })()

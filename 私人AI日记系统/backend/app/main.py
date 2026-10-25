@@ -22,6 +22,8 @@ from .screen import screen_observation_service
 from .kernel import agent_bus_service, agent_task_service
 from .agents.dsh import dsh_adapter
 from .agents.dsh import routes as dsh_plugin_routes
+# 插件市场清单层（docs/插件市场-契约.md）：插件不再是 index.html 里写死的 script
+from .routes import plugin_market as plugin_market_routes
 # DSH 专用化：octop / xiaozhi 插件已整体移除（本仓只保留 DSH 加强插件）
 from . import model_runtime
 from .runtime_identity import runtime_identity
@@ -261,6 +263,7 @@ def create_app() -> FastAPI:
     # 插件包自带的 HTTP 面（装配职责留在 kernel/main，插件自己不抢装配权）。
     # 每个插件包对外只暴露自己的前缀，互不 import。
     app.include_router(dsh_plugin_routes.router)
+    app.include_router(plugin_market_routes.router)
     # 云端大肥鱼 MCP 工具端点
     from .cloud_feiyu.mcp_routes import router as feiyu_mcp_router
     app.include_router(feiyu_mcp_router)

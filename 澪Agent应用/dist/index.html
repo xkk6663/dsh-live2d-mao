@@ -21,15 +21,27 @@
          其余手写注入 <script> 标签与 ?v= 版本参数【原样保留，勿让 vite 覆盖】。
          改了手写注入层文件 → 手动升它自己的 ?v=。
          ================================================================ -->
+    <!-- ================================================================
+         ★ 插件市场（2026-10-25，契约 docs/插件市场-契约.md §3.1）
+         可热插拔插件（dsh / feiyu / 将来的 market）**不再写死在本文件里**：
+         由 kernel/plugin-loader.js 按 GET /api/plugin/market/catalog 的 entry/panel
+         动态插 <script data-mio-plugin="...">。?v= 取清单里的 version，
+         所以"改插件不用改 index.html"，启停/上架/下架也不必重启。
+         本文件只保留三类东西：
+           ① 宿主本体 builtin 插件（pet）的 manifest —— 宿主必须无条件在场；
+           ② core-inject/** 宿主注入层；
+           ③ kernel/** 微内核（registry → loader → nav）。
+         ================================================================ -->
     <!-- 宿主注入（core-inject）：拦截原版已弃用 /api/agent/* 端点（防 404 / Not Found 提示条），必须最先同步执行 -->
     <script src="./core-inject/agent-kill-inject.js?v=20261013c"></script>
     <!-- 前端微内核：插件注册表（先于 manifest 注册与 plugin-nav 查询） -->
-    <script src="./kernel/plugin-registry.js?v=20261025-builtin"></script>
-    <!-- 插件 manifest（注册进 registry；导航/观察tab/体检条目由此聚合）
-         DSH 专用化：xiaozhi / octop 的 manifest 已移除，只留 dsh + feiyu -->
-    <script defer src="./plugins/dsh/manifest.js?v=20261015-p3"></script>
-    <script defer src="./plugins/feiyu/manifest.js?v=20261025-hostmode"></script>
-    <!-- 桌宠本体：内置插件（builtin=true，不可热插拔 —— 它就是宿主本身） -->
+    <script src="./kernel/plugin-registry.js?v=20261025-market"></script>
+    <!-- 前端微内核：插件动态加载器（按清单插 script；必须紧跟 registry、早于 plugin-nav）
+         它异步抓清单，插件晚于 plugin-nav 落地属正常：nav 有 MutationObserver + 8s 轮询自愈，
+         loader 每次 load/unload 完成后还会主动调 __mioPluginNav.refresh()。 -->
+    <script src="./kernel/plugin-loader.js?v=20261026-hostnav"></script>
+    <!-- 桌宠本体：内置插件（builtin=true，不可热插拔 —— 它就是宿主本身）
+         宿主本体不依赖后端清单，必须无条件加载，所以仍写在此处 -->
     <script defer src="./plugins/pet/manifest.js?v=20261025-pet1"></script>
     <!-- 宿主注入：设置页收敛（隐藏原版已弃用的设置项/分类，只留桌宠分类） -->
     <script src="./core-inject/settings-clean-inject.js?v=20261013f"></script>
@@ -37,13 +49,6 @@
     <script src="./core-inject/settings-panel-inject.js?v=20261025-voicegone"></script>
     <script type="module" crossorigin src="./assets/index-CoS27ncO.js?v=20261016-m0"></script>
     <link rel="stylesheet" crossorigin href="./assets/index-CYmmBVuR.css?v=20261015-petfix1">
-    <!-- DSH 插件：实时工作状态面板（左侧导航「DSH」页；只读本插件自己的 /api/plugin/dsh/*）
-         DSH 专用化：小智插件的 chat-inject（图片提问）与 mcp-panel（MCP 工具页）已移除。
-         图片提问/视觉能力属小智官方云视觉，随小智插件一并阉割。 -->
-    <script defer src="./plugins/dsh/dsh-panel.js?v=20261015-dsh1"></script>
-    <!-- 大肥鱼插件：设置页「大肥鱼」tab + 左侧导航入口（本插件自带，只读自己的接口）
-         插件零相互依赖：不引用 dsh / 泡泡 / 通用设置面板的任何资源。 -->
-    <script defer src="./plugins/feiyu/feiyu-panel.js?v=20261025-theme"></script>
     <!-- 桌宠插件：设置页「桌宠」本体面板（形象/外观/交互 + 右键菜单同源操作）
          内置插件，恒可见；不提供启停入口。 -->
     <script defer src="./plugins/pet/pet-panel.js?v=20261025-theme"></script>
@@ -53,7 +58,7 @@
     <script defer src="./core-inject/rail-switch-inject.js?v=20261025-ondemand"></script>
     <!-- 前端微内核：左侧导航插件化（固定导航 Agent→桌宠→设置 前置，插件导航按 manifest+enabled 动态显隐） -->
     <script defer src="./kernel/plugin-nav.js?v=20261025-fix4"></script>
-    <!-- 宿主注入：桌宠体检增强（接管 CompanionPage「体检」面板，插件条目按 manifest 聚合：小智/DSH/Octop + 本体自检） -->
+    <!-- 宿主注入：桌宠体检增强（接管 CompanionPage「体检」面板，插件条目按 manifest 聚合 + 本体自检） -->
     <script defer src="./core-inject/health-panel-inject.js?v=20261016-health"></script>
     <!-- 小智对话记录已内建于原版 ChatPage（对话页改造版），不再使用独立覆盖面板 -->
   </head>
