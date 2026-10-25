@@ -262,12 +262,33 @@ def default_sessions_root() -> Path:
 
 
 def default_workspace() -> str:
-    """默认关注的工作区；留空 = 不限定，由边车选"最近活跃的主会话"。
+    r"""默认关注的工作区。
 
-    桌宠反映的是"DSH 整体在干什么"，因此不硬绑某个目录更稳妥：DSH 只跑一个实例，
-    换工作区时会话目录随之变化，边车会自动跟到新的活跃主会话。
+    ★★ 2026-10-25 用户实拍「换工作区后桌宠跟错会话」：
+       原来这里恒返回 ""（不限定），设计意图是"DSH 只跑一个实例，
+       边车会自动跟到最近活跃的主会话"。但实测发现这个假设不成立 ——
+       本机同时存在多个工作区的会话（Mao / Mao-dsh-pet / esp32 / default-workspace），
+       而**另一个工作区的会话可能比当前会话还新**（用户在两处都动过）。
+       于是边车的 inWorkspace 判据因为拿到空串而永远 false，
+       只能纯靠 touchedMs 排序 → 被别的工作区的更新会话带走
+       （实测：桌宠显示 Mao 那个工作区的状态，
+        而用户正在用的是 Mao-dsh-pet）。
+
+       新策略：**默认返回本进程的工作区根目录**（后端就跑在用户当前项目里，
+       这是"用户此刻在哪干活"最可靠的信号）。用户在 dsh_config.json 里
+       显式配 workspace 时仍以配置为准；想恢复"不限定"就显式写 workspace: ""。
     """
-    return ""
+    import os
+
+    env = os.getenv("MIO_DSH_WORKSPACE", "").strip()
+    if env:
+        return env
+    # 本文件位于 <repo>/私人AI日记系统/backend/app/agents/dsh/
+    # parents[0]=dsh [1]=agents [2]=app [3]=backend [4]=私人AI日记系统 [5]=<repo>
+    try:
+        return str(Path(__file__).resolve().parents[5])
+    except (IndexError, OSError):
+        return ""
 
 
 def _autodetect_enabled(sessions_root: str) -> bool:
