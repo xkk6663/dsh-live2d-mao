@@ -251,6 +251,63 @@ function readHeader(logPath) {
   }
 }
 
+/**
+ * 轻量探测：这个会话**当前是否正在 turn 中**。
+ *
+ * 只读日志尾部 PROBE_BYTES 字节，找最后一个 turn/start 与 turn/end，
+ * 若最后出现的是 turn/start → 正在跑；turn/end → 已结束。
+ *
+ * ★★ 为什么需要它（2026-10-25 用户反复反馈后定位到的真问题）：
+ *   pickTarget 原来纯按 mtime 排。"代理人自己的会话"每几秒就写一次日志
+ *   （每次工具调用都追加），于是它**永远比另一个窗口的会话新**，
+ *   另一个窗口的会话哪怕真的在跑任务也抢不过来。
+ *   用户要的是「识别哪个在跑，自动跟随」——判据必须是**语义上的在跑**，
+ *   而不是"谁的文件被摸得更勤"。
+ */
+function probeInTurn(logPath) {
+  let fd
+  try {
+    const size = fs.statSync(logPath).size
+    // 尾部最多回看 256KB：正常一轮的事件量远小于这个尺度，
+    // 够覆盖到最近的 turn 边界，又不至于每次都把 7MB 日志读完。
+    const PROBE_BYTES = 256 * 1024
+    const start = Math.max(0, size - PROBE_BYTES)
+    fd = fs.openSync(logPath, 'r')
+    const buf = Buffer.alloc(size - start)
+    fs.readSync(fd, buf, 0, buf.length, start)
+    const { frames } = scanZstdFrames(buf)
+    let sawStart = false
+    let sawEnd = false
+    let turnNo = null
+    for (const fr of frames) {
+      let lines
+      try {
+        lines = parseLines(decodeFrame(buf.subarray(fr.start, fr.end)))
+      } catch (_) {
+        continue
+      }
+      for (const ev of lines) {
+        if (!ev || !ev.type) continue
+        if (ev.type === 'turn/start') {
+          sawStart = true
+          sawEnd = false
+          if (Number.isInteger(ev.turn)) turnNo = ev.turn
+        } else if (ev.type === 'turn/end') {
+          sawEnd = true
+          sawStart = false
+        }
+      }
+    }
+    return { inTurn: sawStart && !sawEnd, turn: turnNo }
+  } catch (_) {
+    return { inTurn: false, turn: null }
+  } finally {
+    if (fd !== undefined) {
+      try { fs.closeSync(fd) } catch (_) {}
+    }
+  }
+}
+
 /** 目录 mtime（失败返回 0，绝不让它影响主流程）。 */
 function dirMtimeMs(dir) {
   try {
@@ -306,6 +363,12 @@ function listCandidates() {
       //   自己所在的目录**（backend/app/agents/dsh），拿它跟目标工作区比必然不等，
       //   而且是个毫无意义的路径。空就当作"没有工作区信息"，inWorkspace=false。
       const cwdResolved = cwd ? path.resolve(cwd).toLowerCase() : ''
+      const touchedMs = Math.max(st.mtimeMs, dirMtimeMs(dir))
+      // ★ 2026-10-25：只有"最近被碰过"的候选才值得探测 turn 状态
+      //   （探测要读尾部 256KB，对全部 45 个历史会话都读会拖慢每轮轮询）。
+      //   超过 ACTIVE_WINDOW 没动静的会话不可能在跑任务，直接判 false。
+      const freshEnough = Date.now() - touchedMs <= ACTIVE_WINDOW_MS
+      const turnInfo = freshEnough ? probeInTurn(logPath) : { inTurn: false, turn: null }
       out.push({
         logPath,
         sessionId: s.name,
@@ -319,16 +382,27 @@ function listCandidates() {
         //   日志文件在 turn 中途会持续追加（mtime 一直新），turn 结束后就静止；
         //   而 DSH 新建会话 / 写附属文件时会更新目录 mtime。
         //   两者取最大，作为"这个会话最近被碰过"的时间。
-        touchedMs: Math.max(st.mtimeMs, dirMtimeMs(dir)),
+        touchedMs,
+        // ★ 2026-10-25：是否**真的正在跑任务**（语义判据，见 probeInTurn 注释）
+        inTurn: turnInfo.inTurn,
+        turnNo: turnInfo.turn,
       })
     }
   }
-  // 排序优先级：本工作区 > 主会话(depth=0) > 最近被碰过
+  // 排序优先级：**正在跑任务** > 本工作区 > 主会话(depth=0) > 最近被碰过
+  //
+  // ★ 2026-10-25 用户裁决：「识别哪个在跑，自动跟随」。
+  //   把 inTurn 提到第一位是本轮的核心修复：
+  //   代理自己的会话每几秒就写一次日志（每次工具调用），纯按 mtime 排序时
+  //   它**永远**比另一个窗口的会话新 → 另一个窗口哪怕真在跑任务也抢不过来。
+  //   现在只要对方 inTurn=true 而我们 false，对方直接排第一，
+  //   pickTarget 的 cands[0] 就是它。
   // ★ 2026-10-24：末位判据从"日志 mtime"改成 touchedMs（日志与目录取最大）。
   //   用户切到另一个 GUI 工作区时，DSH 会在那边写日志/建文件；
   //   只比日志 mtime 时，若旧工作区上一轮的日志刚写完、新工作区那条才几个字节，
   //   旧的可能仍然更"新"，于是永远排第一 → 边车不切 → 桌宠卡在旧状态。
   out.sort((a, b) => {
+    if (a.inTurn !== b.inTurn) return a.inTurn ? -1 : 1
     if (a.inWorkspace !== b.inWorkspace) return a.inWorkspace ? -1 : 1
     if (a.delegationDepth !== b.delegationDepth) return a.delegationDepth - b.delegationDepth
     return b.touchedMs - a.touchedMs
@@ -940,6 +1014,15 @@ function pickTarget() {
   //   保留原来的 advantage 判据作为第三条，三条并行，行为只放宽不收紧。
   const now = Date.now()
   const bestFresh = now - best.touchedMs <= ACTIVE_WINDOW_MS
+  // ★★ 2026-10-25 用户裁决：「识别哪个在跑，自动跟随」。
+  //   这是**最高优先级**的判据，必须排在所有 mtime 判据之前：
+  //   best 真的在跑任务、而我们当前跟的已经 turn/end →
+  //   立刻改附，不管两边 mtime 谁新谁旧。
+  //   （代理自己的会话每几秒写一次日志，纯比 mtime 永远赢，
+  //     这正是"另一个窗口在跑却切不过去"的根因。）
+  if (best.inTurn && !current.inTurn) return best
+  // 反向保护：当前会话正在跑、新候选没在跑 → 守住当前，别被"刚写了一下"的会话带走
+  if (current.inTurn && !best.inTurn) return current
   const currentFresh = now - current.touchedMs <= ACTIVE_WINDOW_MS
   const currentStale = now - current.touchedMs >= STALE_WINDOW_MS
   const betterScope = best.inWorkspace && !current.inWorkspace
