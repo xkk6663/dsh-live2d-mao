@@ -264,31 +264,32 @@ def default_sessions_root() -> Path:
 def default_workspace() -> str:
     r"""默认关注的工作区。
 
-    ★★ 2026-10-25 用户实拍「换工作区后桌宠跟错会话」：
-       原来这里恒返回 ""（不限定），设计意图是"DSH 只跑一个实例，
-       边车会自动跟到最近活跃的主会话"。但实测发现这个假设不成立 ——
-       本机同时存在多个工作区的会话（Mao / Mao-dsh-pet / esp32 / default-workspace），
-       而**另一个工作区的会话可能比当前会话还新**（用户在两处都动过）。
-       于是边车的 inWorkspace 判据因为拿到空串而永远 false，
-       只能纯靠 touchedMs 排序 → 被别的工作区的更新会话带走
-       （实测：桌宠显示 Mao 那个工作区的状态，
-        而用户正在用的是 Mao-dsh-pet）。
+    ★★ 2026-10-25 两次修订的最终结论（用户两次反馈推动了它）：
 
-       新策略：**默认返回本进程的工作区根目录**（后端就跑在用户当前项目里，
-       这是"用户此刻在哪干活"最可靠的信号）。用户在 dsh_config.json 里
-       显式配 workspace 时仍以配置为准；想恢复"不限定"就显式写 workspace: ""。
+    第一次（用户：换工作区后跟错会话）：
+        原来这里恒返回 ""，边车 inWorkspace 恒 false → 纯 mtime 排序 →
+        被**其它工作区更新的会话**带走。当时我改成"钉死本仓库根"，
+        确实修好了跟错，但引入了新问题 ↓
+
+    第二次（用户：另一个会话在跑，却只识别得到你这一个）：
+        钉死 workspace 后，边车**只看本工作区**。用户同时在
+        C:\Users\xiao1\Mao 开另一个 DSH 窗口跑任务时，桌宠完全感知不到 ——
+        而 DSH 允许开多个窗口，这是常态用法。
+
+    最终策略：**不限定工作区**（返回空串），把"别被陈旧会话带走"的责任
+        交给边车的时间窗判据（dsh_log_stream.mjs 的 pickTarget）：
+          · ACTIVE_WINDOW 内被写入 = 正在工作 → 优先跟随；
+          · 多个都活跃时取**最近被写入**的（用户刚操作过的那个）；
+          · 都不活跃就保持当前，不乱跳。
+        这符合用户原话「让她自己寻找正在工作的会话」——
+        不管那个会话在哪个工作区。
+
+    想强制锁定某个目录时，在 dsh_config.json 显式配 workspace，
+    或设 MIO_DSH_WORKSPACE 环境变量；适配器会原样透传。
     """
     import os
 
-    env = os.getenv("MIO_DSH_WORKSPACE", "").strip()
-    if env:
-        return env
-    # 本文件位于 <repo>/私人AI日记系统/backend/app/agents/dsh/
-    # parents[0]=dsh [1]=agents [2]=app [3]=backend [4]=私人AI日记系统 [5]=<repo>
-    try:
-        return str(Path(__file__).resolve().parents[5])
-    except (IndexError, OSError):
-        return ""
+    return os.getenv("MIO_DSH_WORKSPACE", "").strip()
 
 
 def _autodetect_enabled(sessions_root: str) -> bool:

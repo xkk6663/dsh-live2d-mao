@@ -650,17 +650,19 @@ def test_helpers() -> None:
     print("\n[4] 工具函数 / 配置")
     check("默认 sessions_root 指向 .dsh/sessions",
           "sessions" in str(dsh.default_sessions_root()))
-    # ★ 2026-10-25 行为变更（用户实拍「换工作区后跟错会话」）：
-    #   默认 workspace 从「空串 = 不限定」改成「本仓库根目录」。
-    #   空串会让边车的 inWorkspace 判据永远 false，只能纯靠 mtime 排序，
-    #   于是被**其它工作区更新的会话**带走（实测：显示成 Mao 那个工作区的状态，
-    #   而用户正在用的是 Mao-dsh-pet）。
+    # ★ 2026-10-25 最终行为（两轮用户反馈后的定论）：
+    #   默认 workspace = 空串 = **不限定工作区**，让边车"自己寻找正在工作的会话"。
+    #
+    #   第一轮曾改成"钉死本仓库根"，理由是"别的区更新的会话会把它带走"；
+    #   但用户随即反馈「另一个会话在跑，却只识别得到你这一个」——
+    #   钉死之后多窗口场景完全失效（DSH 允许同时开多个工作区窗口）。
+    #
+    #   真正的解法在边车：pickTarget 已有多会话切换判据，
+    #   实测两个工作区会话交替活跃时能正确 switch 来 switch 去
+    #   （见 probe_tmp/verify_multi_session.py）。这里只需保证默认不误锁。
     _ws = dsh.default_workspace()
-    check("默认 workspace 非空（空串会导致 inWorkspace 恒 false）",
-          _ws != "",
-          f"got={_ws!r}")
-    check("默认 workspace 指向真实存在的目录（锁定本工作区）",
-          bool(_ws) and os.path.isdir(_ws),
+    check("默认 workspace 为空（不限定，可跟随所有工作区的活跃会话）",
+          _ws == "",
           f"got={_ws!r}")
 
     paths = dsh.config_search_paths()
