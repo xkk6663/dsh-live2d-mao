@@ -101,6 +101,8 @@ class AgentState:
         "phase", "state", "meta", "seq", "capabilities", "accent",
         "last_phase_at", "last_seen", "last_heartbeat_at",
         "inbox", "active", "error",
+        # 按需服务型标记（见 __init__ 注释）
+        "on_demand",
     )
 
     def __init__(
@@ -111,6 +113,7 @@ class AgentState:
         capabilities: dict[str, Any] | None = None,
         enabled: bool = True,
         accent: str = "",
+        on_demand: bool = False,
     ) -> None:
         self.agent_id = agent_id
         self.name = name
@@ -131,6 +134,12 @@ class AgentState:
         self.error = ""
         # 插件自声明的身份色（空 = 未声明，渲染端回落默认配色）
         self.accent = accent
+        # ★ 2026-10-25：按需服务型 Agent（如云端大肥鱼）。
+        #   它没有常驻连接、不发心跳，只在被调用时才连云端；
+        #   用通用的"心跳超时判离线"会把它永久标成 offline
+        #   （用户实拍：状态灯一直灰着，但其实云端完全可用）。
+        #   这类 Agent 的状态由"最近一次调用是否成功"决定，不由心跳决定。
+        self.on_demand = on_demand
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -146,6 +155,7 @@ class AgentState:
             "capabilities": dict(self.capabilities),
             "accent": self.accent,
             "active": self.active,
+            "on_demand": self.on_demand,
             "last_seen": datetime.fromtimestamp(time.time()).astimezone().isoformat(timespec="seconds"),
             "error": self.error[:300],
         }
@@ -208,6 +218,7 @@ class AgentBus:
         capabilities: dict[str, Any] | None = None,
         enabled: bool | None = None,
         accent: str = "",
+        on_demand: bool = False,
     ) -> AgentState:
         """注册 Agent。
 
@@ -215,6 +226,9 @@ class AgentBus:
         并随 ``agent_phase`` / ``agent_bubble`` 透传给渲染端——这样桌宠窗口
         无需加载管理页的插件注册表也能拿到色值（两个窗口是不同 HTML 页面，
         早期实现因此拿不到色值，气泡不变蓝）。
+
+        ``on_demand=True`` 表示按需服务型 Agent（云端大肥鱼）：无常驻连接、
+        不发心跳，状态由调用结果驱动，不参与心跳超时判离线。
         """
         with self._lock:
             existing = self._agents.get(agent_id)
@@ -227,6 +241,8 @@ class AgentBus:
                     existing.enabled = enabled
                 if accent:
                     existing.accent = accent
+                if on_demand:
+                    existing.on_demand = True
                 return existing
             state = AgentState(
                 agent_id=agent_id,
@@ -235,6 +251,7 @@ class AgentBus:
                 capabilities=capabilities,
                 enabled=True if enabled is None else enabled,
                 accent=accent,
+                on_demand=on_demand,
             )
             self._agents[agent_id] = state
             return state
@@ -297,6 +314,35 @@ class AgentBus:
             agent.last_seen = now
             if agent.status == "offline":
                 agent.status = "online"
+
+    def mark_online(self, agent_id: str, *, error: str = "") -> None:
+        """按需服务型 Agent 的"调用成功"回执：把状态置为 online。
+
+        与 heartbeat() 的区别：**不刷新 last_heartbeat_at**。
+        按需型 Agent 不参与心跳超时判定（见 _scan_heartbeats），
+        刷心跳字段没有意义，反而会让状态含义变混。
+        """
+        agent = self.get(agent_id)
+        if agent is None:
+            return
+        with self._lock:
+            changed = agent.status != "online" or (not error and agent.error)
+            agent.status = "online"
+            agent.error = error
+            agent.last_seen = time.monotonic()
+        if changed:
+            self._broadcast_snapshot()
+
+    def mark_error(self, agent_id: str, message: str) -> None:
+        """按需服务型 Agent 的"调用失败"回执：把状态置为 error 并记下原因。"""
+        agent = self.get(agent_id)
+        if agent is None:
+            return
+        with self._lock:
+            agent.status = "error"
+            agent.error = str(message or "")[:300]
+            agent.last_seen = time.monotonic()
+        self._broadcast_snapshot()
 
     # ------------------------------------------------------------------
     # 核心：事件注入
@@ -545,6 +591,11 @@ class AgentBus:
             for agent in self._agents.values():
                 if not agent.enabled:
                     continue
+                # ★ 按需服务型 Agent（云端大肥鱼）不参与心跳超时判定：
+                #   它没有常驻连接，从来不发心跳，用它判离线必然恒为 offline。
+                #   它的状态由调用结果驱动（成功 → online，失败 → error）。
+                if agent.on_demand:
+                    continue
                 if agent.last_heartbeat_at and (now - agent.last_heartbeat_at) * 1000 > HEARTBEAT_TIMEOUT_MS:
                     if agent.status not in {"offline", "error"}:
                         agent.status = "offline"
@@ -611,9 +662,17 @@ def register(
     capabilities: dict[str, Any] | None = None,
     enabled: bool | None = None,
     accent: str = "",
+    on_demand: bool = False,
 ) -> AgentState:
-    """注册 Agent。``accent`` = 插件自己声明的身份色（见 ``AgentBus.register``）。"""
-    return bus.register(agent_id, name, adapter, capabilities, enabled=enabled, accent=accent)
+    """注册 Agent。
+
+    ``accent`` = 插件自己声明的身份色（见 ``AgentBus.register``）。
+    ``on_demand`` = 按需服务型（云端大肥鱼）：无常驻连接、不参与心跳超时判离线。
+    """
+    return bus.register(
+        agent_id, name, adapter, capabilities,
+        enabled=enabled, accent=accent, on_demand=on_demand,
+    )
 
 
 def unregister(agent_id: str) -> None:
@@ -626,6 +685,16 @@ def emit(agent_id: str, phase: str, state: dict[str, Any] | None = None, meta: d
 
 def heartbeat(agent_id: str) -> None:
     bus.heartbeat(agent_id)
+
+
+def mark_online(agent_id: str, *, error: str = "") -> None:
+    """按需服务型 Agent 调用成功 → 标 online（见 AgentBus.mark_online）。"""
+    bus.mark_online(agent_id, error=error)
+
+
+def mark_error(agent_id: str, message: str) -> None:
+    """按需服务型 Agent 调用失败 → 标 error 并记原因。"""
+    bus.mark_error(agent_id, message)
 
 
 def announce(agent_id: str, text: str, *, duration_ms: int = 0) -> bool:

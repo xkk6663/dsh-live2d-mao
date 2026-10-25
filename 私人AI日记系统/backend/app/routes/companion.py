@@ -73,8 +73,13 @@ def _register_feiyu_agent() -> None:
             FEIYU_AGENT_ID,
             FEIYU_AGENT_NAME,
             "cloud_feiyu",
-            capabilities={"voice": True, "text": True, "screen": False, "mcp": False, "observe": False},
+            # ★ 2026-10-25：screen 改为 True —— 屏幕观察早已走云端大肥鱼直连
+            #   （feiyu 视觉路线），能力位写 False 会让前端 rail 少显示一个能力标签。
+            capabilities={"voice": True, "text": True, "screen": True, "mcp": False, "observe": True},
             accent=FEIYU_BUBBLE_ACCENT,
+            # ★ 按需服务型：无常驻连接、不发心跳。若不这样标记，
+            #   心跳扫描会把它恒判为 offline（用户实拍状态灯一直灰着）。
+            on_demand=True,
         )
     except Exception:  # 总线不可用不该影响聊天
         pass
@@ -234,6 +239,8 @@ class CompanionSettingsRequest(BaseModel):
     screen_observation_voice_enabled: bool = True
     screen_observation_voice_probability: float = Field(default=1.0, ge=0.0, le=1.0)
     screen_observation_prompt: str = Field(default="", max_length=2000)
+    # 0 = 不限；用户要求"10 个字以内"时填 10（同时会硬截断兜底）
+    screen_observation_max_chars: int = Field(default=0, ge=0, le=200)
     screen_request_timeout_seconds: int = Field(default=25, ge=5, le=60)
     screen_voice_cooldown_seconds: int = Field(default=5, ge=5, le=600)
     screen_minimum_importance: float = Field(default=0.62, ge=0.0, le=1.0)
@@ -1868,6 +1875,14 @@ async def companion_chat(payload: CompanionChatRequest):
                         #   这里只保留 collected_images（HTTP 响应里给前端的 data URL）供气泡回落用。
                         collected_images.extend(imgs)
                         collected_bubble_items.extend(("image", url) for url in imgs)
+                # ★ 2026-10-25：按需服务型 Agent 的状态由**调用结果**驱动。
+                #   这轮流式跑完没抛异常 = 云端真的被叫通了 ⇒ 标 online（状态灯变绿）。
+                #   失败路径在下面的 except 里标 error，状态灯变红并带上原因。
+                try:
+                    from ..kernel import agent_bus_service as _bus
+                    _bus.mark_online(FEIYU_AGENT_ID)
+                except Exception:  # noqa: BLE001 - 总线不可用不影响聊天
+                    pass
                 attached_meta = list(stream_side.get("attachments") or [])
 
                 feiyu_content = "".join(collected)
@@ -2198,6 +2213,13 @@ async def companion_chat(payload: CompanionChatRequest):
         db.fail_chat_request(claim.client_request_id, http_status=502, error=detail)
         raise HTTPException(status_code=502, detail=detail) from exc
     except Exception as exc:
+        # ★ 按需服务型 Agent 的失败回执：状态灯变红并带上原因，
+        #   这样"大肥鱼为什么不能用了"在 UI 上一眼可见，不用翻日志。
+        try:
+            from ..kernel import agent_bus_service as _bus
+            _bus.mark_error(FEIYU_AGENT_ID, str(exc))
+        except Exception:  # noqa: BLE001
+            pass
         _record_chat_route_failure(
             route,
             source="desktop_pet",

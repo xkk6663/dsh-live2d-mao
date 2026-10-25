@@ -60,12 +60,33 @@
       .finally(function () { busy = false })
   }
 
+  /**
+   * 按需服务型 Agent（on_demand，如云端大肥鱼）的状态语义与常驻型不同：
+   *   · 它没有常驻连接、不发心跳，所以"离线"不代表不可用；
+   *   · 只有后端明确回报 error 才算异常。
+   * ★ 2026-10-25 用户实拍：大肥鱼状态灯一直是灭的（灰），
+   *   而云端其实完全可用 —— 就是拿常驻型的"离线"语义套在了按需型身上。
+   */
+  function isOnDemand(a) {
+    return !!(a && (a.on_demand === true))
+  }
+
   function statusText(a) {
     var s = String(a.status || 'offline')
+    if (isOnDemand(a)) {
+      if (s === 'error') return '云端异常'
+      if (a.enabled === false) return '已停用'
+      return '就绪'          // 按需待机 = 随时可叫，不是离线
+    }
     return s === 'online' ? '在线' : s === 'connecting' ? '连接中' : s === 'error' ? '异常' : '离线'
   }
   function statusColor(a) {
     var s = String(a.status || 'offline')
+    if (isOnDemand(a)) {
+      if (s === 'error') return '#c25b5b'       // 红：真出错了
+      if (a.enabled === false) return '#9aa6ad' // 灰：被手动停用
+      return '#3e9c6f'                          // 绿：就绪可用
+    }
     return s === 'online' ? '#3e9c6f' : s === 'connecting' ? '#d9a13b' : s === 'error' ? '#c25b5b' : '#9aa6ad'
   }
 

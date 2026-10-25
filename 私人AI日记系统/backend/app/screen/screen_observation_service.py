@@ -67,6 +67,8 @@ _session_unknown_cost_count = 0
 _session_attempt_count = 0
 _session_failure_count = 0
 _cloud_profile_health: dict[str, dict[str, Any]] = {}
+# 最近一轮观察中云端 TTS 生成的语音文件名（投递阶段据它取字节，见 _feiyu_vision_call）。
+_last_voice_files: list[str] = []
 # 2026-10-24 用户裁决（m02056）：屏幕观察从"画面一变就分析"改成"可设最短/最长间隔、
 # 区间内均匀随机的定时触发"（典型是 1~2 小时看一眼）。这里保存下一次该在什么时候观察，
 # 以及它落在哪个区间里 —— 给设置页显示倒计时，也避免每次轮询都重新掷骰子。
@@ -237,6 +239,26 @@ def _feiyu_unavailable_reason() -> str:
     return ""
 
 
+def _truncate_cjk(text: str, limit: int) -> str:
+    """把一句话硬截到 limit 个字符（按中文字符算，标点计入）。
+
+    用于"10 个字以内"这类硬要求：模型不一定听话（实测给 40+ 字很常见），
+    所以在代码层兜底。截断点尽量落在标点后，避免半句断得难看；
+    找不到合适标点就在 limit 处断。
+    """
+    if limit <= 0:
+        return text
+    s = " ".join(str(text or "").split())
+    if len(s) <= limit:
+        return s
+    head = s[:limit]
+    # 优先在标点处收尾（保留标点本身）
+    for i in range(len(head) - 1, max(limit // 2, 0) - 1, -1):
+        if head[i] in "。！？…，、；,.!?":
+            return head[: i + 1].rstrip("，、；,;")
+    return head.rstrip("，、；,;") + "…"
+
+
 def _feiyu_screen_prompt(
     *,
     custom_prompt: str,
@@ -246,28 +268,56 @@ def _feiyu_screen_prompt(
     recent_context: str,
     audio_context: str,
     foreground: dict[str, Any],
+    custom_style_limit: int = 0,
 ) -> str:
     """交给云端大肥鱼的提示词：**一张图 + 一句话**，不要 JSON。
 
     和本地/普通云视觉那条链路最大的区别：
       · 不要求模型输出结构化 JSON —— 大肥鱼是人格化对话，硬要 JSON 会把她答成"识图接口"；
       · 屏幕观察要的"识别 + 判断该不该说"由本机完成（观测记录照样落库），
-        云端只负责用她自己的性格看图说话；
-      · 有用户自定义提示词时直接交给她，本机不预先替她决定口径。
+        云端只负责用她自己的性格看图说话。
+
+    ★ 2026-10-25 用户实拍「她总要先解释一遍再评价」的三处病根，本次重排：
+      ① **上下文把她诱导成播报员**：窗口标题/前台应用/最近对话这三行本身就在描述画面，
+         模型看到标题最自然的反应就是先复述它。用户自定义了"一句话锐评"时，
+         这些素材必须**压缩成一行**甚至省掉，否则要求只占 5% 权重、被素材淹没。
+      ② **"不要解释你在遵守要求"是反向诅咒**：否定措辞会让模型先想到"我在遵守要求"
+         再顺带把它说出来，正是那句多余的解释。改为正向指令（直接给评价本身）。
+      ③ **自定义要求排在最后**：附注位置 ⇒ 权重最低。现在提到最前面当主指令。
     """
     scope = "用户指定的单个窗口" if is_window else "用户此刻的整个电脑屏幕"
     title = str(frame.get("title") or "").strip()
     custom = str(custom_prompt or "").strip()
+
     if custom:
-        request = (
-            "用户对你这次看屏幕有明确要求，按这个要求回答（不要解释你在遵守要求）：\n"
-            f"{custom[:2000]}"
-        )
-    else:
-        request = (
-            "自然地说一句 1-2 句短话：可以是对的吐槽、感受、关心或随口反应。"
-            "不要播报画面、不要复述用户在做什么、不要说「我看到了」，不要提问式追问。"
-        )
+        # —— 有自定义要求：它当主指令，上下文压到最小 ——
+        scene_bits = [f"截图是{scope}的一瞬间"]
+        if foreground.get("process_name"):
+            scene_bits.append(str(foreground.get("process_name")))
+        if title:
+            scene_bits.append(title[:60])
+        lines = [custom[:2000], "", "（" + " · ".join(scene_bits) + "）"]
+        if audio_context:
+            lines.append(f"（你刚听到：{audio_context[:120]}）")
+        lines.append("")
+        # ★ 2026-10-25 用户裁决（第二次）：「觉得啰嗦，10 个字以内」。
+        #   只说"精简"模型会理解成"短一点"（仍给三四十字），必须给**硬数字**，
+        #   再用 _truncate_cjk 在代码层兜底截断 —— 模型不听话时也不会超标。
+        limit = int(custom_style_limit or 0)
+        if limit > 0:
+            lines.append(f"只输出一句话，{limit} 个字以内。只给评价本身，不要描述画面、不要铺垫。")
+        else:
+            lines.append(
+                "直接给评价本身。不要描述画面、不要铺垫背景、"
+                "不要说明你在做什么或按什么要求回答。"
+            )
+        return "\n".join(lines)
+
+    # —— 没有自定义要求：保持原来的自然开口口径 ——
+    request = (
+        "自然地说一句 1-2 句短话：可以是对的吐槽、感受、关心或随口反应。"
+        "不要播报画面、不要复述用户在做什么、不要说「我看到了」，不要提问式追问。"
+    )
     lines = [
         f"这是{scope}的一瞬间截图。",
     ]
@@ -325,6 +375,14 @@ async def _feiyu_vision_call(
         images=[attachment_id],
     )
     elapsed_ms = round((time.monotonic() - started) * 1000, 1)
+    # ★ 2026-10-25：把这一轮的语音文件名记下来（云端 TTS 每次都会合成 wav）。
+    #   投递阶段据此去 /api/v1/files/content 取字节 → 直接当 agent_audio 下发，
+    #   本地不写任何 TTS 合成代码。
+    if isinstance(diagnostics, dict):
+        global _last_voice_files
+        files = [str(x) for x in (diagnostics.get("record_files") or []) if str(x).strip()]
+        with _state_lock:
+            _last_voice_files = files[-1:] if files else []
     stats = diagnostics.get("agent_stats") if isinstance(diagnostics, dict) else None
     first_token_ms = None
     if isinstance(stats, dict):
@@ -364,7 +422,6 @@ async def _feiyu_vision_call(
         provider_id=FEIYU_VISION_HEALTH_ID,
         provider_name="大肥鱼（云端）",
     )
-
 
 def _fallback_reaction(observation: Observation) -> str:
     replies = {
@@ -1364,13 +1421,26 @@ async def _deliver_observation(
         return
 
     try:
-        from ..cloud_feiyu import tts as cloud_tts
+        from ..cloud_feiyu import get_client as get_feiyu_client
 
-        blob = await cloud_tts.synthesize(reply)
+        client = get_feiyu_client()
+        with _state_lock:
+            voice_files = list(_last_voice_files)
+        if not voice_files:
+            with _state_lock:
+                _last_error = "本轮云端没有生成语音（record 帧为空）"
+            return
+        att = await client.fetch_attachment(voice_files[-1], kind="record")
+        if att.error or not att.data_url:
+            with _state_lock:
+                _last_error = f"观察语音取不到：{att.error or '空内容'}"
+            return
+        _header, _, payload_b64 = att.data_url.partition(",")
+        blob = base64.b64decode(payload_b64, validate=False)
     except Exception as exc:  # noqa: BLE001 - 语音是增强，失败不能吞掉文字
         # 文字上面已经发出去了，这里只记账，不再重复发气泡
         with _state_lock:
-            _last_error = f"观察语音合成失败（文字气泡已正常发出）：{exc}"
+            _last_error = f"观察语音获取失败（文字气泡已正常发出）：{exc}"
         return
 
     saved = _save_observation_voice(blob, emotion=emotion)
@@ -1816,6 +1886,7 @@ async def analyze_once(
                     recent_context=_recent_context(conversation_id, limit=6, max_chars=120),
                     audio_context=_audio_context() if not is_full_screen else "",
                     foreground=_activity_context(frame),
+                    custom_style_limit=int(config.get("screen_observation_max_chars") or 0),
                 ),
                 timeout_seconds=float(request_timeout),
             ),
@@ -1828,6 +1899,11 @@ async def analyze_once(
                 3,
             )
         reply_text = _clean_reply(vision_completion.content)
+        # ★ 用户要求「10 个字以内」时在代码层硬截断：只把字数写进提示词不够 ——
+        #   实测模型常常给到 30~40 字，需要在本地兜底。
+        _limit = int(config.get("screen_observation_max_chars") or 0)
+        if _limit > 0 and reply_text:
+            reply_text = _truncate_cjk(reply_text, _limit)
         if not reply_text:
             raise RuntimeError("云端大肥鱼这次没有返回文字（可能只回了语音/图片）")
         # 本机只补一条"事件"记录（用于落库/状态面板/去重），不回传云端：

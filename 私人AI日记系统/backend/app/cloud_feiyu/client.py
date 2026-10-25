@@ -1063,6 +1063,7 @@ class CloudFeiyuClient:
         agent_stats: dict[str, Any] = {}
         frames_seen: list[str] = []
         record_frames = 0
+        record_files: list[str] = []
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             async with client.stream(
                 "POST", f"{self.base_url}/api/v1/chat", headers=self._headers(), json=payload
@@ -1095,6 +1096,14 @@ class CloudFeiyuClient:
                     if dtype == "record":
                         # 云端把她这轮的话转成了语音：说明"她确实说了话，只是文字没以帧下发"
                         record_frames += 1
+                        # ★ 2026-10-25：把 record 的文件名留下来。
+                        #   云端 TTS 一旦开启，每次回复都会合成 wav（实测 545~666KB / 11~14 秒），
+                        #   桌宠要放这段语音只需按文件名去 /api/v1/files/content 取字节 ——
+                        #   本地不需要任何 TTS 代码，也不用再调一次合成接口。
+                        rec_name = str(frame.get("data") or "").strip()
+                        rec_name = rec_name.replace("[RECORD]", "").strip()
+                        if rec_name and rec_name not in record_files:
+                            record_files.append(rec_name)
         content = streamed_text
         if not content.strip() and complete_text.strip():
             content = complete_text
@@ -1103,6 +1112,7 @@ class CloudFeiyuClient:
             "plain_frames": plain_frames,
             "complete_frames": complete_frames,
             "record_frames": record_frames,
+            "record_files": record_files,
             "agent_stats": agent_stats,
             "frames": frames_seen,
         }

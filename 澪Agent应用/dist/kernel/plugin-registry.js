@@ -19,6 +19,36 @@
     get: function (id) { return manifests[id] || null },
     list: function () { return Object.keys(manifests) },
 
+    /**
+     * 是否内置插件（builtin）。
+     *
+     * ★ 概念（2026-10-25 用户裁决）：
+     *   插件体系里有两类东西 —
+     *     · 可热插拔插件：DSH / 大肥鱼，可随时停用，停用后入口整体消失；
+     *     · 内置插件（builtin=true）：**桌宠本体自己**。它是宿主的一部分，
+     *       形态上与其他插件一致（有 manifest、有 panel、走同一套挂载流程），
+     *       但**不允许热插拔** —— 停用它等于把宿主拆了，只会让界面变成一堆空壳。
+     *   所以下面所有"按 enabled 显隐"的地方，都必须先问 isBuiltin()：
+     *   内置插件恒为可见，不看后端 enabled。
+     */
+    isBuiltin: function (id) {
+      var m = manifests[id]
+      return !!(m && m.builtin === true)
+    },
+
+    // 全部内置插件 id（宿主必须存在的部分）
+    builtinList: function () {
+      var out = []
+      for (var id in manifests) if (manifests[id] && manifests[id].builtin === true) out.push(id)
+      return out
+    },
+
+    /** 该插件当前是否"应当可见"：内置恒真，其余看后端 enabled。 */
+    visible: function (id) {
+      if (registry.isBuiltin(id)) return true
+      return enabled[id] === true
+    },
+
     isEnabled: function (id) { return enabled[id] === true },
     setEnabled: function (id, on) { enabled[id] = !!on },
 

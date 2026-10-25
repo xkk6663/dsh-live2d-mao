@@ -185,6 +185,8 @@ class ConfigurationService:
             0.0, min(1.0, float(data.get("screen_observation_voice_probability", 1.0)))
         )
         data["screen_observation_prompt"] = str(data.get("screen_observation_prompt") or "")[:2000]
+        # 0 = 不限；>0 时提示词里写"N 个字以内"，并在代码层硬截断兜底
+        data["screen_observation_max_chars"] = max(0, min(200, int(data.get("screen_observation_max_chars", 0))))
         data["screen_request_timeout_seconds"] = max(5, min(60, int(data.get("screen_request_timeout_seconds", 25))))
         data["screen_voice_cooldown_seconds"] = max(5, min(600, int(data.get("screen_voice_cooldown_seconds", 5))))
         data["screen_minimum_importance"] = max(0.1, min(1.0, float(data.get("screen_minimum_importance", 0.62))))
@@ -350,6 +352,7 @@ class ConfigurationService:
             0.0, min(1.0, float(normalized.get("screen_observation_voice_probability", 1.0)))
         )
         normalized["screen_observation_prompt"] = str(normalized.get("screen_observation_prompt") or "")[:2000]
+        normalized["screen_observation_max_chars"] = max(0, min(200, int(normalized.get("screen_observation_max_chars", 0))))
         normalized["screen_request_timeout_seconds"] = max(5, min(60, int(normalized.get("screen_request_timeout_seconds", 25))))
         normalized["screen_voice_cooldown_seconds"] = max(5, min(600, int(normalized.get("screen_voice_cooldown_seconds", 5))))
         normalized["screen_minimum_importance"] = max(0.1, min(1.0, float(normalized.get("screen_minimum_importance", 0.62))))

@@ -101,6 +101,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "screen_observation_voice_enabled": True,
     "screen_observation_voice_probability": 1.0,
     "screen_observation_prompt": "",
+    "screen_observation_max_chars": 0,
     "screen_request_timeout_seconds": 25,
     "screen_voice_cooldown_seconds": 5,
     "screen_minimum_importance": 0.62,
