@@ -10,7 +10,7 @@ import sys
 
 # 设置 API Key
 os.environ.setdefault("ASTRBOT_API_KEY", "")  # 从 .env 或环境变量提供，切勿硬编码
-os.environ.setdefault("ASTRBOT_BASE_URL", "http://127.0.0.1:6185")
+os.environ.setdefault("ASTRBOT_BASE_URL", "http://127.0.0.1:6185")  # 本地占位，实际地址放 .env
 
 # 添加后端路径
 sys.path.insert(0, os.path.dirname(__file__))

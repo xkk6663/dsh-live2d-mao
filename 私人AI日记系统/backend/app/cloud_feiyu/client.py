@@ -663,7 +663,7 @@ class CloudFeiyuClient:
     """云端 AstrBot Open API 客户端。
 
     配置走环境变量：
-        ASTRBOT_BASE_URL   默认 http://127.0.0.1:6185
+        ASTRBOT_BASE_URL   必填（云端 AstrBot 地址，http://<host>:<port>）
         ASTRBOT_API_KEY    必填（abk_ 开头）
         ASTRBOT_PERSONA_ID 默认 333（大肥鱼）
         ASTRBOT_USERNAME   默认 xiao1
@@ -681,7 +681,10 @@ class CloudFeiyuClient:
         session_id: str | None = None,
         timeout: float = 120.0,
     ) -> None:
-        self.base_url = (base_url or os.getenv("ASTRBOT_BASE_URL", "http://127.0.0.1:6185")).rstrip("/")
+        # ★ 安全：base_url 同样**不写默认值**（以前默认值是真实云端服务器 IP，
+        #   入库等于把自家服务器地址公开给全网扫描）。
+        #   只从「参数 → 环境变量 → 后端 .env」三处取；取不到就 is_configured=False。
+        self.base_url = (base_url or os.getenv("ASTRBOT_BASE_URL", "") or "").rstrip("/")
         # ★ 安全：这里**不写默认 API Key**。
         #   以前这里硬编码了 abk_ 开头的完整密钥，等于把云端机器人凭据写进源码
         #   （这个文件一旦入库，密钥就跟着进 git 历史，撤不干净）。
@@ -707,7 +710,8 @@ class CloudFeiyuClient:
 
     @property
     def is_configured(self) -> bool:
-        return bool(self.api_key)
+        # base_url 与 api_key 缺一不可：只有 key 没 url 会打出畸形请求
+        return bool(self.api_key) and bool(self.base_url)
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -874,7 +878,7 @@ class CloudFeiyuClient:
         我们从常见字段里取 id；取不到就抛错（调用方会把错误回传给用户）。
         """
         if not self.api_key:
-            raise RuntimeError("ASTRBOT_API_KEY 未配置")
+            raise RuntimeError("ASTRBOT_API_KEY / ASTRBOT_BASE_URL 未配置")
         if not isinstance(data_url, str) or not data_url.startswith("data:"):
             raise RuntimeError("upload_attachment 需要 data: URL")
         header, _, b64 = data_url.partition(",")
@@ -925,7 +929,7 @@ class CloudFeiyuClient:
     ) -> FeiyuMessage:
         """非流式对话，返回完整回复。"""
         if not self.is_configured:
-            raise RuntimeError("ASTRBOT_API_KEY 未配置")
+            raise RuntimeError("ASTRBOT_API_KEY / ASTRBOT_BASE_URL 未配置")
 
         url = f"{self.base_url}/api/v1/chat"
         payload = self._build_payload(
@@ -1007,7 +1011,7 @@ class CloudFeiyuClient:
     ) -> AsyncGenerator[str, None]:
         """流式对话，逐段 yield 文本增量。"""
         if not self.is_configured:
-            raise RuntimeError("ASTRBOT_API_KEY 未配置")
+            raise RuntimeError("ASTRBOT_API_KEY / ASTRBOT_BASE_URL 未配置")
 
         url = f"{self.base_url}/api/v1/chat"
         payload = self._build_payload(
@@ -1049,7 +1053,7 @@ class CloudFeiyuClient:
           chat_stream_full(stream=True) 的原因 —— 它从没踩到"只有语音没字"。
         """
         if not self.is_configured:
-            raise RuntimeError("ASTRBOT_API_KEY 未配置")
+            raise RuntimeError("ASTRBOT_API_KEY / ASTRBOT_BASE_URL 未配置")
         payload = self._build_payload(
             message,
             session_id or self.session_id,
@@ -1146,7 +1150,7 @@ class CloudFeiyuClient:
           函数名仍叫 stream_*：SSE 这条传输没变，只是云端不再逐 token 推。
         """
         if not self.is_configured:
-            raise RuntimeError("ASTRBOT_API_KEY 未配置")
+            raise RuntimeError("ASTRBOT_API_KEY / ASTRBOT_BASE_URL 未配置")
 
         url = f"{self.base_url}/api/v1/chat"
         payload = self._build_payload(
