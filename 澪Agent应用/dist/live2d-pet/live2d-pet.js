@@ -2371,7 +2371,14 @@
       const prev = agentBadgeStates.get(agentId) || {}
       prevPhaseBefore = String(prev.phase || '')
       agentBadgeStates.set(agentId, {
-        name: payload.agent_name || prev.name || agentId,
+        // ★ 2026-10-26 用户裁决两连的最终解法：
+        //   「徽标前面的 DSH 显示成当前工作区名称」+「右侧插件状态栏和插件市场
+        //   插件名称不一致」—— 其实是想分别控制两个字段：
+        //     · agent.name      插件身份，必须恒为清单里的名字（rail/市场读它）
+        //     · state.badge_name 运行期工作区名，**只**用于徽标文案
+        //   所以徽标优先取 badge_name，没有才回落 name。
+        //   这样徽标显示「Mao-dsh-pet · 执行工具」，rail 仍显示「DSH」，两边不打架。
+        name: (payload.state && payload.state.badge_name) || payload.agent_name || prev.name || agentId,
         status: prev.status || 'online',
         enabled: prev.enabled !== false,
         phase,
@@ -2512,7 +2519,14 @@
     if (agentId) {
       const prev = agentBadgeStates.get(agentId) || {}
       agentBadgeStates.set(agentId, {
-        name: payload.agent_name || prev.name || agentId,
+        // ★ 2026-10-26 用户裁决两连的最终解法：
+        //   「徽标前面的 DSH 显示成当前工作区名称」+「右侧插件状态栏和插件市场
+        //   插件名称不一致」—— 其实是想分别控制两个字段：
+        //     · agent.name      插件身份，必须恒为清单里的名字（rail/市场读它）
+        //     · state.badge_name 运行期工作区名，**只**用于徽标文案
+        //   所以徽标优先取 badge_name，没有才回落 name。
+        //   这样徽标显示「Mao-dsh-pet · 执行工具」，rail 仍显示「DSH」，两边不打架。
+        name: (payload.state && payload.state.badge_name) || payload.agent_name || prev.name || agentId,
         status,
         enabled: payload.enabled !== undefined ? Boolean(payload.enabled) : (prev.enabled !== false),
         phase: prev.phase || 'idle',
@@ -2554,7 +2568,8 @@
         //   每次轮询都会把长任务计时清零（阈值 25min 永远到不了）。
         const prev = agentBadgeStates.get(aid) || {}
         next.set(aid, {
-          name: String(a.name || a.agent_id),
+          // 徽标文案优先用 badge_name（工作区名）；name 是插件身份，留给 rail/市场
+          name: String((a.state && a.state.badge_name) || a.name || a.agent_id),
           status: String(a.status || 'offline'),
           enabled: a.enabled !== false,
           phase,

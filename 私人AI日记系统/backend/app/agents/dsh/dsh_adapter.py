@@ -803,8 +803,8 @@ class DshAdapter:
         # 多会话徽标：上一轮上报过的子 agent（dsh:<短id>），用于把消失的标 offline
         self._known_sub_agents: set[str] = set()
         self._last_multi_scan_at = 0.0
-        # 主 agent 当前显示名（工作区目录名），用于避免重复注册
-        self._main_agent_name = ""
+        # 主 agent 当前工作区名（只用于徽标显示，**不改** agent.name）
+        self._main_workspace_name = ""
 
     # -- 生命周期 ---------------------------------------------------------
     async def _ensure_sidecar(self, config: dict[str, Any]) -> bool:
@@ -1081,7 +1081,11 @@ class DshAdapter:
             try:
                 agent_bus_service.register(
                     sub_id,
-                    label or short,
+                    # ★ name 恒为 AGENT_NAME：它是"哪个插件"的身份，
+                    #   子会话同属 DSH 插件，不该叫成工作区名
+                    #   （否则又会出现"rail/市场名称不一致"的老问题）。
+                    #   工作区名通过 state.badge_name 下发，只影响徽标文案。
+                    AGENT_NAME,
                     "dsh_adapter",
                     capabilities={
                         "voice": False, "text": True, "screen": False,
@@ -1097,6 +1101,7 @@ class DshAdapter:
                 state = dict(state)
                 state["session"] = sid
                 state["workspace"] = label
+                state["badge_name"] = label
                 state["is_sub"] = True
                 state["parent_agent"] = AGENT_ID
                 agent_bus_service.emit(sub_id, phase, state=state, force=True)
@@ -1122,27 +1127,29 @@ class DshAdapter:
                     pass
 
     def _sync_main_agent_name(self, cwd: str) -> None:
-        """把主 agent 的显示名同步成**当前跟随会话的工作区名**。
+        """记录当前工作区名，供**徽标**显示；但**不改 agent 的 name**。
 
-        ★ 2026-10-26 用户裁决：「徽标前面的 DSH 显示成当前工作区名称」。
-          多任务徽标下如果每条都叫「DSH」，根本分不清哪个是哪——用户看到的是
-          「DSH · 执行工具」，却不知道是 Mao-dsh-pet 还是 elab-flow 在跑。
-          改成工作区目录名后，徽标直接变成「Mao-dsh-pet · 执行工具」，
-          一眼就知道是哪个项目。
+        ★ 2026-10-26 两次裁决，最终口径：
 
-          与子徽标（dsh:<短id>）保持同一命名口径（都用目录名），不出现
-          「DSH」和「Mao-dsh-pet」混排。
+          用户先说：「徽标前面的 DSH 显示成当前工作区名称」
+          用户后说：「右侧插件状态栏和插件市场插件名称不一致」
+
+          这两条看着矛盾，其实是两个不同的字段被我混用了：
+            · agent.name 是**插件身份**，必须恒为 "DSH"，
+              它要和插件清单（数据/插件市场.json 的 name）一致，
+              rail、市场、设置页 tab 全都读它；
+            · 徽标上想显示的是**当前会话的工作区名**，那是运行期信息，
+              属于 state，不属于身份。
+
+          上一版我直接把 agent.name 改成工作区目录名，导致 rail 显示
+          "Mao-dsh-pet" 而市场显示 "DSH" —— 就是用户看到的名称不一致。
+          现在改成写 state.badge_name：徽标优先读它，没有才回落 name。
+          rail / 市场永远只认 name，两边从此不会再漂移。
         """
         name = Path(cwd).name if cwd else ""
-        if not name:
-            return
-        if name == self._main_agent_name:
-            return
-        self._main_agent_name = name
-        try:
-            agent_bus_service.register(AGENT_ID, name, "dsh_adapter", accent=DSH_ACCENT)
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("主 agent 改名失败：%s", exc)
+        self._main_workspace_name = name
+        # 注意：这里**刻意不动** agent.name，也不调 register 改名。
+        # 工作区名经 _publish_facts 的 state["badge_name"] 下发（见下）。
 
     def _publish_facts(self, facts: dict[str, Any], *, force: bool = False) -> None:
         self.facts = facts if isinstance(facts, dict) else {}
@@ -1156,6 +1163,11 @@ class DshAdapter:
             state["error"] = err[:200]
         if self.session_id:
             state["session"] = self.session_id
+        # ★ 2026-10-26：徽标要显示当前工作区名，但**不能**改 agent.name
+        #   （name 是插件身份，必须与插件清单一致，否则 rail 与市场名称打架）。
+        #   这里单独下发 badge_name，渲染端只在画徽标时用它。
+        if self._main_workspace_name:
+            state["badge_name"] = self._main_workspace_name
         self._emit_phase(phase, state, force=force)
         # DSH 独有信号 → 桌宠气泡：审批/提问挂起时主动播报一句
         # （phase 已表达"在等"，气泡负责"主动叫你"，二者不重叠）

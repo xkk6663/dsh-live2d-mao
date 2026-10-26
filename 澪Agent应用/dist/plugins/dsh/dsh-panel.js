@@ -177,7 +177,9 @@
     var state = a.state || {}
     var label = (PHASE_LABELS_UI[phase] || phase)
     var phaseColor = colorOf(phase, colors)
-    var name = String(a.name || a.agent_id || '')
+    // 显示工作区名（state.badge_name / state.workspace），不显示插件身份名 ——
+    // agent.name 恒为 "DSH"，列出来全一样，看不出是哪个项目。
+    var name = String((state.badge_name || state.workspace || a.name || a.agent_id || ''))
     var bits = []
     if (state.turn != null) bits.push('轮次 ' + state.turn)
     if (state.step != null) bits.push('步骤 ' + state.step)
