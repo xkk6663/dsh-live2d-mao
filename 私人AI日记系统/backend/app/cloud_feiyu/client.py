@@ -742,7 +742,10 @@ class CloudFeiyuClient:
         )
         headers = {"Authorization": f"Bearer {self.api_key}"}
         try:
-            async with httpx.AsyncClient(timeout=min(self.timeout, 60.0), follow_redirects=True) as client:
+            # trust_env=False：忽略环境变量里的 HTTP(S)_PROXY。2026-10-26 实测：
+            # Clash 未运行时死代理口会让所有云端请求报 "All connection attempts failed"，
+            # 而云端 AstrBot 是公网 IP，直连本来就可通。
+            async with httpx.AsyncClient(timeout=min(self.timeout, 60.0), follow_redirects=True, trust_env=False) as client:
                 resp = None
                 if filename:
                     resp = await client.get(
@@ -892,7 +895,7 @@ class CloudFeiyuClient:
         if len(raw) > MAX_ATTACHMENT_BYTES:
             raise RuntimeError(f"图片过大（{len(raw) / 1048576:.1f}MB）")
 
-        async with httpx.AsyncClient(timeout=min(self.timeout, 90.0)) as client:
+        async with httpx.AsyncClient(timeout=min(self.timeout, 90.0), trust_env=False) as client:
             resp = await client.post(
                 f"{self.base_url}/api/v1/file",
                 headers={"Authorization": f"Bearer {self.api_key}"},
@@ -918,6 +921,54 @@ class CloudFeiyuClient:
         if not attachment_id:
             raise RuntimeError(f"上传成功但没拿到 attachment_id：{str(body)[:200]}")
         return attachment_id
+
+    async def upload_attachment_full(self, data_url: str, *, filename: str = "file") -> dict:
+        """同 upload_attachment，但返回完整信息：attachment_id + stored_filename。
+
+        跨平台中继（2026-10-26）需要 stored_filename：电脑上传的中继 JSON / 附件
+        在云端是时间戳前缀重命名的，后续靠文件名从 /api/v1/files/content 取回。
+        """
+        if not self.api_key:
+            raise RuntimeError("ASTRBOT_API_KEY / ASTRBOT_BASE_URL 未配置")
+        if not isinstance(data_url, str) or not data_url.startswith("data:"):
+            raise RuntimeError("upload_attachment_full 需要 data: URL")
+        header, _, b64 = data_url.partition(",")
+        mime = header[5:].split(";")[0] or "application/octet-stream"
+        try:
+            raw = base64.b64decode(b64, validate=False)
+        except Exception as exc:
+            raise RuntimeError(f"data URL 解码失败：{exc}") from exc
+        if not raw:
+            raise RuntimeError("文件内容为空")
+        if len(raw) > MAX_ATTACHMENT_BYTES:
+            raise RuntimeError(f"文件过大（{len(raw) / 1048576:.1f}MB）")
+
+        async with httpx.AsyncClient(timeout=min(self.timeout, 90.0), trust_env=False) as client:
+            resp = await client.post(
+                f"{self.base_url}/api/v1/file",
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                files={"file": (filename, raw, mime)},
+            )
+            if resp.status_code != 200:
+                detail = ""
+                try:
+                    detail = str(resp.json())
+                except Exception:
+                    detail = resp.text[:200]
+                raise RuntimeError(f"上传失败 HTTP {resp.status_code}: {detail}")
+            body = resp.json() if resp.content else {}
+        node = body.get("data") if isinstance(body, dict) and "data" in body else body
+        if not isinstance(node, dict):
+            node = {"attachment_id": str(node or "")}
+        info = {
+            "attachment_id": str(node.get("attachment_id") or node.get("id") or ""),
+            "stored": str(node.get("stored_filename") or node.get("filename") or ""),
+            "name": str(node.get("filename") or filename),
+            "size": len(raw),
+        }
+        if not info["stored"]:
+            raise RuntimeError(f"上传成功但没拿到 stored_filename：{str(body)[:200]}")
+        return info
 
     async def chat(
         self,
@@ -948,7 +999,7 @@ class CloudFeiyuClient:
         _seen_names: set[str] = set()
         placeholders: list[tuple[str, str, str]] = []
         current_attachment_id = ""
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
             async with client.stream("POST", url, headers=self._headers(), json=payload) as resp:
                 resp.raise_for_status()
                 async for line in resp.aiter_lines():
@@ -1022,7 +1073,7 @@ class CloudFeiyuClient:
             stream=True,
         )
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
             async with client.stream("POST", url, headers=self._headers(), json=payload) as resp:
                 resp.raise_for_status()
                 async for line in resp.aiter_lines():
@@ -1068,7 +1119,7 @@ class CloudFeiyuClient:
         frames_seen: list[str] = []
         record_frames = 0
         record_files: list[str] = []
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
             async with client.stream(
                 "POST", f"{self.base_url}/api/v1/chat", headers=self._headers(), json=payload
             ) as resp:
@@ -1224,7 +1275,7 @@ class CloudFeiyuClient:
                 if a.data_url and attachment_media_kind(a.kind, a.mime_type, a.filename) == "image"
             ]
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
             async with client.stream("POST", url, headers=self._headers(), json=payload) as resp:
                 resp.raise_for_status()
                 async for line in resp.aiter_lines():
@@ -1297,6 +1348,17 @@ class CloudFeiyuClient:
         if cleaned != streamed_text:
             streamed_text = cleaned
             yield "", []  # 占位保证生成器非空语义不变
+        # ★ 2026-10-26 修「气泡文字整段×2」：云端开 TTS 后（webchat streaming output +
+        #   TTS 装饰），AstrBot 会把同一句话推**两轮 plain 帧**（第一轮正文流式输出，
+        #   第二轮 TTS 结果连文带音再发一次，云端日志可见 22:30:50 streaming →
+        #   22:31:03 [ComponentType.Record] 同文），streamed_text 拼起来就是整段×2
+        #   （实测 DB id=751："哼，试就试吧……"×2）。2026-10-24 已给非流式 chat()
+        #   加过 _collapse_exact_doubling（见 1165 行），这里补齐流式路径：
+        #   气泡正文 / 落库 / HTTP 回复都吃 session_out["text"]，一处折叠三处干净。
+        without_doubling = _collapse_exact_doubling(streamed_text)
+        if without_doubling != streamed_text:
+            streamed_text = without_doubling
+            yield "", []
         # 偶发：工具调用轮次的 complete.data 是裸 JSON（见 strip_tool_payload 注释）
         without_tool = strip_tool_payload(streamed_text)
         if without_tool != streamed_text:

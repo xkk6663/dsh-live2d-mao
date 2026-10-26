@@ -42,6 +42,7 @@ from .routes import (
     memory,
     monthly,
     privacy,
+    relay,
     review,
     settings as settings_routes,
     stats,
@@ -53,11 +54,23 @@ logger = logging.getLogger(__name__)
 
 
 # 后台任务：仅保留桌宠/小智链路所需（原版 QQ/日记/备份/周月报/费用对账等任务已随功能阉割移除）
+from .cloud_feiyu import transfer_receiver
+
 BACKGROUND_TASK_FACTORIES = {
     "runtime_diagnostics_task": runtime_diagnostics.monitor_loop,
-    "screen_observation_task": screen_observation_service.observation_loop,
+    # ★ 2026-10-26 用户裁决：屏幕观察（自动锐评）整体下线。
+    #   实测它是后台偷吃 token 的真凶——桌宠开着就每 ~15s 向云端发一次
+    #   「[设备上下文]+截图」的视觉请求（60 分钟 243 条），连带触发 livingmemory
+    #   记忆召回 embeddings（135 次/h）与 self_learning 学习管线。
+    #   用户规矩：**只有对话才允许消耗 token，严禁任何打开桌宠就烧 token 的行为**。
+    #   摘掉这个后台循环后：无捕获、无分析、无云端请求；「锐评」类手动按钮
+    #   （用户主动点击 = 用户发起的消耗）仍走 analyze_once(force=True) 可用。
+    #   想恢复自动观察：把下面这行加回来即可。
+    # "screen_observation_task": screen_observation_service.observation_loop,
     "pet_event_task": pet_event_service.event_loop,
     "agent_bus_task": agent_bus_service.heartbeat_loop,
+    # 跨平台传输收件箱轮询（2026-10-26，配套云端插件 astrbot_plugin_crosssend）
+    "crosssend_transfer_task": transfer_receiver.transfer_poll_loop,
     "dsh_adapter_task": dsh_adapter.dsh_adapter_loop,
     # DSH 专用化：octop_adapter_task 已移除（Octop 插件整体阉割）
 }
@@ -80,6 +93,17 @@ def initialize_runtime() -> None:
     db.refresh_manual_memories(load_manuals())
     backfill_explicit_structured_memories()
     agent_bus_service.bus.configure(settings.project_root / "agent_bus_config.json")
+    # 2026-10-26：启动时按插件清单同步大肥鱼观察闸门 —— 清单里 cloud_feiyu 是停用态，
+    # observation_loop 起来之前必须先把闸门落下，否则自愈逻辑会在 5s 内把捕获重新拉起
+    # （"停用插件 → 重启后端 → 插件复活"是比少几毛 token 更糟的一致性破坏）。
+    try:
+        from .kernel import plugin_market_service as _market
+        from .screen import screen_observation_service as _screen
+        _feiyu_entry = _market.find("cloud_feiyu")
+        if _feiyu_entry is not None:
+            _screen.apply_plugin_enabled(bool(_feiyu_entry.get("enabled", True)))
+    except Exception:
+        logger.warning("同步大肥鱼插件闸门失败（按启用处理）", exc_info=True)
 
 
 async def _start_background_tasks(app: FastAPI, *, exclude: set[str] | None = None) -> None:
@@ -247,6 +271,8 @@ def create_app() -> FastAPI:
     app.include_router(chat.router)
     app.include_router(backup.router)
     app.include_router(companion.router)
+    # 大肥鱼传输面板（零 token 中继，2026-10-26）
+    app.include_router(relay.router)
     app.include_router(conversations.router)
     app.include_router(creation.router)
     app.include_router(diary.router)

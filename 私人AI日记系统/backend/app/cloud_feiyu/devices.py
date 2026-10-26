@@ -36,7 +36,10 @@ async def notify_device_offline(client: CloudFeiyuClient, device_id: str = "mao-
 async def _send_local_notification(message: str) -> bool:
     """通过本地 WebSocket 推送系统消息到桌宠气泡。"""
     try:
-        from ...services.pet_event_service import pet_event_service
+        # 注意：pet_event_service 是 app/companion/ 下的**函数模块**（publish 为模块级函数）。
+        # 旧写法 `from ...services.pet_event_service import ...` 三连点越过 app 顶层包，
+        # 启动后每次设备通知都报 "attempted relative import beyond top-level package"。
+        from ..companion import pet_event_service
         pet_event_service.publish("agent_stream", {
             "text": message,
             "agent_id": "system",

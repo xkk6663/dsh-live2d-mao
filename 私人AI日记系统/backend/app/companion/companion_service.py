@@ -97,6 +97,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "screen_trigger_random_enabled": True,
     "screen_trigger_min_minutes": 60,
     "screen_trigger_max_minutes": 120,
+    # ★ 2026-10-26 用户裁决（方案 b）：启动/重启时的"唤醒观察"（看一眼屏幕打招呼）
+    #   默认关闭 —— 每次重启都发一次云端 VL 请求，用户实测每次重启 token 少几毛。
+    #   恢复方式：PATCH /api/companion/settings 传 wake_vision_on_start=true。
+    "wake_vision_on_start": False,
     # 观察结果转语音：做成开关（有语音就都带文字），概率保留作扩展位
     "screen_observation_voice_enabled": True,
     "screen_observation_voice_probability": 1.0,

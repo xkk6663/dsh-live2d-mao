@@ -628,6 +628,7 @@ import ImagePreview from './components/ImagePreview.vue'
 // 真正的对话在**桌宠自己的聊天窗**（standalonePetChat，走 /api/companion/chat）。
 const CompanionPage = defineAsyncComponent(() => import('./components/CompanionPage.vue'))
 // 大肥鱼对话页（视觉移植自 xiaozhi-chat-ui 提取包，数据走桌宠自己的 /api/companion/chat*）
+// （传输助手抽屉 FeiyuRelayPanel 由 FeiyuChatPage 内部挂载，锚定在页面内左侧）
 const FeiyuChatPage = defineAsyncComponent(() => import('./components/FeiyuChatPage.vue'))
 const HomePage = defineAsyncComponent(() => import('./components/HomePage.vue'))
 const AgentHomePage = defineAsyncComponent(() => import('./components/AgentHomePage.vue'))

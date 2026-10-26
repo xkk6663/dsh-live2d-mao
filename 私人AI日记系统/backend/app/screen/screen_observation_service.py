@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import re
 import threading
 import time
@@ -40,6 +41,8 @@ from .screen_behavior_service import (
 from .screen_frame_processor import process_frame
 
 
+logger = logging.getLogger(__name__)
+
 _state_lock = threading.Lock()
 _last_analyzed_frame_id = 0
 _last_analysis_monotonic = 0.0
@@ -58,6 +61,14 @@ _last_game_state: dict[str, Any] = {}
 _last_pipeline_timings: dict[str, float | str | bool] = {}
 _last_spoken_monotonic = 0.0
 _capture_only = False
+# ★ 2026-10-26 插件市场联动闸门：「大肥鱼」插件（agentId=cloud_feiyu）在市场里被
+#   停用/下架时，整条观察链路必须严格关死 —— capture 线程停、analyze_once 连
+#   force/wake 都拒绝。否则桌宠每次重启的唤醒观察照样往云端发整张截图
+#   （用户实测：每次重启 token 少几毛，真凶是 routes/companion.py 启动路径里的
+#   _wake_pet_from_screen → analyze_once(force=True, wake=True)，它绕过一切节流）。
+#   启用侧不需要手动拉起：observation_loop 的 _auto_start_capture_if_needed
+#   自愈逻辑会在一个循环周期（≤5s）内把捕获重新点亮。
+_plugin_gate_open = True
 _in_progress = False
 _session_started_at = db.now_iso()
 _session_request_count = 0
@@ -1603,6 +1614,11 @@ def status() -> dict[str, Any]:
             ),
             # 保留 local_vision 这个键（前端还在读），但明确告知"本机不跑视觉模型"
             "local_vision": {"enabled": False, "reason": "桌宠端不使用本地模型，识图全部走云端大肥鱼"},
+            # 2026-10-26：插件市场联动闸门状态（设置页/排查 token 消耗时直接看这里）
+            # ★ 直接读模块全局，绝不能调 plugin_gate_open() —— status() 此刻已持有
+            #   _state_lock，threading.Lock 不可重入，再抢锁 = /status 永久挂死
+            #   （2026-10-26 15:50 实测踩中：桌宠渲染端启动即拉 /status → 整个后端假死）。
+            "feiyu_plugin_enabled": bool(_plugin_gate_open),
             "cloud_profile_health": cloud_health,
             "in_progress": _in_progress,
             "last_analyzed_at": _last_analyzed_at,
@@ -1737,6 +1753,12 @@ async def analyze_once(
 
     pipeline_started = time.monotonic()
     config = companion_service.load_config()
+    # ★ 插件闸门是最高优先级：停用大肥鱼插件后，force/wake 也必须被拒绝
+    #   （桌宠启动唤醒就是 force=True，不加这道门每次重启都烧一次云端 VL）。
+    if not plugin_gate_open():
+        with _state_lock:
+            _last_error = "大肥鱼插件已停用；屏幕观察与云端识图保持关闭。"
+        return False
     with _state_lock:
         capture_only = _capture_only
     if capture_only:
@@ -2578,6 +2600,8 @@ def _auto_start_capture_if_needed(config: dict[str, Any]) -> None:
     """
     if not bool(config.get("screen_trigger_random_enabled", True)):
         return
+    if not plugin_gate_open():
+        return  # 插件停用：绝不自动拉起捕获，否则重启后端闸门形同虚设
     if not bool(config.get("screen_ai_enabled", True)):
         return
     with _state_lock:
@@ -2626,6 +2650,60 @@ def set_capture_only(enabled: bool) -> None:
     global _capture_only
     with _state_lock:
         _capture_only = bool(enabled)
+
+
+def plugin_gate_open() -> bool:
+    """「大肥鱼」插件当前是否被允许跑观察链路（市场停用/下架 → False）。"""
+    with _state_lock:
+        return _plugin_gate_open
+
+
+def apply_plugin_enabled(enabled: bool) -> dict[str, Any]:
+    """插件市场启停联动（2026-10-26 用户要求：停用 = 严格关闭）。
+
+    False = 严格关闭：闸门落下后 analyze_once 对 **任何调用方**（含 force/wake 的
+      桌宠启动唤醒、手动观察、随机触发）一律拒绝；同时把捕获线程、系统声音监听、
+      观察会话全部停掉 —— 不留"空转但不发云端"的半关状态。
+    True = 恢复：只抬闸门；捕获由 observation_loop 的自愈逻辑自动拉起（≤5s）。
+    """
+    global _plugin_gate_open
+    wanted = bool(enabled)
+    with _state_lock:
+        changed = _plugin_gate_open != wanted
+        _plugin_gate_open = wanted
+    if not wanted:
+        for label, stop_fn in (
+            ("屏幕捕获线程", lambda: companion_service.window_observer.stop()),
+            ("系统声音监听", lambda: system_audio_service.stop()),
+            ("观察会话", lambda: end_session()),
+        ):
+            try:
+                stop_fn()
+            except Exception as exc:  # noqa: BLE001 - 单项失败不挡其余清理
+                logger.warning("大肥鱼插件停用：关闭%s失败：%s", label, exc)
+        with _state_lock:
+            _last_error = "大肥鱼插件已停用：屏幕观察与云端识图已整体关闭。"
+    logger.info("大肥鱼插件闸门 -> %s（changed=%s）", "开启" if wanted else "关闭", changed)
+    return {"plugin_enabled": wanted, "changed": changed}
+
+
+def _register_market_runtime_hook() -> None:
+    """向插件市场登记运行时联动钩子（kernel 不认识具体插件，回调归本服务管）。
+
+    市场对 cloud_feiyu 的启停/下架都会回调 apply_plugin_enabled；
+    自检/裸 import 环境下市场层不可用时静默跳过（不影响观察服务本身）。
+    """
+    try:
+        from ..kernel import plugin_market_service
+
+        plugin_market_service.register_runtime_hook(
+            "cloud_feiyu", apply_plugin_enabled,
+        )
+    except Exception:  # noqa: BLE001
+        logger.debug("插件市场运行时钩子未注册（市场层不可用）", exc_info=True)
+
+
+_register_market_runtime_hook()
 
 
 def end_session() -> None:

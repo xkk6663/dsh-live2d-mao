@@ -218,6 +218,11 @@ class CompanionSettingsRequest(BaseModel):
     speak_screen_observations: bool = True
     speak_game_observations: bool = True
     screen_ai_enabled: bool = True
+    # ★ 2026-10-26 用户裁决（方案 b）：桌宠启动/重启时的"唤醒观察"默认不烧云端。
+    #   每次重启 token 少几毛的真凶就是启动路径里的 analyze_once(force=True, wake=True)。
+    #   要恢复"开机看一眼屏幕打招呼"，把这个开关设为 true（默认 False = 启动零消耗）。
+    #   必须在请求模型里声明，否则 PATCH 会静默丢弃该字段（见下面 audio_autoplay 的教训）。
+    wake_vision_on_start: bool = False
     screen_audio_enabled: bool = True
     screen_audio_model: str = Field(default="base", pattern="^(tiny|base|small)$")
     screen_audio_language: str = Field(default="auto", pattern="^(auto|zh|ja|en)$")
@@ -719,7 +724,12 @@ async def companion_version():
 
 async def _wake_pet_from_screen() -> None:
     try:
-        await screen_observation_service.analyze_once(force=True, wake=True)
+        # ★ 2026-10-26 用户裁决（方案 b）：wake_vision_on_start 默认 False ——
+        #   启动/重启桌宠不再自动发"看一眼屏幕"的云端 VL 请求（这是每次重启
+        #   token 少几毛的直接来源）。/start 与 /restart 都经过本函数，一处闸住。
+        #   想恢复开机打招呼：PATCH /api/companion/settings 传 wake_vision_on_start=true。
+        if bool(companion_service.load_config().get("wake_vision_on_start", False)):
+            await screen_observation_service.analyze_once(force=True, wake=True)
     finally:
         if companion_service.pet_running():
             companion_service.set_pet_activity(
@@ -730,11 +740,15 @@ async def _wake_pet_from_screen() -> None:
 
 
 def _start_pet_with_screen_observation() -> bool:
-    screen_observation_service.set_capture_only(False)
-    companion_service.window_observer.select_screen("primary")
-    companion_service.window_observer.start(1000)
-    companion_service.save_config({"screen_audio_enabled": True})
-    system_audio_service.start(companion_service.load_config())
+    # ★ 2026-10-26：大肥鱼插件停用（市场闸门落下）时，桌宠启动**不得**拉起
+    #   捕获线程与系统声音监听 —— 否则闸门只拦住了云端调用，进程照样空转，
+    #   "严格关闭"就成了空话。活动徽标照常走，只是不观察。
+    if screen_observation_service.plugin_gate_open():
+        screen_observation_service.set_capture_only(False)
+        companion_service.window_observer.select_screen("primary")
+        companion_service.window_observer.start(1000)
+        companion_service.save_config({"screen_audio_enabled": True})
+        system_audio_service.start(companion_service.load_config())
     companion_service.set_pet_activity(
         "thinking",
         emotion="gentle",
@@ -811,6 +825,13 @@ def _start_observation_runtime(
     hwnd: int | None = None,
     screen_scope: str = "",
 ) -> dict[str, object]:
+    # ★ 2026-10-26：插件停用后手动 start（screen/window/game）也一律拒绝，
+    #   给出明确的 409 人话，而不是"启动成功但永远不分析"的假象。
+    if not screen_observation_service.plugin_gate_open():
+        raise HTTPException(
+            status_code=409,
+            detail="大肥鱼插件已停用：屏幕观察不可用。请在插件市场重新启用后再试。",
+        )
     screen_observation_service.set_capture_only(capture_only)
     observer = companion_service.window_observer
     if screen_scope:
@@ -1191,6 +1212,11 @@ _AGENT_MEDIA_KEEP = 24          # 只保留最近 N 个，避免无限堆积
 _AGENT_MEDIA_EXT = {
     ".mp3", ".wav", ".ogg", ".opus", ".m4a", ".aac", ".flac", ".webm",       # 音频
     ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp",                          # 图片
+    # 2026-10-26 跨平台传输助手：文件也要能经 /agent-media 下发
+    ".pdf", ".txt", ".md", ".csv", ".json", ".log",
+    ".zip", ".7z", ".rar", ".tar", ".gz",
+    ".mp4", ".mov", ".avi", ".mkv",
+    ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
 }
 
 

@@ -49,14 +49,17 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from ..config import settings
 from . import agent_bus_service
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # 常量
@@ -78,6 +81,37 @@ CATEGORIES = ("agent", "ui", "pet", "tool", "other")
 # 提成常量而不是散落字面量：register 与 remove 两处必须用同一个值，写岔了就会
 # "下架时不清理"或"误删别人的身份"。
 PLUGIN_MARKET_ADAPTER = "plugin_market"
+
+# ---------------------------------------------------------------------------
+# 运行时联动钩子（2026-10-26）
+# ---------------------------------------------------------------------------
+# 边界 1 说本模块"不认识具体插件"，所以「停用大肥鱼 → 关掉屏幕观察链路」这类
+# **插件专属**的后端联动不写死成 if-else：归属服务（screen_observation_service）
+# 在 import 时向这里登记回调，市场在启停/改 enabled/下架时按 agentId 逐个通知。
+# 回调签名 fn(enabled: bool)；异常一律吞掉记日志 —— 联动失败绝不能挡住启停本身，
+# 否则清单与总线会率先失去一致性（那才是更难收拾的坑）。
+RuntimeHook = Callable[[bool], None]
+_runtime_hooks: dict[str, list[RuntimeHook]] = {}
+_runtime_hooks_lock = threading.Lock()
+
+
+def register_runtime_hook(agent_id: str, hook: RuntimeHook) -> None:
+    """登记某 agentId 的运行时联动回调（启停/下架时收到 enabled 布尔值）。"""
+    with _runtime_hooks_lock:
+        _runtime_hooks.setdefault(str(agent_id), []).append(hook)
+
+
+def _notify_runtime_hooks(agent_id: str, enabled: bool) -> None:
+    with _runtime_hooks_lock:
+        hooks = list(_runtime_hooks.get(str(agent_id), ()))
+    for hook in hooks:
+        try:
+            hook(bool(enabled))
+        except Exception:
+            logger.warning(
+                "插件运行时联动钩子失败（agentId=%s, enabled=%s）",
+                agent_id, enabled, exc_info=True,
+            )
 
 # health.problems 的取值集合（契约 §2.1 逐个列死，前端按它渲染角标）
 PROBLEM_MISSING_ENTRY = "missing_entry"
@@ -708,6 +742,9 @@ class PluginMarket:
             # 必须同步拨总线（builtin 除外——它没有启停入口）。
             if "enabled" in data and not rebuilt.get("builtin"):
                 self._set_bus_enabled(rebuilt, bool(rebuilt.get("enabled", True)))
+                # 2026-10-26：patch 也能拨 enabled，运行时钩子必须同样收到通知，
+                # 否则"patch 停用大肥鱼 → 清单关了、观察链路还在跑"。
+                _notify_runtime_hooks(agent_id, bool(rebuilt.get("enabled", True)))
             return self._with_state(rebuilt)
 
     def remove(self, agent_id: str) -> dict[str, Any]:
@@ -749,6 +786,8 @@ class PluginMarket:
                 elif state.enabled:
                     # 不是我们建的身份：只拨停用，保留身份
                     agent_bus_service.set_enabled(agent_id, False)
+            # 2026-10-26：下架 ≈ 强制停用，插件专属 runtime 一并严格关闭
+            _notify_runtime_hooks(agent_id, False)
             return {"ok": True, "removed": agent_id, "files_kept": True}
 
     def set_enabled(self, agent_id: str, enabled: bool) -> dict[str, Any]:
@@ -776,6 +815,9 @@ class PluginMarket:
                     break
             document["updated"] = _now_iso()
             self._write(document)
+            # 2026-10-26：启停不只拨总线，还要通知插件专属的后端 runtime
+            # （大肥鱼：停用 = 屏幕观察/云端识图整体关死，见 screen 服务闸门）
+            _notify_runtime_hooks(agent_id, bool(enabled))
             return {
                 "ok": True,
                 "agentId": agent_id,

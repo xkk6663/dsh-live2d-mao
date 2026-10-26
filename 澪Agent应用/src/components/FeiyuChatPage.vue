@@ -36,6 +36,8 @@ import {
   UserRound,
   X,
 } from '@lucide/vue'
+// 传输助手抽屉（电脑↔微信零 token 直传）：锚定在本组件根（.xz-chat 相对定位）内部左缘
+import FeiyuRelayPanel from './FeiyuRelayPanel.vue'
 
 const props = defineProps({
   /* ---------------- 数据 ---------------- */
@@ -566,5 +568,8 @@ watch(
         </div>
       </div>
     </section>
+
+    <!-- ============ 传输助手抽屉（页面内左缘，absolute 不占栅格） ============ -->
+    <FeiyuRelayPanel />
   </div>
 </template>
