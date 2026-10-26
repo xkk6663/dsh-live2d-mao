@@ -1,6 +1,6 @@
 {
   "name": "dsh-live2d-mao",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "DSH-Live2D-Mao —— DSH 专用 Live2D 桌宠连接器：把 DSH 会话事件推导为 12 态 phase 并推给桌宠总线（只推事件，不持有窗口）",
   "keywords": [
     "dsh",
