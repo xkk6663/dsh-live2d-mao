@@ -801,7 +801,7 @@ class DshAdapter:
         self.session_id = ""
         self.sidecar_error = ""
         # 多会话徽标：上一轮上报过的子 agent（dsh:<短id>），用于把消失的标 offline
-        self._known_sub_agents: set[str] = set()
+        self._known_session_agents: set[str] = set()
         self._last_multi_scan_at = 0.0
         # 主 agent 当前工作区名（只用于徽标显示，**不改** agent.name）
         self._main_workspace_name = ""
@@ -1062,37 +1062,43 @@ class DshAdapter:
         except Exception as exc:  # noqa: BLE001
             logger.debug("多会话扫描失败：%s", exc)
             return
+
+        # ★★ 2026-10-26 最终形态：**所有会话完全平级**。
+        #   用户：「一定要分主会话和子会话吗？不能平等轮询平等前端展示会话状态吗？」
+        #   —— 对，之前的主/子分层是实现路径留下的包袱，不是设计需要：
+        #     · 主 agent(dsh) 由边车实时流驱动，子会话靠 3 秒轮询，
+        #       两条链路两套代码，更新粒度和可靠性都不一样；
+        #     · 前端还带「主」标签，看着像有主从关系。
+        #   现在统一：**每个会话一律注册成 dsh:<短id>**，同一个循环、
+        #   同一套字段、同一个刷新节奏，没有主/子之分。
+        #   总线上另保留一个 dsh（插件本体，无 workspace 字段），
+        #   它只代表"DSH 这个插件"，不代表某个会话 —— rail 里就显示它。
         alive_ids: set[str] = set()
         for item in sessions:
             sid = str(item["session_id"])
             facts = item["facts"] or {}
-            # 只给**正在跑任务**的会话挂徽标：已结束的不占视觉位置
+            # 只给**正在跑任务**的会话挂状态：已结束的不占视觉位置
             if not facts.get("in_turn"):
                 continue
-            # 与主 agent 去重：主 agent 已经在显示当前跟随的会话，
-            # 若为同一个会话再挂子徽标，桌宠会出现两条同名 chip。
-            if sid and sid == self.session_id:
-                continue
             short = sid.replace("session-", "")[:8]
-            sub_id = f"{AGENT_ID}:{short}"
-            alive_ids.add(sub_id)
+            sess_agent_id = f"{AGENT_ID}:{short}"
+            alive_ids.add(sess_agent_id)
             cwd = str(item.get("cwd") or "")
             label = Path(cwd).name if cwd else short
             try:
                 agent_bus_service.register(
-                    sub_id,
-                    # ★ name 恒为 AGENT_NAME：它是"哪个插件"的身份，
-                    #   子会话同属 DSH 插件，不该叫成工作区名
-                    #   （否则又会出现"rail/市场名称不一致"的老问题）。
-                    #   工作区名通过 state.badge_name 下发，只影响徽标文案。
+                    sess_agent_id,
+                    # name 恒为 AGENT_NAME：它是"哪个插件"的身份（rail/市场读它）。
+                    # 工作区名走 state.badge_name，只影响徽标文案。
                     AGENT_NAME,
                     "dsh_adapter",
                     capabilities={
                         "voice": False, "text": True, "screen": False,
                         "mcp": False, "observe": False,
-                        # ★ 声明子会话身份：UI 据此从"插件列表"里过滤，
-                        #   但在桌宠徽标里照常显示。
+                        # 会话身份（非独立插件）：插件列表类 UI 据此过滤。
                         "is_sub": True, "parent_agent": AGENT_ID,
+                        # 平级标记：现在所有会话都是这个层级，没有主/子。
+                        "session_level": True,
                     },
                     accent=DSH_ACCENT,
                     on_demand=True,
@@ -1104,27 +1110,21 @@ class DshAdapter:
                 state["badge_name"] = label
                 state["is_sub"] = True
                 state["parent_agent"] = AGENT_ID
-                agent_bus_service.emit(sub_id, phase, state=state, force=True)
-                agent_bus_service.heartbeat(sub_id)
+                state["session_level"] = True
+                agent_bus_service.emit(sess_agent_id, phase, state=state, force=True)
+                agent_bus_service.heartbeat(sess_agent_id)
             except Exception as exc:  # noqa: BLE001
-                logger.debug("子会话 %s 上报失败：%s", sub_id, exc)
-        # 收尾：已结束/被主 agent 接管的子会话直接注销（标 offline 会留垃圾记录）
-        for known in list(self._known_sub_agents):
+                logger.debug("会话 %s 上报失败：%s", sess_agent_id, exc)
+
+        # 收尾：已结束的会话身份直接注销（标 offline 会留垃圾记录）
+        for known in list(self._known_session_agents):
             if known in alive_ids:
                 continue
             try:
                 agent_bus_service.unregister(known)
             except Exception:  # noqa: BLE001
                 pass
-        self._known_sub_agents = alive_ids
-        if self.session_id:
-            short = self.session_id.replace("session-", "")[:8]
-            stale_sub = f"{AGENT_ID}:{short}"
-            if stale_sub not in alive_ids:
-                try:
-                    agent_bus_service.unregister(stale_sub)
-                except Exception:  # noqa: BLE001
-                    pass
+        self._known_session_agents = alive_ids
 
     def _sync_main_agent_name(self, cwd: str) -> None:
         """记录当前工作区名，供**徽标**显示；但**不改 agent 的 name**。
@@ -1145,6 +1145,10 @@ class DshAdapter:
           "Mao-dsh-pet" 而市场显示 "DSH" —— 就是用户看到的名称不一致。
           现在改成写 state.badge_name：徽标优先读它，没有才回落 name。
           rail / 市场永远只认 name，两边从此不会再漂移。
+
+          （2026-10-26 再修订：会话全部平级后，"主会话"这个概念只剩
+            "边车当前跟随的是哪个"这层含义，仅用于派生 dsh 插件本体的
+            phase 显示，不再影响任何会话身份。）
         """
         name = Path(cwd).name if cwd else ""
         self._main_workspace_name = name
@@ -1163,11 +1167,14 @@ class DshAdapter:
             state["error"] = err[:200]
         if self.session_id:
             state["session"] = self.session_id
-        # ★ 2026-10-26：徽标要显示当前工作区名，但**不能**改 agent.name
-        #   （name 是插件身份，必须与插件清单一致，否则 rail 与市场名称打架）。
-        #   这里单独下发 badge_name，渲染端只在画徽标时用它。
+        # ★ 2026-10-26 会话平级后的分工：
+        #   · dsh（本条，插件本体）只代表"DSH 这个插件"，**不画会话徽标**。
+        #     它带 plugin_self=True，桌宠渲染端据此跳过，避免与会话徽标重复。
+        #   · 每个会话是 dsh:<短id>，各自画一条徽标（badge_name=工作区名）。
+        #   rail / 插件市场只认 dsh 这条，所以列表里永远是"一个 DSH 插件"。
+        state["plugin_self"] = True
         if self._main_workspace_name:
-            state["badge_name"] = self._main_workspace_name
+            state["workspace"] = self._main_workspace_name
         self._emit_phase(phase, state, force=force)
         # DSH 独有信号 → 桌宠气泡：审批/提问挂起时主动播报一句
         # （phase 已表达"在等"，气泡负责"主动叫你"，二者不重叠）

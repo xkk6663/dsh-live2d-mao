@@ -2219,6 +2219,10 @@
       if (!st) return
       if (st.enabled === false) return          // 停用：状态栏一并停用
       if (st.status === 'offline') return       // 离线：即插即拔，不再展示
+      // ★ 2026-10-26 会话平级：plugin_self 是"插件本体"条目（如 dsh 自己），
+      //   它不代表任何会话，不画徽标 —— 否则会和 dsh:<id> 的会话徽标重复。
+      //   插件本体只出现在 rail / 插件市场里。
+      if (st.pluginSelf) return
       // phase 全表 12 态各有专属色；连接中/异常覆盖为连接态色
       let phase = String(st.phase || 'idle')
       let label
@@ -2401,6 +2405,7 @@
         //   必须像 since / ctx_pressure 一样**显式继承**。
         //   phase 从完成态换成工作态时清 0（由 renderAgentBadge 负责重置）。
         doneSince: Number(prev.doneSince) || 0,
+        pluginSelf: !!(payload.state && payload.state.plugin_self) || !!prev.pluginSelf,
       })
     }
     renderAgentBadge()
@@ -2542,6 +2547,7 @@
         // ★ 2026-10-26：与 applyAgentPhase 同理，必须继承完成态计时，
         //   否则任何一次状态广播都会把它清零（→ 完成徽标永不消失）。
         doneSince: Number(prev.doneSince) || 0,
+        pluginSelf: !!(payload.state && payload.state.plugin_self) || !!prev.pluginSelf,
       })
     }
     renderAgentBadge()
@@ -2585,6 +2591,7 @@
           //   否则完成态计时被清零 → 完成徽标永不消失（用户实拍）。
           //   与 since 同一个道理（那条注释早就写过"不继承就永远到不了"，这次漏了它）。
           doneSince: prev.phase === phase ? (Number(prev.doneSince) || 0) : 0,
+          pluginSelf: !!(a.state && a.state.plugin_self),
         })
       }
       agentBadgeStates.clear()

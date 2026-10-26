@@ -171,7 +171,7 @@
    * 名字用 `a.name`（后端注册时给的就是工作区目录名，如 Mao-dsh-pet / elab-flow），
    * 与桌宠徽标口径一致 —— 两处看到的是同一个名字，不会一个叫 DSH 一个叫目录名。
    */
-  function multiSessionRow(a, isMain, colors) {
+  function multiSessionRow(a, _unused, colors) {
     var st = String(a.status || 'offline')
     var phase = String(a.phase || 'idle')
     var state = a.state || {}
@@ -188,22 +188,21 @@
     if (state.workspace && state.workspace !== name) bits.push('工作区 ' + state.workspace)
     var meta = bits.join(' · ') || '—'
     var isDone = phase === 'complete' || phase === 'idle'
-    var badge = isMain
-      ? '<span style="font-size:10px;padding:1px 7px;border-radius:9px;background:#4F6BED1a;color:#4F6BED;">主</span>'
-      : ''
+    // 会话平级：不再有「主」标签，所有会话同一视觉待遇
     var done = isDone
       ? '<span style="font-size:10px;padding:1px 7px;border-radius:9px;background:#8a97a01a;color:#8a97a0;">已结束</span>'
       : ''
     return '<div style="display:flex;align-items:center;gap:9px;padding:7px 10px;border:1px solid var(--line,#d9e2e6);border-radius:8px;background:var(--surface-soft,#f2f6f7);">' +
       '<span style="width:8px;height:8px;border-radius:50%;background:' + stateColor(st) + ';flex:none;"></span>' +
       '<span style="font-size:12px;font-weight:600;color:var(--ink,#20303a);min-width:130px;">' + name + '</span>' +
-      badge + done +
+      done +
       '<span style="font-size:11px;color:' + phaseColor + ';font-weight:600;min-width:56px;">' + label + '</span>' +
       '<span style="flex:1;font-size:11px;color:var(--muted,#687984);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + meta + '</span>' +
     '</div>'
   }
 
-  function render(data, phases, diag, about, agentsSnapshot) {    var body = $q('#dshBody', panel)
+  function render(data, phases, diag, about, agentsSnapshot) {
+    var body = $q('#dshBody', panel)
     if (!body) return
     var rt = (data && data.runtime) || {}
     var facts = (data && data.facts) || {}
@@ -235,28 +234,24 @@
     //   （见 dsh_adapter._publish_multi_session_badges），桌宠头顶也会显示多个徽标。
     //   这里把同一份数据在 DSH 页里列出来，方便看清"到底几个项目在跑、各在干什么"。
     //
-    //   数据源用 agents 快照（不是 runtime），因为 runtime 只描述"主会话"。
+    //   数据源用 agents 快照（不是 runtime），因为 runtime 只描述边车跟随的那个。
     //
-    //   ★ 子会话识别用**后端声明**的 is_sub 标记（capabilities/state 里都有），
-    //     不靠 `dsh:` 前缀猜 —— 前缀是实现细节，后端改命名就会失效；
-    //     标记是契约，"这是谁的子会话"由插件自己声明（parent_agent）。
+    //   ★★ 2026-10-26 会话平级（用户：「一定要分主会话和子会话吗？
+    //      不能平等轮询平等前端展示会话状态吗？」）：
+    //      所有会话都是 dsh:<短id>，字段结构完全一致，**没有主/子**。
+    //      · session_level=True 的条目 = 会话，此处全部平级列出；
+    //      · plugin_self=True 的 dsh 条目 = 插件本体，**不进这张卡**
+    //        （它不代表任何会话，只在 rail / 市场里出现）。
     var allAgents = (agentsSnapshot && agentsSnapshot.agents) || []
-    function isSub(a) {
-      if (!a) return false
-      if (a.state && a.state.is_sub) return true
-      if (a.capabilities && a.capabilities.is_sub) return true
-      return String(a.agent_id || '').indexOf(':') >= 0
+    function stateOf(a) { return (a && a.state) || {} }
+    function isSession(a) {
+      return !!(stateOf(a).session_level || (a.capabilities && a.capabilities.session_level))
     }
-    var subs = allAgents.filter(isSub)
-    // 主会话也一起列出来，排在最前（它可能是最活跃的那个）
-    var mainAgent = allAgents.filter(function (a) {
-      return a && String(a.agent_id || '') === 'dsh'
-    })[0]
+    var sessions = allAgents.filter(isSession)
     var rowsHtml = []
-    if (mainAgent) {
-      rowsHtml.push(multiSessionRow(mainAgent, true, colors0()))
-    }
-    subs.forEach(function (a) { rowsHtml.push(multiSessionRow(a, false, colors0())) })
+    sessions.forEach(function (a) {
+      rowsHtml.push(multiSessionRow(a, false, colors0()))
+    })
     if (!rowsHtml.length) {
       rowsHtml.push('<div style="font-size:11px;color:var(--muted,#687984);padding:6px 2px;">当前没有正在工作的会话</div>')
     }
