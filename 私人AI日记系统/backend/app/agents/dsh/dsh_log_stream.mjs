@@ -279,6 +279,11 @@ function probeInTurn(logPath) {
     let sawStart = false
     let sawEnd = false
     let turnNo = null
+    // ★ 2026-10-26：「两个会话都在跑」时单靠 inTurn 分不出谁该显示。
+    //   这里额外记下**最后一个事件自己的时间戳**（ev.time），
+    //   它比文件 mtime 精确得多 —— 文件 mtime 会被"代理人自己的会话
+    //   每几秒写一次日志"污染，而 ev.time 是那条事件真正发生的时刻。
+    let lastEventTime = 0
     for (const fr of frames) {
       let lines
       try {
@@ -288,6 +293,8 @@ function probeInTurn(logPath) {
       }
       for (const ev of lines) {
         if (!ev || !ev.type) continue
+        const t = Number(ev.time)
+        if (Number.isFinite(t) && t > lastEventTime) lastEventTime = t
         if (ev.type === 'turn/start') {
           sawStart = true
           sawEnd = false
@@ -298,9 +305,9 @@ function probeInTurn(logPath) {
         }
       }
     }
-    return { inTurn: sawStart && !sawEnd, turn: turnNo }
+    return { inTurn: sawStart && !sawEnd, turn: turnNo, lastEventTime }
   } catch (_) {
-    return { inTurn: false, turn: null }
+    return { inTurn: false, turn: null, lastEventTime: 0 }
   } finally {
     if (fd !== undefined) {
       try { fs.closeSync(fd) } catch (_) {}
@@ -368,7 +375,7 @@ function listCandidates() {
       //   （探测要读尾部 256KB，对全部 45 个历史会话都读会拖慢每轮轮询）。
       //   超过 ACTIVE_WINDOW 没动静的会话不可能在跑任务，直接判 false。
       const freshEnough = Date.now() - touchedMs <= ACTIVE_WINDOW_MS
-      const turnInfo = freshEnough ? probeInTurn(logPath) : { inTurn: false, turn: null }
+      const turnInfo = freshEnough ? probeInTurn(logPath) : { inTurn: false, turn: null, lastEventTime: 0 }
       out.push({
         logPath,
         sessionId: s.name,
@@ -386,6 +393,8 @@ function listCandidates() {
         // ★ 2026-10-25：是否**真的正在跑任务**（语义判据，见 probeInTurn 注释）
         inTurn: turnInfo.inTurn,
         turnNo: turnInfo.turn,
+        // 最后一个事件的真实时刻（0 = 探测不到），用于同 inTurn 时的优先级比较
+        lastEventTime: turnInfo.lastEventTime || 0,
       })
     }
   }
@@ -403,6 +412,13 @@ function listCandidates() {
   //   旧的可能仍然更"新"，于是永远排第一 → 边车不切 → 桌宠卡在旧状态。
   out.sort((a, b) => {
     if (a.inTurn !== b.inTurn) return a.inTurn ? -1 : 1
+    // ★ 2026-10-26：**都在跑**时，比"谁最后有动作"（事件时间戳），
+    //   而不是文件 mtime —— 后者会被"代理人自己的会话写日志更勤"污染。
+    if (a.inTurn && b.inTurn) {
+      const at = a.lastEventTime || 0
+      const bt = b.lastEventTime || 0
+      if (at !== bt) return bt - at
+    }
     if (a.inWorkspace !== b.inWorkspace) return a.inWorkspace ? -1 : 1
     if (a.delegationDepth !== b.delegationDepth) return a.delegationDepth - b.delegationDepth
     return b.touchedMs - a.touchedMs
@@ -1023,6 +1039,20 @@ function pickTarget() {
   if (best.inTurn && !current.inTurn) return best
   // 反向保护：当前会话正在跑、新候选没在跑 → 守住当前，别被"刚写了一下"的会话带走
   if (current.inTurn && !best.inTurn) return current
+  // ★★ 2026-10-26 用户裁决「自动跟最近有动作的那个」：
+  //   **两边都在跑**时（用户同时开多个工作区窗口），比"谁最后有动作"。
+  //   用事件时间戳 lastEventTime 而不是文件 mtime：
+  //   mtime 会被"代理人自己的会话每几秒写一次日志"污染 —— 实测两个会话
+  //   in_turn 都是 true 时，纯 mtime 判断永远留在自己这边，另一个项目
+  //   哪怕正在 read/跑工具也切不过去。
+  //   事件时间戳是那条事件真正发生的时刻，谁刚动过一目了然。
+  if (best.inTurn && current.inTurn) {
+    const bt = best.lastEventTime || 0
+    const ct = current.lastEventTime || 0
+    // 只有当对方确实**更近**时才切换（差值 > 1s，避免抖动）
+    if (bt > ct && bt - ct > 1000) return best
+    return current
+  }
   const currentFresh = now - current.touchedMs <= ACTIVE_WINDOW_MS
   const currentStale = now - current.touchedMs >= STALE_WINDOW_MS
   const betterScope = best.inWorkspace && !current.inWorkspace
