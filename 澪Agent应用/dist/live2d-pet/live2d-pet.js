@@ -1679,6 +1679,12 @@
   // 即插即用：注册/上线即出现；停用(enabled=false)或离线(offline)即移除。
   const agentBadgeStates = new Map()
 
+  // ★ 2026-10-26 用户裁决（多任务徽标）：
+  //   · 已完成的徽标 10 秒后自动消失 —— 完成态留着没信息量，一直挂着还挡视线；
+  //   · 最多同时显示 3 个会话 —— 再多会盖住桌宠本体，也看不过来。
+  const COMPLETE_CHIP_TTL_MS = 10 * 1000
+  const MAX_VISIBLE_CHIPS = 3
+
   const AGENT_STATUS_LABELS = { online: '在线', connecting: '连接中', error: '异常', offline: '离线' }
 
   // ---- 插件身份色 ----
@@ -2177,8 +2183,31 @@
     orb.style.top = `${lastCtxOrbPos.top}px`
   }
 
-  function renderAgentBadge() {
-    if (!agentBadgeEnabled()) {
+  /**
+   * 完成态徽标的到期重绘。
+   *
+   * renderAgentBadge 只在**有事件到来**时被调用，而"完成 10 秒后消失"
+   * 是个纯时间条件 —— DSH 完成后就不再发心跳了，没有事件再来触发重绘，
+   * 徽标会一直挂到下一个事件为止（实测可能挂几分钟）。
+   * 所以这里在有完成态徽标时挂一个一次性定时器，到点重绘把它摘掉。
+   */
+  let badgeExpiryTimer = null
+  function scheduleBadgeExpiryTick() {
+    if (badgeExpiryTimer) return
+    let soonest = null
+    agentBadgeStates.forEach((st) => {
+      if (!st || !st.doneSince) return
+      const remain = COMPLETE_CHIP_TTL_MS - (Date.now() - st.doneSince)
+      if (soonest === null || remain < soonest) soonest = remain
+    })
+    if (soonest === null) return
+    badgeExpiryTimer = window.setTimeout(function () {
+      badgeExpiryTimer = null
+      renderAgentBadge()
+    }, Math.max(200, soonest + 50))
+  }
+
+  function renderAgentBadge() {    if (!agentBadgeEnabled()) {
       const badge = document.getElementById('agent-badge')
       if (badge) badge.style.opacity = '0'
       window.__lastAgentBadgeText = ''
@@ -2202,14 +2231,38 @@
       } else {
         label = PHASE_LABELS[phase] || phase
       }
+      // ★ 2026-10-26 用户裁决：「已完成的徽标 10 秒后自动消失」。
+      //   完成态（complete / idle）留着没信息量，一直挂着反而挡视线。
+      //   记录它**首次进入**完成态的时刻；超过 COMPLETE_CHIP_TTL_MS 就不再渲染。
+      //   注意必须"首次进入"而不是每次刷新都重置 —— 心跳每 2s 补发一次，
+      //   若每帧重置，这个计时器永远不会到点（和长任务提醒踩过同一个坑）。
+      const isDone = phase === 'complete' || phase === 'idle'
+      if (isDone) {
+        if (!st.doneSince) st.doneSince = Date.now()
+        if (Date.now() - st.doneSince > COMPLETE_CHIP_TTL_MS) return
+      } else {
+        st.doneSince = 0
+      }
       chips.push({
         id, name: String(st.name || id), label, phase, accent: st.accent || '',
         // A2 上下文压力（仅进 tooltip，不占横条/徽标文字）
         ctx: typeof st.ctx_pressure === 'number' ? st.ctx_pressure : null,
+        // 完成态的最后显示时刻（用于排序时把它们排后面）
+        doneSince: st.doneSince || 0,
       })
     })
+    // ★ 2026-10-26 用户裁决：「最多支持同时显示 3 个会话」。
+    //   排序规则：**正在工作的排前面**（那是用户最关心的），
+    //   完成态垫底；同组内按完成时刻/注册顺序稳定排列。
+    chips.sort((a, b) => {
+      const aDone = a.doneSince > 0 ? 1 : 0
+      const bDone = b.doneSince > 0 ? 1 : 0
+      if (aDone !== bDone) return aDone - bDone
+      return 0
+    })
+    const visibleChips = chips.slice(0, MAX_VISIBLE_CHIPS)
     badge.replaceChildren()
-    for (const chip of chips) {
+    for (const chip of visibleChips) {
       const el = document.createElement('span')
       el.className = `agent-badge-chip p-${chip.phase}`
       // 插件身份色：不同来源的 Agent 用各自专属色，一眼区分谁在工作。
@@ -2247,6 +2300,9 @@
     updateCtxOrbPosition(true)
     // 兼容旧引用（右键菜单重新开启徽标时恢复展示）
     window.__lastAgentBadgeText = chips.map((c) => `${c.name} · ${c.label}`).join('，')
+    // 本帧之后若仍有"等待到期"的完成态徽标，续上下一跳（链式定时器，
+    // 保证 10 秒到期那一刻一定会重绘一次，不依赖新事件到来）
+    scheduleBadgeExpiryTick()
   }
 
   // 徽标定位：手动拖动位置优先；否则锚定模型头顶上方居中。锁定时不可交互。
@@ -2334,6 +2390,7 @@
       })
     }
     renderAgentBadge()
+    scheduleBadgeExpiryTick()
     const label = PHASE_LABELS[phase] || phase
     if (active) {
       activityIndicator.title = `${agentName} · ${label}`
