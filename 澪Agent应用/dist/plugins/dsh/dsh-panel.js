@@ -234,10 +234,18 @@
     //   这里把同一份数据在 DSH 页里列出来，方便看清"到底几个项目在跑、各在干什么"。
     //
     //   数据源用 agents 快照（不是 runtime），因为 runtime 只描述"主会话"。
+    //
+    //   ★ 子会话识别用**后端声明**的 is_sub 标记（capabilities/state 里都有），
+    //     不靠 `dsh:` 前缀猜 —— 前缀是实现细节，后端改命名就会失效；
+    //     标记是契约，"这是谁的子会话"由插件自己声明（parent_agent）。
     var allAgents = (agentsSnapshot && agentsSnapshot.agents) || []
-    var subs = allAgents.filter(function (a) {
-      return a && String(a.agent_id || '').indexOf('dsh:') === 0
-    })
+    function isSub(a) {
+      if (!a) return false
+      if (a.state && a.state.is_sub) return true
+      if (a.capabilities && a.capabilities.is_sub) return true
+      return String(a.agent_id || '').indexOf(':') >= 0
+    }
+    var subs = allAgents.filter(isSub)
     // 主会话也一起列出来，排在最前（它可能是最活跃的那个）
     var mainAgent = allAgents.filter(function (a) {
       return a && String(a.agent_id || '') === 'dsh'

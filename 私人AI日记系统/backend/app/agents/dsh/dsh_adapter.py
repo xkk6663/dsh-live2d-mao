@@ -1033,12 +1033,27 @@ class DshAdapter:
         return out
 
     def _publish_multi_session_badges(self, config: dict[str, Any]) -> None:
-        """把每个在跑的会话注册成独立 agent（dsh:<短id>），桌宠显示多个徽标。
+        """为每个并行工作的会话注册一个**子身份** ``dsh:<短id>``，桌宠据此显示多徽标。
 
-        与主 agent（AGENT_ID="dsh"）并存：
-          · 主 agent 仍由边车 pickTarget 驱动（兼容既有单徽标行为）；
-          · 额外会话用 dsh:<8位> 身份，名字取工作区目录名，便于一眼认出是哪个项目。
-        不在跑的会话会被标 offline（渲染端据此不显示 chip，自动清理）。
+        ★★ 2026-10-26 架构口径（用户两次裁决后的定论）：
+
+          用户先说：「这两个会话工作状态应该都是隶属 DSH 插件的吧」
+          用户再说：「符合一切皆插件原则，dsh 插件不用动桌宠主体插件」
+
+          两条合起来的意思是：
+            · 桌宠主体是**通用多 agent 渲染器**（agentBadgeStates 是 Map，
+              renderAgentBadge 遍历它画 chip）—— 它不认任何具体插件，
+              所以**绝不能让桌宠去理解"DSH 的会话列表"这种插件私有结构**；
+            · 会话的归属问题（"看起来像多装了插件"）应该在**插件自己这边**
+              标记清楚，让插件列表类 UI 过滤掉，而不是改桌宠或改总线。
+
+          所以这里的实现是：
+            · 子身份仍然注册进总线（这是桌宠能画多徽标的**唯一**通用途径）；
+            · 但 capabilities/state 里带 ``is_sub=True`` + ``parent_agent="dsh"``，
+              明确声明"我是 DSH 的子会话，不是独立插件"；
+            · 右侧工作栏 / 插件列表等 UI 读到这两个字段就过滤掉
+              （见 rail-switch-inject.js 的 isSubAgent）；
+            · 桌宠徽标照常显示（它就该显示所有活跃 agent）。
         """
         if not self._bus_enabled():
             return
@@ -1054,9 +1069,8 @@ class DshAdapter:
             # 只给**正在跑任务**的会话挂徽标：已结束的不占视觉位置
             if not facts.get("in_turn"):
                 continue
-            # ★ 与主 agent 去重：主 agent（AGENT_ID="dsh"）已经在显示当前跟随的会话，
-            #   若为同一个会话再挂一个 dsh:<short>，桌宠会出现两个「DSH」徽标。
-            #   主 agent 覆盖到的那一个，交给主 agent 显示；子徽标只补"其余的"。
+            # 与主 agent 去重：主 agent 已经在显示当前跟随的会话，
+            # 若为同一个会话再挂子徽标，桌宠会出现两条同名 chip。
             if sid and sid == self.session_id:
                 continue
             short = sid.replace("session-", "")[:8]
@@ -1067,26 +1081,29 @@ class DshAdapter:
             try:
                 agent_bus_service.register(
                     sub_id,
-                    # ★ 名字直接用工作区目录名（原来是 "DSH·<目录>"）：
-                    #   徽标文案是 `<name> · <phase>`，带 "DSH·" 会变成
-                    #   「DSH·elab-flow · 执行工具」，前缀冗余且与主徽标不一致。
                     label or short,
                     "dsh_adapter",
-                    capabilities={"voice": False, "text": True, "screen": False, "mcp": False, "observe": False},
+                    capabilities={
+                        "voice": False, "text": True, "screen": False,
+                        "mcp": False, "observe": False,
+                        # ★ 声明子会话身份：UI 据此从"插件列表"里过滤，
+                        #   但在桌宠徽标里照常显示。
+                        "is_sub": True, "parent_agent": AGENT_ID,
+                    },
                     accent=DSH_ACCENT,
+                    on_demand=True,
                 )
                 phase, state = phase_for_facts(facts)
                 state = dict(state)
                 state["session"] = sid
                 state["workspace"] = label
+                state["is_sub"] = True
+                state["parent_agent"] = AGENT_ID
                 agent_bus_service.emit(sub_id, phase, state=state, force=True)
                 agent_bus_service.heartbeat(sub_id)
             except Exception as exc:  # noqa: BLE001
                 logger.debug("子会话 %s 上报失败：%s", sub_id, exc)
-        # 收尾：上一轮有、这一轮没了（已结束，或被主 agent 接管）的子会话
-        # 直接**注销**而不是标 offline —— 标 offline 的记录会一直留在总线上
-        # （重启后 _known_sub_agents 为空，谁也清理不到它），
-        # 表现为"徽标列表里多一条早就没用的项"。
+        # 收尾：已结束/被主 agent 接管的子会话直接注销（标 offline 会留垃圾记录）
         for known in list(self._known_sub_agents):
             if known in alive_ids:
                 continue
@@ -1095,8 +1112,6 @@ class DshAdapter:
             except Exception:  # noqa: BLE001
                 pass
         self._known_sub_agents = alive_ids
-        # 同样的道理：被主 agent 覆盖的那些（同 session_id）若之前注册过子徽标，
-        # 也要清掉，否则会和主徽标重复显示同一件事。
         if self.session_id:
             short = self.session_id.replace("session-", "")[:8]
             stale_sub = f"{AGENT_ID}:{short}"

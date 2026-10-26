@@ -33,10 +33,31 @@
 
   function $q(sel, root) { return (root || document).querySelector(sel) }
 
+  /**
+   * 子 agent 过滤：`dsh:<短id>` 这类带冒号的身份是**某个插件内部的会话**
+   * （DSH 多工作区并行时，每个会话一个），不是独立插件。
+   *
+   * ★ 2026-10-26 用户实拍：「右侧工作栏怎么多出一个插件？这两个会话工作状态
+   *   应该都是隶属 DSH 插件的吧」—— 说得对。它们是 DSH 插件的内部状态，
+   *   在 rail 里各占一行会让人以为装了新插件，而且能单独"停用"它们毫无意义
+   *   （停用的是会话徽标，不是插件）。子会话状态统一在 DSH 页的
+   *   「多会话工作状态」卡里看（见 plugins/dsh/dsh-panel.js）。
+   *
+   * 约定：agent_id 含 `:` 即为子身份，rail / 插件列表一律不展示。
+   */
+  function isSubAgent(a) {
+    return !!a && String(a.agent_id || '').indexOf(':') >= 0
+  }
+
   function loadAgents() {
     return fetch('/api/companion/agents')
       .then(function (r) { return r.json() })
-      .then(function (j) { agents = (j && j.agents) || []; return j })
+      .then(function (j) {
+        var all = (j && j.agents) || []
+        // 主 agent 全保留；子会话（dsh:<id>）不进 rail
+        agents = all.filter(function (a) { return !isSubAgent(a) })
+        return j
+      })
   }
 
   function setEnabled(agentId, enabled) {
