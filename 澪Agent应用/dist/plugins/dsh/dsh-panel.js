@@ -153,8 +153,55 @@
     return panel
   }
 
-  function render(data, phases, diag, about) {
-    var body = $q('#dshBody', panel)
+  /** 12 态 → 中文标签。与桌宠徽标（live2d-pet.js PHASE_LABELS）保持同一口径。 */
+  var PHASE_LABELS_UI = {
+    idle: '待机', planning: '规划', thinking: '思考中', executing_tool: '执行工具',
+    streaming: '回复中', waiting_input: '聆听中', voice: '说话中', complete: '完成',
+    error: '出错', paused: '暂停', awaiting_approval: '待确认', heartbeat: '在线',
+  }
+
+  /** 当前 12 态配色表（多会话行要用它取 phase 色）。 */
+  function colors0() {
+    return loadPhaseColors()
+  }
+
+  /**
+   * 多会话卡片里的一行：状态点 + 工作区名 + phase + turn/step/tool。
+   *
+   * 名字用 `a.name`（后端注册时给的就是工作区目录名，如 Mao-dsh-pet / elab-flow），
+   * 与桌宠徽标口径一致 —— 两处看到的是同一个名字，不会一个叫 DSH 一个叫目录名。
+   */
+  function multiSessionRow(a, isMain, colors) {
+    var st = String(a.status || 'offline')
+    var phase = String(a.phase || 'idle')
+    var state = a.state || {}
+    var label = (PHASE_LABELS_UI[phase] || phase)
+    var phaseColor = colorOf(phase, colors)
+    var name = String(a.name || a.agent_id || '')
+    var bits = []
+    if (state.turn != null) bits.push('轮次 ' + state.turn)
+    if (state.step != null) bits.push('步骤 ' + state.step)
+    if (state.tool) bits.push('工具 ' + state.tool)
+    if (state.tool_calls != null) bits.push('调用 ' + state.tool_calls + ' 次')
+    if (state.workspace && state.workspace !== name) bits.push('工作区 ' + state.workspace)
+    var meta = bits.join(' · ') || '—'
+    var isDone = phase === 'complete' || phase === 'idle'
+    var badge = isMain
+      ? '<span style="font-size:10px;padding:1px 7px;border-radius:9px;background:#4F6BED1a;color:#4F6BED;">主</span>'
+      : ''
+    var done = isDone
+      ? '<span style="font-size:10px;padding:1px 7px;border-radius:9px;background:#8a97a01a;color:#8a97a0;">已结束</span>'
+      : ''
+    return '<div style="display:flex;align-items:center;gap:9px;padding:7px 10px;border:1px solid var(--line,#d9e2e6);border-radius:8px;background:var(--surface-soft,#f2f6f7);">' +
+      '<span style="width:8px;height:8px;border-radius:50%;background:' + stateColor(st) + ';flex:none;"></span>' +
+      '<span style="font-size:12px;font-weight:600;color:var(--ink,#20303a);min-width:130px;">' + name + '</span>' +
+      badge + done +
+      '<span style="font-size:11px;color:' + phaseColor + ';font-weight:600;min-width:56px;">' + label + '</span>' +
+      '<span style="flex:1;font-size:11px;color:var(--muted,#687984);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + meta + '</span>' +
+    '</div>'
+  }
+
+  function render(data, phases, diag, about, agentsSnapshot) {    var body = $q('#dshBody', panel)
     if (!body) return
     var rt = (data && data.runtime) || {}
     var facts = (data && data.facts) || {}
@@ -178,6 +225,36 @@
       kv('进行中工具', facts.active_tools) +
       kv('待办', facts.todos ? facts.todos + ' 项' : '') +
       kv('最近事件', facts.last_event || ''))
+
+    // 1.5) 多会话工作状态（2026-10-26 用户裁决：「优化 dsh 里面前端展示多会话工作状态」）
+    //
+    //   背景：DSH 允许同时开多个工作区窗口，每个窗口一个会话。
+    //   后端会为**正在跑任务**的会话各注册一个 dsh:<短id> 身份
+    //   （见 dsh_adapter._publish_multi_session_badges），桌宠头顶也会显示多个徽标。
+    //   这里把同一份数据在 DSH 页里列出来，方便看清"到底几个项目在跑、各在干什么"。
+    //
+    //   数据源用 agents 快照（不是 runtime），因为 runtime 只描述"主会话"。
+    var allAgents = (agentsSnapshot && agentsSnapshot.agents) || []
+    var subs = allAgents.filter(function (a) {
+      return a && String(a.agent_id || '').indexOf('dsh:') === 0
+    })
+    // 主会话也一起列出来，排在最前（它可能是最活跃的那个）
+    var mainAgent = allAgents.filter(function (a) {
+      return a && String(a.agent_id || '') === 'dsh'
+    })[0]
+    var rowsHtml = []
+    if (mainAgent) {
+      rowsHtml.push(multiSessionRow(mainAgent, true, colors0()))
+    }
+    subs.forEach(function (a) { rowsHtml.push(multiSessionRow(a, false, colors0())) })
+    if (!rowsHtml.length) {
+      rowsHtml.push('<div style="font-size:11px;color:var(--muted,#687984);padding:6px 2px;">当前没有正在工作的会话</div>')
+    }
+    html += card('多会话工作状态',
+      '<div style="font-size:11px;color:var(--muted,#687984);margin-bottom:8px;">' +
+        '同时开启多个工作区窗口时，这里列出每个正在跑的任务（最多同时显示 3 个徽标）' +
+      '</div>' +
+      '<div style="display:flex;flex-direction:column;gap:6px;">' + rowsHtml.join('') + '</div>')
 
     // 2) 事实面板（DSH 独有的运行时事实）
     var chips = []
@@ -330,6 +407,12 @@
         .then(function (r) { return r.json() })
         .then(function (j) { return (j && j.pet && j.pet.settings) || {} })
         .catch(function () { return {} }),
+      // ★ 2026-10-26 多会话工作状态：总线里 dsh:<短id> 是我为"同时开多个
+      //   工作区窗口"注册的子 agent（见 dsh_adapter._publish_multi_session_badges）。
+      //   这里取全量快照，筛出 dsh 前缀的条目单独成卡。
+      fetch('/api/companion/agents', { headers: { 'Cache-Control': 'no-cache' } })
+        .then(function (r) { return r.json() })
+        .catch(function () { return null }),
     ]).then(function (res) {
       // 缓存后端下发的自定义色（仅当用户没在本次会话改过时覆盖，避免回写竞态）
       var fromBackend = (res[4] && res[4].live2d_phase_colors) || null
@@ -337,7 +420,7 @@
         && (!phaseColorsState || Object.keys(phaseColorsState).length === 0)) {
         phaseColorsState = fromBackend
       }
-      if (panel && panel.style.display !== 'none') render(res[0], res[1], res[2], res[3])
+      if (panel && panel.style.display !== 'none') render(res[0], res[1], res[2], res[3], res[5])
     })
   }
 

@@ -2387,6 +2387,13 @@
         ctx_pressure: Number.isFinite(Number(payload.state && payload.state.ctx_pressure))
           ? Number(payload.state.ctx_pressure)
           : (typeof prev.ctx_pressure === 'number' ? prev.ctx_pressure : null),
+        // ★★ 2026-10-26「完成徽标 10 秒后消失」失效的真因：
+        //   这里每次心跳都**重建整个状态对象**，若不带 doneSince，
+        //   它每 2 秒被清成 undefined，renderAgentBadge 里又当成"刚完成"
+        //   重新计时 → 10 秒永远到不了（用户实拍：完成的徽标一直不消失）。
+        //   必须像 since / ctx_pressure 一样**显式继承**。
+        //   phase 从完成态换成工作态时清 0（由 renderAgentBadge 负责重置）。
+        doneSince: Number(prev.doneSince) || 0,
       })
     }
     renderAgentBadge()
@@ -2518,6 +2525,9 @@
         //   都会把已拿到的上下文压力抹掉，小球随即消失 —— 正是用户报的"偶发丢失"。
         //   agent_status 载荷里没有该字段，所以只能从 prev 继承。
         ctx_pressure: typeof prev.ctx_pressure === 'number' ? prev.ctx_pressure : null,
+        // ★ 2026-10-26：与 applyAgentPhase 同理，必须继承完成态计时，
+        //   否则任何一次状态广播都会把它清零（→ 完成徽标永不消失）。
+        doneSince: Number(prev.doneSince) || 0,
       })
     }
     renderAgentBadge()
@@ -2556,6 +2566,10 @@
           ctx_pressure: Number.isFinite(Number(a.state && a.state.ctx_pressure))
             ? Number(a.state.ctx_pressure)
             : (typeof prev.ctx_pressure === 'number' ? prev.ctx_pressure : null),
+          // ★ 2026-10-26：全量快照每轮重建 Map，**必须继承** doneSince，
+          //   否则完成态计时被清零 → 完成徽标永不消失（用户实拍）。
+          //   与 since 同一个道理（那条注释早就写过"不继承就永远到不了"，这次漏了它）。
+          doneSince: prev.phase === phase ? (Number(prev.doneSince) || 0) : 0,
         })
       }
       agentBadgeStates.clear()
