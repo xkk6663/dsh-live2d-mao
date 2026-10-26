@@ -2276,7 +2276,10 @@
       if (accent) {
         el.classList.add('agent-accented')
         el.style.setProperty('--agent-accent', accent)
-        el.style.borderColor = accent + '66'
+        // ★ 2026-10-26 美化时移除 el.style.borderColor：
+        //   它会把**四边**都染成身份色，把 CSS 里"胶囊描边 + 左侧身份色竖条"
+        //   的设计冲掉（看起来像给每枚徽标套了个粗彩框）。
+        //   身份色现在完全由 CSS 的 border-left + inset box-shadow 表达。
       }
       el.textContent = `${chip.name} · ${chip.label}`
       el.title = `${chip.name} · ${chip.label}` +

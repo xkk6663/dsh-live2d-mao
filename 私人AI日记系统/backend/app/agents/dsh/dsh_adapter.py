@@ -1074,6 +1074,17 @@ class DshAdapter:
         #   总线上另保留一个 dsh（插件本体，无 workspace 字段），
         #   它只代表"DSH 这个插件"，不代表某个会话 —— rail 里就显示它。
         alive_ids: set[str] = set()
+        # ★ 2026-10-26：同一工作区可能同时有多个会话在跑（用户重开会话窗口等），
+        #   它们的工作区名相同，徽标会出现两条一模一样的「Mao-dsh-pet · 思考中」，
+        #   完全分不出是两个任务。先数一下每个工作区有几个在跑的会话，
+        #   重名时给 badge_name 补 4 位会话号区分（唯一时保持纯工作区名，不加噪声）。
+        running = [it for it in sessions if (it.get("facts") or {}).get("in_turn")]
+        workspace_count: dict[str, int] = {}
+        for it in running:
+            cwd_i = str(it.get("cwd") or "")
+            key_i = Path(cwd_i).name if cwd_i else str(it["session_id"])[:8]
+            workspace_count[key_i] = workspace_count.get(key_i, 0) + 1
+
         for item in sessions:
             sid = str(item["session_id"])
             facts = item["facts"] or {}
@@ -1085,6 +1096,10 @@ class DshAdapter:
             alive_ids.add(sess_agent_id)
             cwd = str(item.get("cwd") or "")
             label = Path(cwd).name if cwd else short
+            # 同工作区多会话 → 追加 4 位短号，避免徽标文案重复
+            badge_label = label
+            if workspace_count.get(label, 0) > 1:
+                badge_label = f"{label}·{short[:4]}"
             try:
                 agent_bus_service.register(
                     sess_agent_id,
@@ -1107,7 +1122,8 @@ class DshAdapter:
                 state = dict(state)
                 state["session"] = sid
                 state["workspace"] = label
-                state["badge_name"] = label
+                # 徽标文案用 badge_label（同工作区多会话时带短号区分）
+                state["badge_name"] = badge_label
                 state["is_sub"] = True
                 state["parent_agent"] = AGENT_ID
                 state["session_level"] = True

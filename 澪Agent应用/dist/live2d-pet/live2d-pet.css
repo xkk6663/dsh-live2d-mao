@@ -120,8 +120,12 @@ body,
      多任务徽标会同时出现多条（Mao-dsh-pet / elab-flow …），
      横排容易超出 max-width 被挤压；纵向排列每条独占一行，一眼看完。 */
   flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
+  /* ★ 2026-10-26 用户裁决：「上下中心对齐」。
+     原来 align-items: flex-start 让长短不一的徽标左边缘对齐，
+     下面几条短的就往左歪，整体看着是斜的；居中后各条轴线一致。 */
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
   max-width: 480px;
   background: none;
   padding: 0;
@@ -130,16 +134,30 @@ body,
 .agent-badge-chip {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
+  gap: 5px;
   flex: 0 0 auto;
-  padding: 2px 8px;
-  border-radius: 9px;
-  background: rgb(16 24 32 / 72%);
+  /* ★ 美化（2026-10-26）：内边距加大、圆角改胶囊形、加细描边与柔和投影。
+     原来是 2px 8px / 圆角 9px 的窄条，贴在模型头顶显得单薄；
+     现在 pill 形 + 轻玻璃质感，能从桌面上"浮"起来一点，更好读。 */
+  padding: 4px 11px;
+  border-radius: 999px;
+  background: rgb(16 24 32 / 78%);
   color: #e8eef0;
-  font: 11px/1.4 "Microsoft YaHei", sans-serif;
+  font: 11.5px/1.45 "Microsoft YaHei", sans-serif;
+  letter-spacing: 0.2px;
   white-space: nowrap;
-  max-width: 220px;
+  max-width: 240px;
   overflow: hidden;
   text-overflow: ellipsis;
+  border: 1px solid rgb(255 255 255 / 14%);
+  box-shadow:
+    0 2px 8px rgb(0 0 0 / 22%),
+    inset 0 1px 0 rgb(255 255 255 / 12%);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  text-shadow: 0 1px 2px rgb(0 0 0 / 35%);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 /* phase 全表 12 态专属色（含连接中/异常，深底白字） */
@@ -174,11 +192,26 @@ body,
      · 底色          = **状态色**（.p-<phase> 决定，一眼看出在思考/执行/完成）
    身份色以半透明内发光的形式补进底色，既保留辨识度又不吃掉状态色。 */
 .agent-badge-chip.agent-accented {
-  padding-left: 6px;
+  /* 胶囊形下左内边距略收，给身份色竖条留位置 */
+  padding-left: 8px;
   border-left: 3px solid var(--agent-accent, transparent);
   /* 不写 background：让 .p-<phase> 的状态色生效 */
   color: #fff;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--agent-accent, #4F6BED) 55%, transparent);
+  /* ★ 2026-10-26：必须**同时保留**基础投影与内高光，
+     否则这条会覆盖 .agent-badge-chip 的 box-shadow，带身份色的徽标
+     就变回扁平（视觉上与其它徽标不一致）。 */
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--agent-accent, #4F6BED) 55%, transparent),
+    0 2px 8px rgb(0 0 0 / 22%),
+    inset 0 1px 0 rgb(255 255 255 / 12%);
+}
+
+/* 悬停微浮起：徽标可拖动/可点击时给一点反馈（不闪、不跳动）。 */
+.agent-badge-chip:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    0 4px 12px rgb(0 0 0 / 28%),
+    inset 0 1px 0 rgb(255 255 255 / 16%);
 }
 
 /* ---- A2 上下文占用**独立常挂玻璃小球**（2026-10-20 三修）----
