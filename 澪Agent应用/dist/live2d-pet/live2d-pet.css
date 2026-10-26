@@ -125,7 +125,7 @@ body,
      下面几条短的就往左歪，整体看着是斜的；居中后各条轴线一致。 */
   align-items: center;
   justify-content: center;
-  gap: 5px;
+  gap: 4px;
   max-width: 480px;
   background: none;
   padding: 0;
@@ -135,19 +135,19 @@ body,
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
   flex: 0 0 auto;
-  /* ★ 美化（2026-10-26）：内边距加大、圆角改胶囊形、加细描边与柔和投影。
-     原来是 2px 8px / 圆角 9px 的窄条，贴在模型头顶显得单薄；
-     现在 pill 形 + 轻玻璃质感，能从桌面上"浮"起来一点，更好读。 */
-  padding: 4px 11px;
-  border-radius: 999px;
-  background: rgb(16 24 32 / 78%);
+  /* ★ 2026-10-26 用户反馈「太大了，大小尺寸变回原来样子」+
+     「只调大小就行，别的优化不用改」：
+     占位尺寸全部沿用原值（padding 2px 8px、字号 11px/1.4、圆角 9px、
+     max-width 220px），美化部分（描边 / 投影 / 内高光 / 玻璃模糊 /
+     悬停反馈）保留 —— 它们不改变徽标占位，只是让它更清晰。 */
+  padding: 2px 8px;
+  border-radius: 9px;
+  background: rgb(16 24 32 / 72%);
   color: #e8eef0;
-  font: 11.5px/1.45 "Microsoft YaHei", sans-serif;
-  letter-spacing: 0.2px;
+  font: 11px/1.4 "Microsoft YaHei", sans-serif;
   white-space: nowrap;
-  max-width: 240px;
+  max-width: 220px;
   overflow: hidden;
   text-overflow: ellipsis;
   border: 1px solid rgb(255 255 255 / 14%);
@@ -192,14 +192,14 @@ body,
      · 底色          = **状态色**（.p-<phase> 决定，一眼看出在思考/执行/完成）
    身份色以半透明内发光的形式补进底色，既保留辨识度又不吃掉状态色。 */
 .agent-badge-chip.agent-accented {
-  /* 胶囊形下左内边距略收，给身份色竖条留位置 */
-  padding-left: 8px;
+  /* 左内边距微收，给身份色竖条留位置（占位与基础徽标一致，不放大） */
+  padding-left: 6px;
   border-left: 3px solid var(--agent-accent, transparent);
   /* 不写 background：让 .p-<phase> 的状态色生效 */
   color: #fff;
-  /* ★ 2026-10-26：必须**同时保留**基础投影与内高光，
-     否则这条会覆盖 .agent-badge-chip 的 box-shadow，带身份色的徽标
-     就变回扁平（视觉上与其它徽标不一致）。 */
+  /* ★ 必须**同时保留**基础投影与内高光，否则这条会覆盖
+     .agent-badge-chip 的 box-shadow，带身份色的徽标会变扁平、
+     与其它徽标视觉不一致。 */
   box-shadow:
     inset 0 0 0 1px color-mix(in srgb, var(--agent-accent, #4F6BED) 55%, transparent),
     0 2px 8px rgb(0 0 0 / 22%),
