@@ -213,6 +213,14 @@ REEMIT_MS = 2000
 PLUGIN_OWN_TTL_SEC = 15.0
 # 边车静默超过该时长视为异常，重启边车
 SIDECAR_STALE_MS = 20_000
+# ── 多会话徽标（2026-10-26 用户裁决）────────────────────────────────────────
+# 只有这么多秒内被写过的会话才可能"正在跑"，才值得为它挂徽标。
+ACTIVE_WINDOW_SECONDS = 180
+# 同时最多跟踪多少个会话（每个要起一次 --once 子进程，别让它在极端情况下拖慢循环）。
+MAX_TRACKED_SESSIONS = 4
+# 多会话扫描的周期（毫秒）。比主 phase 上报慢一档：它要起子进程、开销更大，
+# 而"另一个项目开始干活"晚 3 秒被看到完全可接受。
+MULTI_SCAN_MS = 3000
 # 读取超时（等待边车首行）
 STARTUP_TIMEOUT_S = 20.0
 
@@ -792,6 +800,11 @@ class DshAdapter:
         self.last_emit_at = 0.0
         self.session_id = ""
         self.sidecar_error = ""
+        # 多会话徽标：上一轮上报过的子 agent（dsh:<短id>），用于把消失的标 offline
+        self._known_sub_agents: set[str] = set()
+        self._last_multi_scan_at = 0.0
+        # 主 agent 当前显示名（工作区目录名），用于避免重复注册
+        self._main_agent_name = ""
 
     # -- 生命周期 ---------------------------------------------------------
     async def _ensure_sidecar(self, config: dict[str, Any]) -> bool:
@@ -938,6 +951,183 @@ class DshAdapter:
             return
         self.last_phase = phase
         self.last_emit_at = now
+
+    # -- 多会话扫描（多任务徽标）------------------------------------------------
+    def _scan_all_sessions(self, config: dict[str, Any]) -> list[dict[str, Any]]:
+        """扫描所有**正在跑任务**的 DSH 会话，让桌宠为每个挂一个徽标。
+
+        ★ 2026-10-26 用户裁决：「会话锁死你这个任务进程了，要不就做多任务徽标吧，
+          多任务时新增徽标显示正在工作的任务状态」。
+
+        背景：一个 DSH 实例可以同时开多个工作区窗口，每个窗口一个会话。
+          单会话跟随时（pickTarget 只选一个），另一个项目在跑就永远看不到 ——
+          实测两个会话 in_turn 都是 true，切来切去总有一个被牺牲。
+          改为**多徽标**：每个在跑的会话各自一个 agent 身份，
+          桌宠的 renderAgentBadge 本来就是遍历 Map 渲染多个 chip，天然支持。
+
+        实现：用边车 --session-id <id> --once 逐个取 facts（复用它的完整解析，
+          不在这边重写 zstd/turn 折叠）。只扫 ACTIVE_WINDOW 内碰过的会话。
+
+        返回 [{"session_id", "facts", "cwd", "mtime"}...]，按最后活动时间降序。
+        """
+        node = resolve_node(config)
+        script = _resolve_sidecar_script()
+        if not node or script is None:
+            return []
+        root = Path(str(config.get("sessions_root") or "").strip() or str(default_sessions_root()))
+        if not root.is_dir():
+            return []
+        now = time.time()
+        active: list[tuple[float, str, Path]] = []
+        try:
+            slugs = [d for d in root.iterdir() if d.is_dir()]
+        except OSError:
+            return []
+        for slug_dir in slugs:
+            try:
+                sessions = [d for d in slug_dir.iterdir() if d.is_dir()]
+            except OSError:
+                continue
+            for s in sessions:
+                log = s / "session.v4.jsonl.zstd"
+                if not log.is_file():
+                    continue
+                try:
+                    mtime = log.stat().st_mtime
+                except OSError:
+                    continue
+                if now - mtime <= ACTIVE_WINDOW_SECONDS:
+                    active.append((mtime, s.name, log))
+        active.sort(key=lambda x: -x[0])
+        out: list[dict[str, Any]] = []
+        for mtime, sid, log in active[:MAX_TRACKED_SESSIONS]:
+            try:
+                raw = subprocess.run(
+                    [node, str(script), "--sessions-root", str(root), "--session-id", sid, "--once"],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=25,
+                )
+            except (OSError, subprocess.SubprocessError):
+                continue
+            facts: dict[str, Any] = {}
+            cwd = ""
+            for line in (raw.stdout or "").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except ValueError:
+                    continue
+                kind = str(ev.get("kind") or "")
+                if kind == "facts":
+                    facts = ev.get("facts") or {}
+                elif kind == "ready":
+                    cwd = str(ev.get("cwd") or "")
+            if not facts:
+                continue
+            out.append({"session_id": sid, "facts": facts, "cwd": cwd, "mtime": mtime})
+        return out
+
+    def _publish_multi_session_badges(self, config: dict[str, Any]) -> None:
+        """把每个在跑的会话注册成独立 agent（dsh:<短id>），桌宠显示多个徽标。
+
+        与主 agent（AGENT_ID="dsh"）并存：
+          · 主 agent 仍由边车 pickTarget 驱动（兼容既有单徽标行为）；
+          · 额外会话用 dsh:<8位> 身份，名字取工作区目录名，便于一眼认出是哪个项目。
+        不在跑的会话会被标 offline（渲染端据此不显示 chip，自动清理）。
+        """
+        if not self._bus_enabled():
+            return
+        try:
+            sessions = self._scan_all_sessions(config)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("多会话扫描失败：%s", exc)
+            return
+        alive_ids: set[str] = set()
+        for item in sessions:
+            sid = str(item["session_id"])
+            facts = item["facts"] or {}
+            # 只给**正在跑任务**的会话挂徽标：已结束的不占视觉位置
+            if not facts.get("in_turn"):
+                continue
+            # ★ 与主 agent 去重：主 agent（AGENT_ID="dsh"）已经在显示当前跟随的会话，
+            #   若为同一个会话再挂一个 dsh:<short>，桌宠会出现两个「DSH」徽标。
+            #   主 agent 覆盖到的那一个，交给主 agent 显示；子徽标只补"其余的"。
+            if sid and sid == self.session_id:
+                continue
+            short = sid.replace("session-", "")[:8]
+            sub_id = f"{AGENT_ID}:{short}"
+            alive_ids.add(sub_id)
+            cwd = str(item.get("cwd") or "")
+            label = Path(cwd).name if cwd else short
+            try:
+                agent_bus_service.register(
+                    sub_id,
+                    # ★ 名字直接用工作区目录名（原来是 "DSH·<目录>"）：
+                    #   徽标文案是 `<name> · <phase>`，带 "DSH·" 会变成
+                    #   「DSH·elab-flow · 执行工具」，前缀冗余且与主徽标不一致。
+                    label or short,
+                    "dsh_adapter",
+                    capabilities={"voice": False, "text": True, "screen": False, "mcp": False, "observe": False},
+                    accent=DSH_ACCENT,
+                )
+                phase, state = phase_for_facts(facts)
+                state = dict(state)
+                state["session"] = sid
+                state["workspace"] = label
+                agent_bus_service.emit(sub_id, phase, state=state, force=True)
+                agent_bus_service.heartbeat(sub_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("子会话 %s 上报失败：%s", sub_id, exc)
+        # 收尾：上一轮有、这一轮没了（已结束，或被主 agent 接管）的子会话
+        # 直接**注销**而不是标 offline —— 标 offline 的记录会一直留在总线上
+        # （重启后 _known_sub_agents 为空，谁也清理不到它），
+        # 表现为"徽标列表里多一条早就没用的项"。
+        for known in list(self._known_sub_agents):
+            if known in alive_ids:
+                continue
+            try:
+                agent_bus_service.unregister(known)
+            except Exception:  # noqa: BLE001
+                pass
+        self._known_sub_agents = alive_ids
+        # 同样的道理：被主 agent 覆盖的那些（同 session_id）若之前注册过子徽标，
+        # 也要清掉，否则会和主徽标重复显示同一件事。
+        if self.session_id:
+            short = self.session_id.replace("session-", "")[:8]
+            stale_sub = f"{AGENT_ID}:{short}"
+            if stale_sub not in alive_ids:
+                try:
+                    agent_bus_service.unregister(stale_sub)
+                except Exception:  # noqa: BLE001
+                    pass
+
+    def _sync_main_agent_name(self, cwd: str) -> None:
+        """把主 agent 的显示名同步成**当前跟随会话的工作区名**。
+
+        ★ 2026-10-26 用户裁决：「徽标前面的 DSH 显示成当前工作区名称」。
+          多任务徽标下如果每条都叫「DSH」，根本分不清哪个是哪——用户看到的是
+          「DSH · 执行工具」，却不知道是 Mao-dsh-pet 还是 elab-flow 在跑。
+          改成工作区目录名后，徽标直接变成「Mao-dsh-pet · 执行工具」，
+          一眼就知道是哪个项目。
+
+          与子徽标（dsh:<短id>）保持同一命名口径（都用目录名），不出现
+          「DSH」和「Mao-dsh-pet」混排。
+        """
+        name = Path(cwd).name if cwd else ""
+        if not name:
+            return
+        if name == self._main_agent_name:
+            return
+        self._main_agent_name = name
+        try:
+            agent_bus_service.register(AGENT_ID, name, "dsh_adapter", accent=DSH_ACCENT)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("主 agent 改名失败：%s", exc)
 
     def _publish_facts(self, facts: dict[str, Any], *, force: bool = False) -> None:
         self.facts = facts if isinstance(facts, dict) else {}
@@ -1125,6 +1315,16 @@ class DshAdapter:
                     await asyncio.to_thread(self.sidecar.stop)
                     return
                 agent_bus_service.heartbeat(AGENT_ID)
+                # ★ 2026-10-26 多会话徽标：静默期按 MULTI_SCAN_MS 扫一遍
+                #   所有活跃会话，给"正在跑"的每个挂独立徽标。
+                #   放在这里而不是事件分支：它不依赖边车事件，
+                #   另一个项目开跑时我们这边可能一直静默（自己的会话在等结果）。
+                if now_enabled and (now - self._last_multi_scan_at) * 1000 >= MULTI_SCAN_MS:
+                    self._last_multi_scan_at = now
+                    try:
+                        await asyncio.to_thread(self._publish_multi_session_badges, config_now)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.debug("多会话徽标上报失败：%s", exc)
                 # 静默期也要按 REEMIT_MS 补发当前工作态：DSH 单次工具调用可能持续
                 # 几十秒（实测有 33s 的 pwsh），这期间无新事件；不补发的话桌宠会在
                 # 工具还在跑时就变回待机——看着像停工。_emit_phase 内部自带节流。
@@ -1150,6 +1350,9 @@ class DshAdapter:
         if kind == "ready":
             self.session_id = str(msg.get("session") or "")
             self.sidecar_error = ""
+            # ★ 2026-10-26：主徽标的名字跟着当前会话的工作区走
+            #   （「徽标前面的 DSH 显示成当前工作区名称」）
+            self._sync_main_agent_name(str(msg.get("cwd") or ""))
             agent_bus_service.heartbeat(AGENT_ID)
             agent_bus_service.set_status(AGENT_ID, "online", error="")
             return

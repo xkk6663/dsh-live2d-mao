@@ -116,7 +116,11 @@ body,
 /* ---- 多 Agent 状态徽标（桌宠头顶，支持多 agent 并排显示） ---- */
 #agent-badge {
   display: flex;
-  align-items: center;
+  /* ★ 2026-10-26 用户裁决：徽标**上下排版**（原来是横向横排）。
+     多任务徽标会同时出现多条（Mao-dsh-pet / elab-flow …），
+     横排容易超出 max-width 被挤压；纵向排列每条独占一行，一眼看完。 */
+  flex-direction: column;
+  align-items: flex-start;
   gap: 4px;
   max-width: 480px;
   background: none;
