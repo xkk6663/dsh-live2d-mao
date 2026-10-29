@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
 import base64
@@ -345,7 +345,7 @@ def _electron_pet_command() -> list[str] | None:
         bundle_root = Path(getattr(sys, "_MEIPASS", settings.agent_frontend_dir.parent))
         candidates = [
             bundle_root / "live2d_desktop" / "MioLive2D桌宠.exe",
-            bundle_root / "live2d_desktop" / "澪Live2D桌宠.exe",
+            bundle_root / "live2d_desktop" / "大肥鱼Live2D桌宠.exe",
         ]
         executable = next((path for path in candidates if path.is_file()), None)
         return [str(executable)] if executable else None
@@ -507,7 +507,7 @@ def show_agent_window() -> dict[str, Any]:
     candidates = [Path(configured)] if configured else []
     if getattr(sys, "frozen", False):
         candidates.append(Path(sys.executable))
-    candidates.extend([Path("D:/Mio/Mio.exe"), Path("D:/澪Agent/澪.exe")])
+    candidates.extend([Path("D:/Mio/Mio.exe"), Path("D:/大肥鱼Agent/大肥鱼.exe")])
     executable = next((path for path in candidates if path.is_file()), None)
     if executable is None:
         return {"ok": False, "method": "unavailable"}
@@ -668,7 +668,7 @@ SPEECH_REQUESTED_EMOTION_PATTERNS: dict[str, tuple[str, ...]] = {
 }
 
 ADAPTIVE_QQ_VOICE_RE = re.compile(
-    r"(?:想听(?:你|Mio|澪)(?:说话|的声音)|哄哄我|陪我说两句|念给我听|叫我起床|睡前说|晚安|我(?:有点)?难受|我(?:有点)?害怕)",
+    r"(?:想听(?:你|Mio|大肥鱼)(?:说话|的声音)|哄哄我|陪我说两句|念给我听|叫我起床|睡前说|晚安|我(?:有点)?难受|我(?:有点)?害怕)",
     re.IGNORECASE,
 )
 SPEECH_PREFIX_RE = re.compile(

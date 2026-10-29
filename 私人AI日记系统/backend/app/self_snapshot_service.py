@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import re
@@ -608,7 +608,7 @@ def build_self_snapshot(
     return result
 
 
-SELF_RE = re.compile(r"(?:你|Mio|澪).{0,12}(?:自己|自身|能力|功能|状态|会什么|能做什么)|自检|selfsnapshot", re.IGNORECASE)
+SELF_RE = re.compile(r"(?:你|Mio|大肥鱼).{0,12}(?:自己|自身|能力|功能|状态|会什么|能做什么)|自检|selfsnapshot", re.IGNORECASE)
 VIEW_RE = re.compile(r"(?:当前|现在).{0,8}(?:页面|界面|哪个页)|应用里.{0,8}(?:有什么|在哪)")
 SERVICE_RE = re.compile(r"语音|音色|电话|麦克风|桌宠|live2d|qq|napcat|屏幕|系统声音|服务|故障|正常")
 MODEL_RE = re.compile(r"模型|思考|路由|为什么.{0,8}(?:选择|选)|上次.{0,8}(?:选择|模型)")
@@ -623,11 +623,11 @@ def scopes_for_message(message: str) -> tuple[str, ...]:
         scopes.update({"overview", "active_view", "capabilities", "service_health", "models", "budget", "last_route", "environment", "tools"})
     if VIEW_RE.search(text):
         scopes.update({"active_view", "capabilities"})
-    if SERVICE_RE.search(text) and (broad_self or re.search(r"(?:你|Mio|澪|当前|现在|是否|能不能|可用|正常)", text, re.IGNORECASE)):
+    if SERVICE_RE.search(text) and (broad_self or re.search(r"(?:你|Mio|大肥鱼|当前|现在|是否|能不能|可用|正常)", text, re.IGNORECASE)):
         scopes.update({"capabilities", "service_health"})
-    if MODEL_RE.search(text) and (broad_self or re.search(r"(?:你|Mio|澪|当前|现在|上次|为什么)", text, re.IGNORECASE)):
+    if MODEL_RE.search(text) and (broad_self or re.search(r"(?:你|Mio|大肥鱼|当前|现在|上次|为什么)", text, re.IGNORECASE)):
         scopes.update({"models", "last_route", "budget"})
-    if BUDGET_RE.search(text) and (broad_self or re.search(r"(?:你|Mio|澪|当前|现在|今天)", text, re.IGNORECASE)):
+    if BUDGET_RE.search(text) and (broad_self or re.search(r"(?:你|Mio|大肥鱼|当前|现在|今天)", text, re.IGNORECASE)):
         scopes.update({"budget", "models"})
     return tuple(sorted(scopes))
 

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import re
 from dataclasses import asdict, dataclass, field
@@ -21,7 +21,7 @@ COMPLEX_KEYWORDS = (
 )
 CODE_MARKERS = ("```", "traceback", "exception", "error:", "http 4", "http 5", "select ", "def ", "class ")
 REFLECTIVE_REQUEST_RE = re.compile(
-    r"(?:你|Mio|澪).{0,10}(?:有什么|有没有|想要|希望).{0,14}(?:想法|建议|功能|改进|我做)"
+    r"(?:你|Mio|大肥鱼).{0,10}(?:有什么|有没有|想要|希望).{0,14}(?:想法|建议|功能|改进|我做)"
     r"|(?:有什么|哪些).{0,12}(?:想法|建议|功能|改进)"
 )
 TOOL_TASK_RE = re.compile(

@@ -16,7 +16,7 @@ from . import (
     runtime_diagnostics,
     subservice_health,
 )
-from .companion import companion_service, pet_event_service
+from .companion import companion_service, cover_service, pet_event_service
 from .creation import creation_service
 from .screen import screen_observation_service
 from .kernel import agent_bus_service, agent_task_service
@@ -71,6 +71,9 @@ BACKGROUND_TASK_FACTORIES = {
     "agent_bus_task": agent_bus_service.heartbeat_loop,
     # 跨平台传输收件箱轮询（2026-10-26，配套云端插件 astrbot_plugin_crosssend）
     "crosssend_transfer_task": transfer_receiver.transfer_poll_loop,
+    # 每日自动翻唱（2026-10-27：桌宠上线 30 分钟后从云端 alist《音乐》夹挑一首，
+    # 本地 WSL RVC 换声后经 agent_audio 推回对话界面，全程不消耗 token）
+    "daily_cover_task": cover_service.daily_cover_loop,
     "dsh_adapter_task": dsh_adapter.dsh_adapter_loop,
     # DSH 专用化：octop_adapter_task 已移除（Octop 插件整体阉割）
 }

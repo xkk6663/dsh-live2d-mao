@@ -339,7 +339,7 @@ function Ensure-DepsVenv {
             "https://www.python.org/ftp/python/3.10.11/python-3.10.11-amd64.exe"
         )
         Invoke-Download -Urls $urls -Output $installer -Stage "downloading_python" -StartPercent 2 -EndPercent 14 -Label " Python 运行环境"
-        Write-Host "正在静默安装 Python（只装给澪使用，不影响系统）..."
+        Write-Host "正在静默安装 Python（只装给大肥鱼使用，不影响系统）..."
         $proc = Start-Process -FilePath $installer -ArgumentList @("/quiet", "InstallAllUsers=0", ('TargetDir="' + $baseDir + '"'), "PrependPath=0", "Include_pip=1", "Include_launcher=0", "Include_test=0", "AssociateFiles=0", "Shortcuts=0", "SimpleInstall=0") -WindowStyle Hidden -Wait -PassThru
         if ($proc.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $basePython)) {
             throw "Python 安装失败（退出码 $($proc.ExitCode)）。如果杀毒软件拦截，请允许后重试。"

@@ -8,6 +8,7 @@ import logging
 import os
 import random
 import re
+import shutil
 import subprocess
 import uuid
 import tempfile
@@ -25,7 +26,7 @@ from .. import (
     db,
 )
 from ..screen import local_vision_service, route_observation_service, screen_observation_service, system_audio_service, window_topology_service
-from ..companion import audio_diag, call_session_service, companion_service, pet_event_service
+from ..companion import audio_diag, call_session_service, companion_service, cover_service, pet_event_service
 from ..kernel import agent_bus_service
 from ..agents.dsh import dsh_adapter
 from ..auto_router import AutoRoute, build_task_profile, select_auto_route
@@ -346,6 +347,8 @@ class CompanionChatRequest(BaseModel):
     model_id: str = Field(default="auto", max_length=200)
     reasoning_level: str = Field(default="auto", max_length=50)
     images: list[CompanionChatImageRequest] = Field(default_factory=list, max_length=5)
+    # 用户直接发音频文件（如 mp3）请求翻唱：最多 1 个，data_url 形式（与 images 同构）
+    audios: list[CompanionChatImageRequest] = Field(default_factory=list, max_length=1)
     client_request_id: str = Field(default="", max_length=80, pattern=r"^[A-Za-z0-9._:-]*$")
 
 
@@ -1313,6 +1316,74 @@ async def companion_agent_media(name: str):
     return FileResponse(path)
 
 
+class AgentMediaSaveToDesktopRequest(BaseModel):
+    """可选的保存参数：display = 期望保存的文件名（不带扩展名会自动补）。"""
+    display: str = Field(default="", max_length=120)
+
+
+def _windows_desktop_dir() -> Path:
+    """解析真实桌面目录（含 OneDrive 重定向；注册表是 Windows 的权威来源）。"""
+    try:
+        import winreg
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders",
+        ) as key:
+            value, _ = winreg.QueryValueEx(key, "Desktop")
+            path = Path(str(value))
+            if path.is_dir():
+                return path
+    except Exception:
+        pass
+    path = Path.home() / "Desktop"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+@router.post("/agent-media/{name}/save-to-desktop")
+async def companion_agent_media_save_to_desktop(
+    name: str,
+    req: AgentMediaSaveToDesktopRequest | None = None,
+):
+    """把 agent-media 里的文件复制保存到 Windows 桌面，返回实际落盘路径。
+
+    ★ 为什么由后端代存（2026-10-29 用户实测「下载显示权限不够」）：
+      聊天页跑在 Electron（Low 完整性令牌）里，<audio> 原生下载是渲染进程
+      发起的写入，目标是桌面（Medium 完整性）→ 被 Windows 强制完整性策略
+      直接拒绝。这不是 ACL/杀软问题，换任何前端写法都救不了。
+      后端是 Medium 完整性进程，由它 shutil.copyfile 到桌面无完整性障碍。
+    """
+    path = _safe_agent_media_path(name)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="媒体不存在。")
+
+    display = str((req.display if req else "") or "").strip()
+    # Windows 文件名非法字符 + 控制字符一律剔除
+    display = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", display).strip(" .")
+    if not display:
+        display = path.stem
+    if Path(display).suffix.lower() != path.suffix.lower():
+        display += path.suffix
+
+    desktop = _windows_desktop_dir()
+    target = desktop / display
+    if target.resolve() != path.resolve():
+        # 重名不覆盖：桌面已有同名文件时追加序号（Windows 资源管理器同款习惯）
+        counter = 1
+        while target.exists():
+            target = desktop / f"{Path(display).stem} ({counter}){Path(display).suffix}"
+            counter += 1
+        try:
+            shutil.copyfile(path, target)
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"保存失败：{exc}") from exc
+    return {
+        "saved_to": str(target),
+        "filename": target.name,
+        "size": target.stat().st_size,
+    }
+
+
 # ---- Live2D 模型定时自动更换 ----
 _model_schedule_task: asyncio.Task | None = None
 _model_schedule_lock = asyncio.Lock()
@@ -1695,6 +1766,119 @@ async def companion_sprite_sheet_save(payload: SpriteSheetRequest):
     return await asyncio.to_thread(_status_payload)
 
 
+def _handle_cover_request(
+    title: str,
+    *,
+    claim,
+    conversation_id: str,
+    user_message: str,
+    audio_source=None,
+    user_attachments_json: str = "[]",
+) -> dict:
+    """本地翻唱请求的同步应答：立即回"开工"文案并起后台任务。
+
+    任务完成/失败的音频与气泡由 cover_service 经 WS 主动推（点歌通路同款形状）。
+    这里只负责：开工气泡 + 问/答落库 + 组装 HTTP 响应（与公共尾部同形状），
+    提前 return，不走云端 LLM。
+    audio_source：用户直接上传的音源文件路径（非 None 时跳过搜歌）。
+    user_attachments_json：用户消息的附件（发音频翻唱时带上，历史可回看）。
+    """
+    import types as _types
+
+    reply_text = f"收到！我去翻唱《{title}》，唱好叫你～"
+    if audio_source is not None:
+        started = cover_service.start_cover_task_from_source(
+            audio_source,
+            title,
+            request_id=claim.client_request_id,
+            conversation_id=conversation_id,
+        )
+    else:
+        started = cover_service.start_cover_task(
+            title,
+            request_id=claim.client_request_id,
+            conversation_id=conversation_id,
+        )
+    # 起飞失败（正忙）时 start_cover_task 已推过提示气泡，文案保持一致即可
+    _ = started
+    try:
+        db.save_message(
+            "user",
+            user_message,
+            source="desktop_pet",
+            conversation_id=conversation_id,
+            request_id=claim.client_request_id,
+            model_id="cloud_feiyu",
+            attachments_json=user_attachments_json,
+        )
+        db.save_message(
+            "assistant",
+            reply_text,
+            source="desktop_pet",
+            conversation_id=conversation_id,
+            request_id=claim.client_request_id,
+            model_id="cloud_feiyu",
+            provider_model="cover-task",
+            reasoning_level="off",
+            attachments_json="[]",
+        )
+    except Exception as exc:  # 落库失败不能影响这一轮回复
+        logger.warning("[cover] 消息落库失败：%s", exc)
+    pet_event_service.publish("agent_bubble", {
+        "text": reply_text,
+        "agent_id": FEIYU_AGENT_ID,
+        "accent": FEIYU_BUBBLE_ACCENT,
+        "duration_ms": 6000,
+    })
+    result = _types.SimpleNamespace(
+        reply=reply_text,
+        replies=[reply_text] if reply_text else [],
+        request_id=claim.client_request_id,
+        model_id="cloud_feiyu",
+        reasoning_level="off",
+        provider_id="astrbot",
+        provider_name="云端大肥鱼",
+        provider_model="cover-task",
+        speech_emotion="",
+        tool_receipts=[],
+        agent_run_id="",
+        agent_run_status="",
+        route_candidate_model_ids=[],
+        route_escalated_from_model_id="",
+        task_handoff={},
+        http_status=200,
+    )
+    response = {
+        "reply": result.reply,
+        "replies": result.replies,
+        "attachments": [],
+        "images": [],
+        "voice_attempted": False,
+        "spoken": "",
+        "voice_delegated": False,
+        "voice_error": "",
+        "speech_emotion": "",
+        "request_id": result.request_id,
+        "client_request_id": claim.client_request_id,
+        "model_id": result.model_id,
+        "provider_id": result.provider_id,
+        "provider_name": result.provider_name,
+        "provider_model": result.provider_model,
+        "provider_request_id": "",
+        "route": "cover_task",
+        "http_status": 200,
+        "reasoning_level": result.reasoning_level,
+        "agent_run_id": "",
+        "agent_run_status": "",
+        "tool_receipts": [],
+        "route_candidate_model_ids": [],
+        "route_escalated_from_model_id": "",
+        "task_handoff": {},
+    }
+    db.complete_chat_request(claim.client_request_id, response)
+    return response
+
+
 @router.post("/chat")
 async def companion_chat(payload: CompanionChatRequest):
     message = payload.message.strip()
@@ -1722,6 +1906,10 @@ async def companion_chat(payload: CompanionChatRequest):
                     {"name": item.name, "content_hash": content_fingerprint(item.data_url)}
                     for item in payload.images
                 ],
+                "audios": [
+                    {"name": item.name, "content_hash": content_fingerprint(item.data_url)}
+                    for item in payload.audios
+                ],
             }),
             conversation_id=conversation_id,
             source="desktop_pet",
@@ -1734,6 +1922,65 @@ async def companion_chat(payload: CompanionChatRequest):
         if claim.status == "failed":
             raise HTTPException(status_code=claim.http_status or 500, detail=claim.error)
         raise HTTPException(status_code=409, detail=pending_error(claim))
+
+    # ★ 用户直接发音频文件请求翻唱（2026-10-29）：音频在聊天里目前只有"翻唱素材"
+    #   一种用途，所以带音频即视为翻唱请求——跳过搜歌，上传音源直接进管线。
+    #   歌名优先取文本里的《书名号》，否则用文件名。
+    if payload.audios:
+        audio_item = payload.audios[0]
+        audio_source = cover_service.save_upload_source(audio_item.data_url, audio_item.name)
+        if audio_source is None:
+            detail = normalize_error_detail(
+                "音频没传好（超过 25MB 或文件损坏），压小一点再发一次？",
+                code="invalid_chat_audio",
+                request_id=claim.client_request_id,
+            )
+            db.fail_chat_request(claim.client_request_id, http_status=400, error=detail)
+            raise HTTPException(status_code=400, detail=detail)
+        # 歌名只认《书名号》（"翻唱一下，大肥鱼"这类文本里没有歌名），
+        # 否则一律用文件名——文本正则从"翻唱一下"里抠出"下"的教训（2026-10-29）。
+        cover_title = (
+            cover_service.bracket_title(message)
+            or cover_service.upload_title_from(audio_item.name)
+        )
+        # 用户消息带音频附件落库（复用点歌通路形状），刷新后历史里能看到这条音频
+        audio_attachment_json = "[]"
+        try:
+            saved_audio = await asyncio.to_thread(
+                _save_agent_media,
+                {
+                    "data_url": audio_item.data_url,
+                    "display": audio_item.name,
+                    "filename": audio_item.name,
+                    "mime_type": audio_item.mime_type,
+                },
+                "audio",
+            )
+            if saved_audio:
+                audio_attachment_json = json.dumps(
+                    [
+                        {
+                            "media": "audio",
+                            "kind": "audio",
+                            "url": saved_audio.get("url") or "",
+                            "display": audio_item.name,
+                            "filename": audio_item.name,
+                            "mime_type": saved_audio.get("mime_type") or audio_item.mime_type,
+                            "size": saved_audio.get("size") or 0,
+                        }
+                    ],
+                    ensure_ascii=False,
+                )
+        except Exception:
+            logger.warning("[cover] 上传音频落盘失败（不影响翻唱任务）", exc_info=True)
+        return _handle_cover_request(
+            cover_title,
+            claim=claim,
+            conversation_id=conversation_id,
+            user_message=message,
+            audio_source=audio_source,
+            user_attachments_json=audio_attachment_json,
+        )
 
     try:
         images = [
@@ -1821,6 +2068,18 @@ async def companion_chat(payload: CompanionChatRequest):
                 #   等于把凭据泄漏到文件系统之外。这里只记录"有没有配"。
                 if not feiyu.is_configured:
                     raise RuntimeError("云端大肥鱼未配置：请在 .env 里设置 ASTRBOT_API_KEY（不要写进源码）")
+                # ★★ 2026-10-27 本地翻唱任务：用户说"翻唱《X》" → 不走云端 LLM，
+                #   直接起本地 WSL RVC 管线（music_proxy 搜歌 → 分离 → 换声 → 混音），
+                #   成品经 agent_audio（点歌通路同款形状）回桌宠。
+                #   用 cloud_feiyu 身份发事件 → 前端白名单（useCompanionChat.js:585）零改动。
+                cover_request = cover_service.try_parse_cover_request(message)
+                if cover_request and not is_plugin_command(message):
+                    return _handle_cover_request(
+                        cover_request["title"],
+                        claim=claim,
+                        conversation_id=conversation_id,
+                        user_message=message,
+                    )
                 # 注入设备上下文，让大肥鱼知道自己在桌宠上
                 device_ctx = build_device_context()
                 # 加设备前缀，让大肥鱼能分清当前是哪个设备在说话

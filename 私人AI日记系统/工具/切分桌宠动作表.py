@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 from pathlib import Path
@@ -34,7 +34,7 @@ def 切分动作表(图片路径: Path, 输出目录: Path) -> list[Path]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="把澪的 3x2 或 2x3 桌宠动作表切成六张透明 PNG。")
+    parser = argparse.ArgumentParser(description="把大肥鱼的 3x2 或 2x3 桌宠动作表切成六张透明 PNG。")
     parser.add_argument("图片", type=Path)
     parser.add_argument(
         "--输出目录",

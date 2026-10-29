@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>澪的日记站</title>
+    <title>大肥鱼的日记站</title>
     <link rel="stylesheet" href="{{ asset_url('style.css') }}" />
     {% set custom_css = optional_local_css() %}
     {% if custom_css %}
@@ -14,7 +14,7 @@
     <main class="shell diary-list-shell">
       <header class="topbar">
         <div>
-          <h1>澪的日记站</h1>
+          <h1>大肥鱼的日记站</h1>
           <p>按日期保存的本地 Markdown 日记</p>
         </div>
         <nav>
@@ -31,7 +31,7 @@
       <section class="hero-panel" aria-label="日记站入口">
         <div class="hero-copy">
           <h2>把今天留下来</h2>
-          <p>这里保留已经整理好的日记和 AI 回顾。和澪聊天继续放在 QQ，网站只负责回看、编辑、搜索和导出。</p>
+          <p>这里保留已经整理好的日记和 AI 回顾。和大肥鱼聊天继续放在 QQ，网站只负责回看、编辑、搜索和导出。</p>
         </div>
         <div class="hero-art" aria-hidden="true">
           <img src="{{ local_asset_url('mio_home_hero_dress.png', 'assets/mio_home_hero_dress.png') }}" alt="" />
@@ -100,7 +100,7 @@
               </article>
             {% endfor %}
           {% else %}
-            <p class="empty">{{ '没有找到匹配的日记。' if query else '还没有日记。你可以在 QQ 里让澪生成今天的日记。' }}</p>
+            <p class="empty">{{ '没有找到匹配的日记。' if query else '还没有日记。你可以在 QQ 里让大肥鱼生成今天的日记。' }}</p>
           {% endif %}
         </section>
         <aside class="mio-side-visual" aria-hidden="true">
@@ -110,7 +110,7 @@
 
       <footer class="mio-footer">
         <p>「我不会替你决定人生，但是我会一直记得你走过的路。」</p>
-        <span>—— 澪</span>
+        <span>—— 大肥鱼</span>
       </footer>
     </main>
 

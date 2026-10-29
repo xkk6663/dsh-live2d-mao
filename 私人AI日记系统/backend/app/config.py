@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import hashlib
@@ -223,13 +223,13 @@ class Settings:
     runtime_config_path: Path = PROJECT_ROOT / "数据" / "运行设置.json"
     diary_dir: Path = PROJECT_ROOT / "数据" / "日记"
     db_path: Path = PROJECT_ROOT / "数据" / "personal_ai.db"
-    mio_profile_path: Path = PROJECT_ROOT / "数据" / "澪属性.json"
-    mio_avatar_path: Path = PROJECT_ROOT / "数据" / "澪头像.png"
+    mio_profile_path: Path = PROJECT_ROOT / "数据" / "大肥鱼属性.json"
+    mio_avatar_path: Path = PROJECT_ROOT / "数据" / "大肥鱼头像.png"
     user_avatar_path: Path = PROJECT_ROOT / "数据" / "用户头像.png"
     chat_background_path: Path = PROJECT_ROOT / "数据" / "对话背景.jpg"
     templates_dir: Path = APP_DIR / "templates"
     static_dir: Path = APP_DIR / "static"
-    site_custom_dir: Path = PROJECT_ROOT / "澪_日记网站"
+    site_custom_dir: Path = PROJECT_ROOT / "大肥鱼_日记网站"
     agent_frontend_dir: Path = Path(
         os.getenv("MIO_AGENT_FRONTEND_DIR", "").strip()
         or (BUNDLE_ROOT / "agent_frontend" if getattr(sys, "frozen", False) else SOURCE_WORKSPACE_ROOT / "澪Agent应用" / "dist")
@@ -240,10 +240,10 @@ class Settings:
     )
 
     persona_prompt_path: Path = Path(
-        _env("PERSONA_PROMPT_PATH") or WORKSPACE_ROOT / "澪_私人AI人格设定与提示词.md"
+        _env("PERSONA_PROMPT_PATH") or WORKSPACE_ROOT / "大肥鱼_私人AI人格设定与提示词.md"
     )
     runtime_summary_path: Path = Path(
-        _env("RUNTIME_SUMMARY_PATH") or WORKSPACE_ROOT / "澪运行时说明书.md"
+        _env("RUNTIME_SUMMARY_PATH") or WORKSPACE_ROOT / "大肥鱼运行时说明书.md"
     )
     personal_manual_path: Path = Path(
         _env("PERSONAL_MANUAL_PATH") or WORKSPACE_ROOT / "个人说明书.txt"

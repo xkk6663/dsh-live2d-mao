@@ -1,4 +1,4 @@
-import assert from 'node:assert/strict'
+﻿import assert from 'node:assert/strict'
 import test from 'node:test'
 import { bargeInThreshold, encodePcmWav } from './petCallAudio.js'
 
@@ -15,7 +15,7 @@ test('电话音频编码为16kHz单声道PCM WAV', () => {
   assert.equal(view.getUint32(40, true), 32000)
 })
 
-test('播放期间使用更高门槛避免把澪的声音当成用户打断', () => {
+test('播放期间使用更高门槛避免把大肥鱼的声音当成用户打断', () => {
   assert.equal(bargeInThreshold(0.018), 0.055)
   assert.equal(bargeInThreshold(0.04), 0.12)
   assert.equal(bargeInThreshold('invalid'), 0.055)

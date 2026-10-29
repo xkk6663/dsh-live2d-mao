@@ -1,4 +1,4 @@
-.venv/
+﻿.venv/
 backend/.venv/
 __pycache__/
 *.pyc
@@ -7,7 +7,7 @@ backend/.env
 backend/server.log
 backend/server.err.log
 backend/importtime-*.txt
-澪_日记网站/
+大肥鱼_日记网站/
 数据/personal_ai.db
 *.db-wal
 *.db-shm

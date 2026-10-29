@@ -91,6 +91,17 @@ function toBackendImages(attachments) {
     .map((item) => ({ name: item.name || '图片.png', data_url: item.data_url }))
 }
 
+/** 音频附件（翻唱素材）→ 后端 audios[]，最多 1 个 */
+function toBackendAudios(attachments) {
+  return (attachments || [])
+    .filter((item) => {
+      const mime = String(item?.mime_type || '')
+      return (item?.kind === 'audio' || mime.startsWith('audio/')) && item?.data_url
+    })
+    .slice(0, 1)
+    .map((item) => ({ name: item.name || 'audio.mp3', data_url: item.data_url }))
+}
+
 /**
  * 把大肥鱼回复里"没用的东西"洗掉。
  *
@@ -1057,7 +1068,8 @@ export function useCompanionChat(deps) {
   async function send(text, attachments = []) {
     const content = String(text || '').trim()
     const images = toBackendImages(attachments)
-    if ((!content && !images.length) || deps.sending.value) return false
+    const audios = toBackendAudios(attachments)
+    if ((!content && !images.length && !audios.length) || deps.sending.value) return false
 
     deps.sending.value = true
     deps.error.value = ''
@@ -1068,7 +1080,7 @@ export function useCompanionChat(deps) {
     setMessages([...messages.value, {
       id: `local-${requestId}`,
       role: 'user',
-      text: content || '[图片]',
+      text: content ? `${content}${audios.length ? `\n[音频] ${audios[0].name}` : ''}` : (audios.length ? `[音频] ${audios[0].name}` : '[图片]'),
       images: (attachments || []).filter((item) => item?.kind === 'image' && item?.preview_url).map((item) => item.preview_url),
       ts: Date.now(),
       timeLabel: formatChatTime(new Date().toISOString()),
@@ -1105,6 +1117,7 @@ export function useCompanionChat(deps) {
       const result = await sendCompanionChat({
         message: content,
         images,
+        audios,
         model_id: chatModel.value || FEIYU_CLOUD_MODEL_ID,
         reasoning_level: reasoningLevel.value || 'auto',
         client_request_id: requestId,

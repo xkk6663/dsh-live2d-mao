@@ -1,4 +1,4 @@
-<script setup>
+﻿<script setup>
 import { onMounted, reactive, ref, watch } from 'vue'
 import { Check, FolderOpen, RefreshCw, Save, X } from '@lucide/vue'
 import { apiRequest } from '../services/api.js'
@@ -111,7 +111,7 @@ watch(() => props.section, section => { if (section === 'files') void loadFiles(
       <div v-if="!filesReady" class="agent-settings-actions"><span>{{ filesLoading ? '正在读取目录' : '目录读取失败' }}</span><button type="button" title="重新读取目录" :disabled="filesLoading" @click="loadFiles"><RefreshCw :size="16" /></button></div>
       <ul class="agent-root-list"><li v-for="root in roots" :key="root"><span>{{ root }}</span><small v-if="root === outputRoot">任务输出</small><button v-else type="button" title="撤销目录授权" :disabled="filesBusy" @click="saveRoots(roots.filter(path => path !== root && path !== outputRoot))"><X :size="16" /></button></li></ul>
       <div class="agent-settings-actions"><button type="button" class="primary" :disabled="!filesReady || filesBusy" @click="selectFolder"><FolderOpen :size="16" />选择文件夹并授权读取</button></div>
-      <p class="agent-setting-note">添加后可以让澪按文件名搜索并读取这里的资料，无需手动填写每个文件路径。</p>
+      <p class="agent-setting-note">添加后可以让大肥鱼按文件名搜索并读取这里的资料，无需手动填写每个文件路径。</p>
       <details><summary>手动填写路径</summary><form @submit.prevent="saveRoots([...roots.filter(path => path !== outputRoot), folder.trim()])">
         <fieldset :disabled="!filesReady || filesBusy">
           <label class="agent-root-input">资料目录<input v-model="folder" required placeholder="输入资料文件夹的完整路径" /></label>

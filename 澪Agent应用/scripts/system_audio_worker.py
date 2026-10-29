@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import atexit
@@ -43,7 +43,7 @@ PHONE_PROMPT_LEAK_PATTERNS = (
     "请准确转写数字",
     "准确转写数字和标点",
     "普通话简体中文对话",
-    "人名可能包括澪",
+    "人名可能包括大肥鱼",
 )
 
 def emit(event_type: str, **payload: object) -> None:

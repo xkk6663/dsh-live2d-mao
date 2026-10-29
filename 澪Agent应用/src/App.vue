@@ -441,6 +441,11 @@ function stopFeiyuMessage() {
   void cancelFeiyuMessage()
 }
 
+function isAudioAttachment(file) {
+  if (file?.type?.startsWith('audio/')) return true
+  return ['.mp3', '.wav', '.m4a', '.flac', '.ogg', '.aac'].includes(fileExtension(file || {}))
+}
+
 async function addFeiyuImageFiles(files) {
   const list = [...(files || [])]
   if (!list.length) return
@@ -450,11 +455,39 @@ async function addFeiyuImageFiles(files) {
     feiyuError.value = `一次最多带 ${FEIYU_MAX_IMAGES} 张图片`
     return
   }
+  // 音频（mp3 等）是翻唱素材：最多 1 个、单独 20MB 上限（2026-10-29 新增）
+  const audioFiles = list.filter(isAudioAttachment)
+  if (audioFiles.length > 1 || (audioFiles.length && list.length > audioFiles.length)) {
+    feiyuError.value = '音频一次只能发一个，且不能和图片混发'
+    return
+  }
+  if (audioFiles.length === 1) {
+    const file = audioFiles[0]
+    if (file.size > limit.documentMaxBytes) {
+      feiyuError.value = `音频超过 ${(limit.documentMaxBytes / 1024 / 1024).toFixed(0)}MB：${file.name}`
+      return
+    }
+    try {
+      const dataUrl = await readFileAsDataUrl(file)
+      feiyuAttachments.value = [{
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        kind: 'audio',
+        name: file.name || 'audio.mp3',
+        mime_type: file.type || 'audio/mpeg',
+        size: file.size,
+        data_url: dataUrl,
+      }]
+      feiyuError.value = ''
+    } catch (error) {
+      feiyuError.value = error.message
+    }
+    return
+  }
   try {
     const next = []
     for (const file of list.slice(0, room)) {
       if (!isImageAttachment(file)) {
-        throw new Error(`大肥鱼对话目前只能带图片：${file.name}`)
+        throw new Error(`大肥鱼对话目前只支持图片和音频（mp3 翻唱）：${file.name}`)
       }
       if (file.size > limit.imageMaxBytes) {
         throw new Error(`图片超过 ${(limit.imageMaxBytes / 1024 / 1024).toFixed(0)}MB：${file.name}`)

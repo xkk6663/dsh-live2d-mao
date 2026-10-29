@@ -70,7 +70,7 @@ function Test-ExcludedPath {
         '(^|/)(dist|release|build|__pycache__|\.pytest_cache|\.desktop-cache)(/|$)',
         '(^|/)temp-validation-[^/]+(/|$)',
         '(^|/)(数据|音色训练|训练素材|checkpoints?|weights?)(/|$)',
-        '(^|/)澪_日记网站(/|$)',
+        '(^|/)大肥鱼_日记网站(/|$)',
         '\.(log|tmp|db|sqlite|sqlite3|ckpt|pth|onnx|wav|mp3|flac)$'
     )
     foreach ($pattern in $commonPatterns) {
@@ -79,7 +79,7 @@ function Test-ExcludedPath {
     if ($RepositoryName -eq "私人AI日记系统") {
         if ($path -match '^backend/app/static/assets/mio_.*\.png$') { return $true }
         if ($path -eq 'backend/app/private_distribution_defaults.py') { return $true }
-        if ($path -eq '工具/澪环境.ps1') { return $true }
+        if ($path -eq '工具/大肥鱼环境.ps1') { return $true }
         if ($path -eq '文档/试用记录.md') { return $true }
     }
     if ($RepositoryName -eq "澪Agent应用") {
@@ -387,7 +387,7 @@ if (-not $SkipValidation) {
     }
     foreach ($runtimeDirectory in @(
         (Join-Path $BackendDestination "数据"),
-        (Join-Path $BackendDestination "澪_日记网站")
+        (Join-Path $BackendDestination "大肥鱼_日记网站")
     )) {
         if (Test-Path -LiteralPath $runtimeDirectory) {
             Remove-Item -LiteralPath $runtimeDirectory -Recurse -Force
@@ -431,7 +431,7 @@ if (-not $SkipValidation) {
 
 foreach ($runtimeDirectory in @(
     (Join-Path $BackendDestination "数据"),
-    (Join-Path $BackendDestination "澪_日记网站")
+    (Join-Path $BackendDestination "大肥鱼_日记网站")
 )) {
     if (Test-Path -LiteralPath $runtimeDirectory) {
         Remove-Item -LiteralPath $runtimeDirectory -Recurse -Force

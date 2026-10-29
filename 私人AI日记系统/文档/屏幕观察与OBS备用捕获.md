@@ -1,8 +1,8 @@
-# 屏幕观察与 OBS 备用捕获
+﻿# 屏幕观察与 OBS 备用捕获
 
 ## 默认捕获
 
-澪默认使用以下顺序：
+大肥鱼默认使用以下顺序：
 
 - 游戏窗口优先使用 DXGI。
 - 整个屏幕优先使用 MSS。
@@ -29,7 +29,7 @@ OBS_SOURCE_NAME=游戏捕获
 OBS_WEBSOCKET_TIMEOUT_SECONDS=8
 ```
 
-重新启动澪 Agent 后生效。OBS 连接、鉴权或源名称错误时，澪会自动降级到原有捕获方式，并在屏幕观察状态中显示具体原因。
+重新启动澪 Agent 后生效。OBS 连接、鉴权或源名称错误时，大肥鱼会自动降级到原有捕获方式，并在屏幕观察状态中显示具体原因。
 
 恢复默认捕获：
 
@@ -39,7 +39,7 @@ MIO_CAPTURE_BACKEND=auto
 
 ## 四小时压力测试
 
-先打开准备同时使用的游戏、QQ、浏览器、桌宠和澪 Agent，然后运行：
+先打开准备同时使用的游戏、QQ、浏览器、桌宠和大肥鱼 Agent，然后运行：
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\工具\屏幕观察压力测试.ps1"
@@ -56,7 +56,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\工具\屏幕观察�
 压力测试使用“仅捕获模式”，不会调用视觉模型，也不会产生模型费用。测试结束后会自动停止观察，并将 JSON 报告写入：
 
 ```text
-D:\澪Agent数据\压力测试
+D:\大肥鱼Agent数据\压力测试
 ```
 
 快速测试示例：

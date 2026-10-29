@@ -66,7 +66,7 @@ try {
     }
     Write-DepsStatus -Stage "done" -Percent 100 -Message "系统声音理解安装完成，回到应用点击「重新检查」即可使用" -Done $true
     Write-Host "=== 安装完成 ==="
-    Write-Host "回到澪的界面，点击「重新检查」，屏幕观察就能听懂系统声音了。"
+    Write-Host "回到大肥鱼的界面，点击「重新检查」，屏幕观察就能听懂系统声音了。"
 } catch {
     Write-DepsFail -Message ("系统声音理解安装失败：" + $_.Exception.Message)
     exit 1

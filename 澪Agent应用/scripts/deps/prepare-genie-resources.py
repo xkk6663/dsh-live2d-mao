@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import contextlib
@@ -39,7 +39,7 @@ def onnx_export_options(exporter) -> dict[str, object]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="准备澪的 Genie V2 ONNX 资源。")
+    parser = argparse.ArgumentParser(description="准备大肥鱼的 Genie V2 ONNX 资源。")
     parser.add_argument("--genie-data", required=True)
     parser.add_argument("--hubert-source", required=True)
     parser.add_argument("--gpt-weights", required=True)

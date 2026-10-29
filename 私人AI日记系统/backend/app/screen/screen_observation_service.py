@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
 import base64
@@ -642,7 +642,7 @@ def _foreground_context() -> str:
 
 
 _SELF_PROCESS_NAMES = {"mio.exe", "mioagent.exe"}
-_SELF_WINDOW_MARKERS = ("mio agent", "mio", "澪", "桌宠")
+_SELF_WINDOW_MARKERS = ("mio agent", "mio", "大肥鱼", "桌宠")
 
 
 def _is_self_ui_foreground(frame: dict[str, Any] | None = None) -> bool:

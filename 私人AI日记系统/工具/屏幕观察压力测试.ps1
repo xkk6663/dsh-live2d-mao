@@ -11,7 +11,7 @@ param(
 
     [string]$ApiBase = "http://127.0.0.1:8000",
 
-    [string]$ReportDirectory = "D:\澪Agent数据\压力测试"
+    [string]$ReportDirectory = "D:\大肥鱼Agent数据\压力测试"
 )
 
 $ErrorActionPreference = "Stop"
@@ -84,9 +84,9 @@ function Wait-MioHealth {
     if ($health) {
         return $health
     }
-    $agentPath = "D:\澪Agent\澪.exe"
+    $agentPath = "D:\大肥鱼Agent\大肥鱼.exe"
     if (-not (Test-Path -LiteralPath $agentPath)) {
-        throw "澪 Agent 未运行，并且没有找到 $agentPath"
+        throw "大肥鱼 Agent 未运行，并且没有找到 $agentPath"
     }
     Start-Process -FilePath $agentPath | Out-Null
     $healthDeadline = (Get-Date).AddSeconds(35)
@@ -95,7 +95,7 @@ function Wait-MioHealth {
         $health = Get-MioHealth
     } until ($health -or (Get-Date) -ge $healthDeadline)
     if (-not $health) {
-        throw "澪 Agent 在 35 秒内没有进入健康状态"
+        throw "大肥鱼 Agent 在 35 秒内没有进入健康状态"
     }
     return $health
 }
@@ -195,7 +195,7 @@ try {
 
 $endedAt = Get-Date
 $report = [ordered]@{
-    test = "澪 Agent 屏幕观察压力测试"
+    test = "大肥鱼 Agent 屏幕观察压力测试"
     capture_only = $true
     requested_duration_minutes = $DurationMinutes
     started_at = $startedAt.ToString("o")

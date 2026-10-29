@@ -1256,6 +1256,51 @@
   min-width: 260px;
 }
 
+/* 9.10b 音频条 + 「保存到桌面」按钮（2026-10-29）
+   背景：聊天页跑在 Electron（Low 完整性）里，<audio> 原生下载菜单写桌面
+   （Medium 完整性）必被 Windows 强制完整性策略拒绝 → 用户实测「权限不够」。
+   方案：原生下载入口隐藏（controlslist="nodownload"），旁边给一个保存按钮，
+   保存动作由后端（Medium 完整性进程）代为复制到桌面。
+   布局：wrapper 独占一行（沿用原音频 flex-basis:100% 的防压扁策略），
+   播放条吃满剩余宽度，按钮不被压缩。 */
+.xz-chat .message-audio-wrap {
+  flex: 0 0 100%;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0;
+}
+.xz-chat .message-audio-wrap .message-audio-player {
+  flex: 1 1 auto;
+  width: auto;
+  margin: 0;
+}
+.xz-chat .message-audio-save {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.xz-chat .message-audio-save:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+}
+.xz-chat .message-audio-save:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+
 /* 9.10 她发回来的图片（agent-media 附件）尺寸与版式
    2026-10-22 用户反馈"对话界面和以前格式不一样"：
    附件图片原来套用 .message-bubble-image 的通用规则（max-height 680px、width:fit-content），

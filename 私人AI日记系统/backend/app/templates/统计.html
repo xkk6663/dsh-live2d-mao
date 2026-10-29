@@ -99,7 +99,7 @@
           <div class="chart-panel mood-trend-panel">
             <h2>近 30 天情绪</h2>
             <div id="mood-trend" class="mood-trend"></div>
-            <p class="mood-trend-hint">1 = 很低落 · 3 = 平稳 · 5 = 很好。分数由澪在每天的状态判定里给出，旧日记没有评分是正常的。</p>
+            <p class="mood-trend-hint">1 = 很低落 · 3 = 平稳 · 5 = 很好。分数由大肥鱼在每天的状态判定里给出，旧日记没有评分是正常的。</p>
           </div>
         </div>
 
@@ -111,7 +111,7 @@
 
       <footer class="mio-footer">
         <p>「我不会替你决定人生，但是我会一直记得你走过的路。」</p>
-        <span>—— 澪</span>
+        <span>—— 大肥鱼</span>
       </footer>
     </main>
 
@@ -247,7 +247,7 @@
         const container = document.getElementById('mood-trend');
         const scored = trend.filter(function (item) { return item.mood_score > 0; });
         if (!scored.length) {
-          container.innerHTML = '<p class="empty">还没有情绪评分。澪会在日常对话和日终状态判定时开始记录。</p>';
+          container.innerHTML = '<p class="empty">还没有情绪评分。大肥鱼会在日常对话和日终状态判定时开始记录。</p>';
           return;
         }
 

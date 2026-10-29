@@ -1,4 +1,4 @@
-import { test } from 'node:test'
+﻿import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   PRESET_CARDS,
@@ -38,7 +38,7 @@ function makeProfile(overrides = {}) {
   }
 }
 
-test('buildCharacterCard 生成酒馆 V3 结构，且澪扩展字段可完整还原', () => {
+test('buildCharacterCard 生成酒馆 V3 结构，且大肥鱼扩展字段可完整还原', () => {
   const profile = makeProfile()
   profile.behavior = {
     ...profile.behavior,
@@ -178,7 +178,7 @@ test('applyProfileFields 只覆盖指定字段，不触碰名字', () => {
   assert.equal(profile.behavior.initiative, '默认关闭')
 })
 
-test('fillMappedIntoDraft 完整回填澪导出卡', () => {
+test('fillMappedIntoDraft 完整回填大肥鱼导出卡', () => {
   const profile = makeProfile()
   const card = buildCharacterCard(makeProfile({ identity: { name: '改名', age_feel: '25 岁', core: '新身份' } }))
   const parsed = parseCharacterCard(JSON.stringify(card))

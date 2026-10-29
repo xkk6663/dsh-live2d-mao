@@ -24,6 +24,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
+  Download,
   FileText,
   ImageOff,
   MessageSquareText,
@@ -38,6 +39,8 @@ import {
 } from '@lucide/vue'
 // 传输助手抽屉（电脑↔微信零 token 直传）：锚定在本组件根（.xz-chat 相对定位）内部左缘
 import FeiyuRelayPanel from './FeiyuRelayPanel.vue'
+// 保存到桌面：渲染进程（Electron Low 完整性）写桌面必被拒，由后端（Medium）代存
+import { saveAgentMediaToDesktop } from '../services/companionChatApi.js'
 
 const props = defineProps({
   /* ---------------- 数据 ---------------- */
@@ -255,6 +258,46 @@ function formatFileSize(bytes) {
   return `${(size / 1024 / 1024).toFixed(1)} MB`
 }
 
+/* ---------------------------------------------------------------------------
+ * 音频附件「保存到桌面」（2026-10-29）
+ * 聊天页跑在 Electron（Low 完整性）里，<audio> 原生下载菜单写桌面必被 Windows
+ * 强制完整性策略拒绝（用户实测「权限不够」）——所以原生下载入口直接隐藏
+ * （controlslist="nodownload"），保存动作交给后端（Medium 完整性）代存。
+ * ------------------------------------------------------------------------- */
+const audioSaveBusyKey = ref('')
+const audioSaveDoneKey = ref('')
+let audioSaveDoneTimer = null
+
+function audioSaveKey(turn, attIndex) {
+  return `${turn.id || 't'}-${attIndex}`
+}
+
+function audioMediaFilename(att) {
+  if (att.filename) return att.filename
+  try {
+    return decodeURIComponent(String(att.url || '').split('/').pop() || '')
+  } catch {
+    return ''
+  }
+}
+
+async function saveAudioToDesktop(att, key) {
+  if (audioSaveBusyKey.value) return
+  const filename = audioMediaFilename(att)
+  if (!filename) return
+  audioSaveBusyKey.value = key
+  try {
+    await saveAgentMediaToDesktop(filename, att.display || '')
+    audioSaveDoneKey.value = key
+    clearTimeout(audioSaveDoneTimer)
+    audioSaveDoneTimer = setTimeout(() => { audioSaveDoneKey.value = '' }, 2500)
+  } catch (error) {
+    alert(`保存失败：${error?.message || error}`)
+  } finally {
+    audioSaveBusyKey.value = ''
+  }
+}
+
 function avatarLetter() {
   return (props.assistantName || '?').slice(0, 1)
 }
@@ -432,15 +475,35 @@ watch(
                   <span v-else-if="att.media === 'image'" class="message-attachment-card is-broken" :title="att.error || '图片下载失败'">
                     <ImageOff :size="15" /><span>{{ att.display || '图片' }}</span><em>加载失败</em>
                   </span>
-                  <!-- 语音/点歌的音频：直接在消息里给一个播放条（可拖动进度） -->
-                  <audio
+                  <!-- 语音/点歌的音频：直接在消息里给一个播放条（可拖动进度）
+                       ★ controlslist="nodownload"：原生下载在 Electron（Low 完整性）里
+                         写桌面必被拒（用户实测「权限不够」），隐藏后走旁边的保存按钮 -->
+                  <div
                     v-else-if="att.media === 'audio' && att.url"
-                    class="message-audio-player"
-                    :src="att.url"
-                    controls
-                    preload="none"
-                    :title="att.display || '音频'"
-                  />
+                    class="message-audio-wrap"
+                  >
+                    <audio
+                      class="message-audio-player"
+                      :src="att.url"
+                      controls
+                      controlslist="nodownload"
+                      disablepictureinpicture
+                      preload="none"
+                      :title="att.display || '音频'"
+                    />
+                    <button
+                      type="button"
+                      class="message-audio-save"
+                      :title="audioSaveDoneKey === audioSaveKey(turn, attIndex) ? '已保存到桌面' : '保存到桌面'"
+                      :disabled="audioSaveBusyKey === audioSaveKey(turn, attIndex)"
+                      @click="saveAudioToDesktop(att, audioSaveKey(turn, attIndex))"
+                    >
+                      <Download :size="13" />
+                      {{ audioSaveDoneKey === audioSaveKey(turn, attIndex)
+                        ? '已保存'
+                        : (audioSaveBusyKey === audioSaveKey(turn, attIndex) ? '保存中…' : '保存到桌面') }}
+                    </button>
+                  </div>
                   <a
                     v-else-if="att.url"
                     class="message-attachment-card"

@@ -795,7 +795,7 @@ function createChatWindow(anchor) {
   chatWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   // DSH 专用化：对话横条页面从中性的 chat-bar/ 加载（原来指向 xiaozhi/xiaozhi-chat.html，
   // 那是小智专用页；小智插件已阉割，页面已重写为走 /api/companion/chat 的通用对话横条）
-  chatWindow.loadURL(`${API_BASE}/agent-app/live2d-pet/chat-bar/pet-chat-bar.html?v=20261017`)
+  chatWindow.loadURL(`${API_BASE}/agent-app/live2d-pet/chat-bar/pet-chat-bar.html?v=20261027-feiyu`)
   chatWindow.once('ready-to-show', () => {
     positionChatWindow(anchor)
     chatWindow.show()

@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
@@ -15,7 +15,7 @@
       <header class="topbar">
         <div>
           <h1>{{ week_start }} ~ {{ week_end }} 周复盘</h1>
-          <p>澪的一周视角</p>
+          <p>大肥鱼的一周视角</p>
         </div>
         <nav>
           <a href="/diaries">日记</a>
@@ -41,7 +41,7 @@
       {% else %}
         <section class="empty-panel">
           <h2>这一周还没有复盘</h2>
-          <p>点击下面的按钮，澪会根据这一周的日记、状态板和每日回顾整理出周复盘。</p>
+          <p>点击下面的按钮，大肥鱼会根据这一周的日记、状态板和每日回顾整理出周复盘。</p>
         </section>
       {% endif %}
 
@@ -56,7 +56,7 @@
 
       <footer class="mio-footer">
         <p>「我不会替你决定人生，但是我会一直记得你走过的路。」</p>
-        <span>—— 澪</span>
+        <span>—— 大肥鱼</span>
       </footer>
     </main>
 
@@ -66,7 +66,7 @@
       const notice = document.querySelector("#notice");
 
       generateWeeklyButton.addEventListener("click", async () => {
-        notice.textContent = "澪正在复盘这一周...";
+        notice.textContent = "大肥鱼正在复盘这一周...";
         try {
           const response = await fetch("/api/weekly/{{ week_start }}/generate", { method: "POST" });
           if (!response.ok) throw new Error(await window.MioSite.readError(response));

@@ -1,4 +1,4 @@
-<script setup>
+﻿<script setup>
 import { onMounted, ref } from 'vue'
 import { ArrowRight, Settings, ListChecks, MessageSquareText, RefreshCw } from '@lucide/vue'
 import { apiRequest } from '../services/api.js'
@@ -22,7 +22,7 @@ onMounted(load)
 <template>
   <section class="agent-home">
     <header class="agent-home-header">
-      <div><span>你的创作与任务空间</span><h1>Mio Agent</h1><p>把想法交给澪，一起完成下一件事。</p></div>
+      <div><span>你的创作与任务空间</span><h1>Mio Agent</h1><p>把想法交给大肥鱼，一起完成下一件事。</p></div>
       <!-- DSH 专用化：原目标 'chat'（小智对话页 ChatPage）已移除，
            且 'chat' 不再是合法视图（activeViewState 会抛错）→ 暂指 'companion'。
            本页当前不在左侧导航中（属保留待恢复的脚手架），故此改动仅为防呆。 -->
@@ -33,7 +33,7 @@ onMounted(load)
       <section class="agent-start-panel">
         <header><h2>开始工作</h2></header>
         <div class="agent-tool-list">
-          <button type="button" @click="emit('navigate', 'companion')"><MessageSquareText :size="22" /><span><strong>告诉澪要完成什么</strong><small>制作图片、视频或处理文件</small></span><ArrowRight :size="16" /></button>
+          <button type="button" @click="emit('navigate', 'companion')"><MessageSquareText :size="22" /><span><strong>告诉大肥鱼要完成什么</strong><small>制作图片、视频或处理文件</small></span><ArrowRight :size="16" /></button>
           <button type="button" @click="emit('navigate', 'settings')"><Settings :size="22" /><span><strong>工具与工作流</strong><small>连接本地服务，配置创作能力</small></span><ArrowRight :size="16" /></button>
         </div>
       </section>

@@ -421,6 +421,8 @@
   let mouthLevel = 0
   let xzMouthAt = 0      // 最近一次外部口型事件时间（pet-xz-audio.js 音频能量分析）
   let xzMouthLevel = -1  // 最近一次外部口型幅度 0-1
+  let analyserFreqData = null  // ★ 2026-10-27 口型形状联动：频域采样缓冲（随 analyser 一起建）
+  let voiceFormPerturb = 0     // ★ 2026-10-27 谱质心 → ParamMouthForm 微扰（平滑后，±0.3）
   let speechStartCount = 0
   let speechEndCount = 0
   let speechInterruptCount = 0
@@ -1214,7 +1216,7 @@
   function applyFrameParameters() {
     if (!model?.internalModel?.coreModel) return
     const emotion = emotionParameters(currentEmotion)
-    setParameter('ParamMouthForm', emotion.mouth, 0.38)
+    setParameter('ParamMouthForm', emotion.mouth + voiceFormPerturb, 0.38)
     setParameter('ParamEyeLSmile', emotion.smile, 0.45)
     setParameter('ParamEyeRSmile', emotion.smile, 0.45)
     setParameter('ParamBrowLY', emotion.brow, 0.35)
@@ -1224,6 +1226,7 @@
     updateProceduralMotion()
 
     let nextMouth = 0
+    let nextFormPerturb = 0
     if (Date.now() - xzMouthAt < 350 && xzMouthLevel >= 0) {
       // 小智语音真实口型（pet-xz-audio.js 音频能量分析派发，优先于本地播放/伪随机）
       nextMouth = xzMouthLevel
@@ -1235,12 +1238,46 @@
         sum += normalized * normalized
       }
       nextMouth = Math.min(1, Math.sqrt(sum / analyserData.length) * 5.2)
+      // ★ 2026-10-27 口型形状联动：频谱质心（能量集中度）→ 嘴型宽/圆微扰。
+      //   元音「啊/衣」能量偏高频 → 嘴型偏宽（form+）；「呜/鱼」偏低频 → 偏圆（form-）。
+      //   只做 ±0.3 微扰叠加在情绪静态值上，不抢情绪表达；静音帧不扰动。
+      if (analyserFreqData) {
+        analyser.getByteFrequencyData(analyserFreqData)
+        let wsum = 0
+        let csum = 0
+        for (let i = 0; i < analyserFreqData.length; i++) {
+          const mag = analyserFreqData[i]
+          wsum += mag
+          csum += mag * i
+        }
+        if (wsum > 30) {
+          const nyquist = (analyser.context ? analyser.context.sampleRate : 48000) / 2
+          const centroidHz = (csum / wsum) * (nyquist / analyserFreqData.length)
+          const norm = Math.min(1, centroidHz / 1500)
+          nextFormPerturb = Math.max(-0.3, Math.min(0.3, (norm - 0.5) * 0.8))
+        }
+      }
     } else if (Date.now() < speakingUntil || currentActivity === 'speaking') {
       nextMouth = 0.12 + Math.abs(Math.sin(Date.now() / 95)) * 0.42
     }
     mouthLevel += (nextMouth - mouthLevel) * (nextMouth > mouthLevel ? 0.36 : 0.16)
     maxMouthLevel = Math.max(maxMouthLevel, mouthLevel)
+    voiceFormPerturb += (nextFormPerturb - voiceFormPerturb) * 0.22
     setParameter('ParamMouthOpenY', mouthLevel)
+    // ★ 2026-10-27 说话期间接管嘴型 EXP 开关。da-feiyu 的嘴型形变是模型自定义
+    //   PARAM_EXP* 开关（表情文件=单参数 Add 混合），待机表情「08 栗子嘴」会每帧
+    //   压 EXP8=-1，把嘴型锁死成栗子嘴 —— ParamMouthOpenY 动了嘴型也不变。
+    //   语音播放期间每帧强制：EXP1=1（口型切换形变）+ 清零其它嘴型开关（EXP2/5/7/8）；
+    //   播放停止后停止写入，表情管理器下一帧自动恢复原表情（同水印消除的拉回机制）。
+    const voiceAudioActive = (currentAudio && !currentAudio.paused) || streamPlaybackActive
+      || (Date.now() - xzMouthAt < 350 && xzMouthLevel > 0.05)
+    if (voiceAudioActive) {
+      setParameter('PARAM_EXP1', 1)
+      setParameter('PARAM_EXP2', 0)
+      setParameter('PARAM_EXP5', 0)
+      setParameter('PARAM_EXP7', 0)
+      setParameter('PARAM_EXP8', 0)
+    }
     // 保持水印消除参数：表情/动作切换会重置参数，这里每帧强制拉回（无水印模型时为空表，无开销）
     if (watermarkParamMap) {
       for (const paramId in watermarkParamMap) {
@@ -2987,6 +3024,42 @@
    *     把她真正说的话和表情包挤掉了。现在只出声，不出气泡。
    *   · `audio_autoplay: false` 时不自动出声，只在控制台记一条 —— 尊重"别突然放歌"。
    */
+  /**
+   * ★ 2026-10-27 语音响度归一化：
+   *   百炼复刻音色每句响度不一致（差 3dB+），轻的句子齿音/气声因掩蔽效应弱而
+   *   听着"沙沙/电流感"。实测把响度对齐到目标后明显干净（exp2_loudmatch A/B 验证）。
+   *   做法：解码音频测 RMS/峰值 → 计算 GainNode 增益，让整段 RMS 对齐
+   *   TARGET_RMS=0.125（≈-18dBFS，与 2026-10-27 试听验证过的干净样本一致），
+   *   同时保证峰值不超 0.95FS（防削波）、增益钳位 [0.5, 4]（防极端）。
+   *   失败（解码不了/无音频设备）静默回退增益=1，不影响播放。
+   */
+  const VOICE_LOUDNESS_TARGET_RMS = 0.125
+  async function computeLoudnessGain(url, ctx) {
+    try {
+      const resp = await fetch(url)
+      if (!resp.ok && !url.startsWith('data:')) return null
+      const raw = await resp.arrayBuffer()
+      const decoded = await ctx.decodeAudioData(raw)
+      const ch = decoded.getChannelData(0)
+      const step = Math.max(1, Math.floor(ch.length / 200000))
+      let sum = 0, peak = 0, cnt = 0
+      for (let i = 0; i < ch.length; i += step) {
+        const v = ch[i]
+        sum += v * v
+        const a = v < 0 ? -v : v
+        if (a > peak) peak = a
+        cnt++
+      }
+      const rms = Math.sqrt(sum / Math.max(cnt, 1))
+      if (rms < 1e-4) return null
+      let gain = VOICE_LOUDNESS_TARGET_RMS / rms
+      if (peak > 0) gain = Math.min(gain, 0.95 / peak)
+      return Math.max(0.5, Math.min(gain, 4))
+    } catch (_) {
+      return null
+    }
+  }
+
   function playAgentAudio(payload) {
     const url = String(payload?.url || '')
     const agentId = String(payload?.agent_id || '')
@@ -3020,16 +3093,30 @@
     }
     try {
       const audio = new Audio(url)
-      audio.volume = Math.max(0, Math.min(1, Number(settings.voice_volume || 85) / 100))
+      // ★ 2026-10-27 音量不再前置到元素上（那会让口型幅度跟着音量滑条变），
+      //   改为并入 analyser 之后的 outGain：口型采样拿到的是"原始响度"信号。
+      audio.volume = 1
       audioContext = audioContext || new AudioContext()
       if (audioContext.state === 'suspended') void audioContext.resume()
       analyser = audioContext.createAnalyser()
       analyser.fftSize = 256
       analyser.smoothingTimeConstant = 0.42
       analyserData = new Uint8Array(analyser.fftSize)
+      analyserFreqData = new Uint8Array(analyser.frequencyBinCount)
       const source = audioContext.createMediaElementSource(audio)
+      // ★ 2026-10-27 口型解耦链路：source → analyser（纯采样抽头，不改信号）→
+      //   outGain（响度归一 × 用户音量）→ destination。口型幅度只跟"在不在发声"有关。
+      const outGain = audioContext.createGain()
+      outGain.gain.value = Math.max(0, Math.min(1, Number(settings.voice_volume || 85) / 100))
       source.connect(analyser)
-      analyser.connect(audioContext.destination)
+      analyser.connect(outGain)
+      outGain.connect(audioContext.destination)
+      void computeLoudnessGain(url, audioContext).then((g) => {
+        if (g && outGain) {
+          const vol = Math.max(0, Math.min(1, Number(settings.voice_volume || 85) / 100))
+          outGain.gain.value = g * vol
+        }
+      })
       currentAudio = audio
       currentAudioUrl = ''
       agentAudioPlaying = { title, agentId }
@@ -3322,6 +3409,7 @@
     analyser.fftSize = 256
     analyser.smoothingTimeConstant = 0.42
     analyserData = new Uint8Array(analyser.fftSize)
+    analyserFreqData = new Uint8Array(analyser.frequencyBinCount)
     streamGain = audioContext.createGain()
     streamGain.gain.value = Math.max(0, Math.min(1, Number(settings.voice_volume || 85) / 100))
     streamGain.connect(analyser)
@@ -3375,7 +3463,8 @@
     if (controller.signal.aborted || token !== streamSpeechToken) return
     currentAudioUrl = URL.createObjectURL(blob)
     currentAudio = new Audio(currentAudioUrl)
-    currentAudio.volume = Math.max(0, Math.min(1, Number(settings.voice_volume || 85) / 100))
+    // ★ 2026-10-27 音量挪到 analyser 之后（口型与音量解耦，理由同 playAgentAudio）
+    currentAudio.volume = 1
     audioContext = audioContext || new AudioContext()
     if (audioContext.state === 'suspended') await audioContext.resume()
     const source = audioContext.createMediaElementSource(currentAudio)
@@ -3383,8 +3472,12 @@
     analyser.fftSize = 256
     analyser.smoothingTimeConstant = 0.42
     analyserData = new Uint8Array(analyser.fftSize)
+    analyserFreqData = new Uint8Array(analyser.frequencyBinCount)
+    const outGain = audioContext.createGain()
+    outGain.gain.value = Math.max(0, Math.min(1, Number(settings.voice_volume || 85) / 100))
     source.connect(analyser)
-    analyser.connect(audioContext.destination)
+    analyser.connect(outGain)
+    outGain.connect(audioContext.destination)
     currentAudio.onended = () => {
       if (token !== streamSpeechToken) return
       currentActivity = 'idle'
@@ -4544,6 +4637,13 @@
     // 表现就是"点了完全没声音"。
     try { const s = window.__mioPetSound; if (s) { s.setEnabled(settings.pet_sound_enabled !== false); s.unlock() } } catch (_) {}
     if (clickThroughLocked() || event.button !== 0 || !pointHitsModel(event.clientX, event.clientY)) return
+    // ★ 用户裁决（2026-10-29）：点桌宠本体 = 立即停掉正在放的音频（翻唱/点歌/语音）。
+    //   放在 pointerdown 里为了即时反馈；拖动前轻点一下也视为"叫停"意图，属可接受副作用。
+    if (currentAudio || agentAudioPlaying) {
+      try { stopSpeech('interrupted') } catch (_) {}
+      agentAudioPlaying = null
+      currentActivity = 'idle'
+    }
     // ★ 交互打磨（2026-10-17）：锁定位置 / SHIFT 拖动。
     //   两种都只禁止**拖动**，点击互动（音效/气泡/动作）照常。
     //   - 锁定：完全禁止拖动；

@@ -49,6 +49,7 @@ export const sendCompanionChat = (payload, signal) => apiRequest('/api/companion
   body: JSON.stringify({
     message: String(payload.message || '').slice(0, FEIYU_MESSAGE_MAX_CHARS),
     images: (payload.images || []).slice(0, FEIYU_IMAGE_MAX_COUNT),
+    audios: (payload.audios || []).slice(0, 1),
     model_id: payload.model_id || FEIYU_CLOUD_MODEL_ID,
     reasoning_level: payload.reasoning_level || 'auto',
     client_request_id: payload.client_request_id || '',
@@ -73,6 +74,25 @@ export const cancelCompanionChat = (clientRequestId) => apiRequest('/api/compani
  */
 export const loadCompanionChatHistory = (limit = 200) => apiRequest(
   `/api/companion/chat/history?limit=${encodeURIComponent(String(Math.min(500, Math.max(1, Number(limit) || 200))))}`,
+)
+
+/**
+ * 把大肥鱼发来的媒体文件保存到 Windows 桌面（由后端代存）。
+ *
+ * ★ 为什么不走浏览器原生下载（2026-10-29 用户实测「下载显示权限不够」）：
+ *   聊天页跑在 Electron（Low 完整性令牌）里，渲染进程写桌面（Medium 完整性）
+ *   被 Windows 强制完整性策略拒绝 —— 后端是 Medium 完整性进程，由它复制到桌面无障碍。
+ *
+ * @param {string} filename  agent-media 文件名（如 a38f18f3e137dc74.mp3）
+ * @param {string} [display] 期望的保存文件名（如《下》大肥鱼翻唱，扩展名自动补）
+ * @returns {Promise<{saved_to: string, filename: string, size: number}>}
+ */
+export const saveAgentMediaToDesktop = (filename, display = '') => apiRequest(
+  `/api/companion/agent-media/${encodeURIComponent(String(filename || ''))}/save-to-desktop`,
+  {
+    method: 'POST',
+    body: JSON.stringify({ display: String(display || '').slice(0, 120) }),
+  },
 )
 
 /**

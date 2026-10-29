@@ -1,4 +1,4 @@
-<script setup>
+﻿<script setup>
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { CheckCircle2, Film, FolderOpen, ImagePlus, Play, RefreshCw, Save, Search, Trash2, Upload, X } from '@lucide/vue'
 import * as api from '../services/creationApi.js'
@@ -76,7 +76,7 @@ async function addSearchFolder() {
     if (!result) return
     const current = await apiRequest('/api/agent/work/file-roots')
     await apiRequest('/api/agent/work/file-roots', { method: 'PUT', body: JSON.stringify({ paths: [...new Set([...(current.roots || []).filter(p => p !== current.output_root), result.path])] }) })
-    notice.value = '该目录已加入文件权限，澪可以搜索和读取其中的资料。'
+    notice.value = '该目录已加入文件权限，大肥鱼可以搜索和读取其中的资料。'
     await findWorkflows()
   } catch (cause) { message(cause) }
 }
@@ -212,7 +212,7 @@ onUnmounted(() => { disposed = true; clearTimeout(connectionTimer) })
       </div>
       <header class="agent-section-heading"><h3>本机工作流</h3><div class="agent-inline-actions"><button type="button" :disabled="busy || !ready" @click="openWorkflowPicker"><FolderOpen :size="15" />选择文件导入</button><button type="button" :disabled="workflowScanning || !ready" @click="findWorkflows"><Search :size="15" />{{ workflowScanning ? '正在搜索' : '搜索本机工作流' }}</button></div></header>
       <form class="local-workflow-search" @submit.prevent="findWorkflows"><input v-model="workflowQuery" aria-label="搜索工作流名称" placeholder="按名称搜索，例如 人物、视频、BiRefNet" /><button type="submit" :disabled="workflowScanning">搜索</button><button type="button" @click="addSearchFolder"><FolderOpen :size="15" />选择并授权搜索文件夹</button></form>
-      <p class="agent-setting-note">搜索 ComfyUI 的工作流、节点示例及已授权资料目录。也可以直接对澪说“找到人物抠图工作流并导入”。</p>
+      <p class="agent-setting-note">搜索 ComfyUI 的工作流、节点示例及已授权资料目录。也可以直接对大肥鱼说“找到人物抠图工作流并导入”。</p>
       <p v-if="workflowScanned && !localWorkflows.length" class="agent-setting-note">未找到匹配的工作流，可以选择其他文件夹或直接导入文件。</p>
       <p v-if="workflowTruncated" class="agent-setting-note">当前只显示部分结果，请缩小文件夹范围或按名称搜索。</p>
       <div class="local-workflow-results"><article v-for="item in localWorkflows" :key="item.path" class="agent-workflow-row local-found-workflow"><FolderOpen :size="18" /><div><strong>{{ item.name }}</strong><small class="local-workflow-path">{{ item.path }}</small></div><button type="button" :disabled="busy" @click="openFoundWorkflow(item)">打开并添加</button></article></div>
