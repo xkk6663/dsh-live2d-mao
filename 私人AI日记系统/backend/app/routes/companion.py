@@ -340,6 +340,8 @@ class Live2DPreviewRequest(BaseModel):
 class CompanionChatImageRequest(BaseModel):
     name: str = Field(default="粘贴的图片.png", max_length=120)
     data_url: str
+    # 音频附件需要 mime_type（落库 attachments_json 用）；图片路径不读它，缺省兼容旧请求
+    mime_type: str = Field(default="", max_length=120)
 
 
 class CompanionChatRequest(BaseModel):
@@ -1307,6 +1309,17 @@ def _save_agent_media(item: dict[str, Any], media_kind: str) -> dict[str, Any] |
     }
 
 
+@router.get("/cover/status")
+async def companion_cover_status():
+    """翻唱任务进度（2026-10-29 用户诉求"判断卡住还是在跑，缓解等待焦虑"）。
+
+    聊天页 5s 轮询：busy=true 时显示"正在唱《X》· 第几步 · 已等 y 分钟"。
+    阶段由管线 stderr 流式日志驱动（cover_service._run_pipeline），内存态、重启清零。
+    """
+    status = cover_service.current_status()
+    return {"busy": cover_service.is_busy(), **status}
+
+
 @router.get("/agent-media/{name}")
 async def companion_agent_media(name: str):
     """Agent 发来的图片/音频文件（渲染端 <img>/<audio> 直接拉这个 URL，支持 Range）。"""
@@ -1317,8 +1330,9 @@ async def companion_agent_media(name: str):
 
 
 class AgentMediaSaveToDesktopRequest(BaseModel):
-    """可选的保存参数：display = 期望保存的文件名（不带扩展名会自动补）。"""
+    """保存参数：display = 期望保存的文件名；target_path = 用户"另存为"选的绝对路径。"""
     display: str = Field(default="", max_length=120)
+    target_path: str = Field(default="", max_length=500)
 
 
 def _windows_desktop_dir() -> Path:
@@ -1365,13 +1379,31 @@ async def companion_agent_media_save_to_desktop(
     if Path(display).suffix.lower() != path.suffix.lower():
         display += path.suffix
 
-    desktop = _windows_desktop_dir()
-    target = desktop / display
+    # 用户在 Electron"另存为"对话框里选了具体路径 → 直接写到那里（含文件名）；
+    # 没选（浏览器/旧外壳）→ 落桌面。
+    target_override = str((req.target_path if req else "") or "").strip()
+    if target_override:
+        target = Path(target_override)
+        if not target.is_absolute():
+            raise HTTPException(status_code=400, detail="保存路径必须是绝对路径。")
+        # 文件名部分仍走非法字符清洗，目录部分保留用户所选
+        safe_name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", target.name).strip(" .") or display
+        if Path(safe_name).suffix.lower() != path.suffix.lower():
+            safe_name += path.suffix
+        target = target.parent / safe_name
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"保存目录创建失败：{exc}") from exc
+    else:
+        desktop = _windows_desktop_dir()
+        target = desktop / display
+
     if target.resolve() != path.resolve():
-        # 重名不覆盖：桌面已有同名文件时追加序号（Windows 资源管理器同款习惯）
+        # 重名不覆盖（仅桌面兜底路径需要；另存为路径由对话框自带覆盖确认）
         counter = 1
-        while target.exists():
-            target = desktop / f"{Path(display).stem} ({counter}){Path(display).suffix}"
+        while target.exists() and not target_override:
+            target = target.parent / f"{target.stem} ({counter}){target.suffix}"
             counter += 1
         try:
             shutil.copyfile(path, target)
@@ -1381,6 +1413,7 @@ async def companion_agent_media_save_to_desktop(
         "saved_to": str(target),
         "filename": target.name,
         "size": target.stat().st_size,
+        "mode": "custom" if target_override else "desktop",
     }
 
 

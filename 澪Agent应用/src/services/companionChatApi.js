@@ -77,23 +77,34 @@ export const loadCompanionChatHistory = (limit = 200) => apiRequest(
 )
 
 /**
- * 把大肥鱼发来的媒体文件保存到 Windows 桌面（由后端代存）。
+ * 把大肥鱼发来的媒体文件保存到 Windows（由后端代存）。
  *
  * ★ 为什么不走浏览器原生下载（2026-10-29 用户实测「下载显示权限不够」）：
  *   聊天页跑在 Electron（Low 完整性令牌）里，渲染进程写桌面（Medium 完整性）
- *   被 Windows 强制完整性策略拒绝 —— 后端是 Medium 完整性进程，由它复制到桌面无障碍。
+ *   被 Windows 强制完整性策略拒绝 —— 后端是 Medium 完整性进程，由它复制无障碍。
  *
- * @param {string} filename  agent-media 文件名（如 a38f18f3e137dc74.mp3）
- * @param {string} [display] 期望的保存文件名（如《下》大肥鱼翻唱，扩展名自动补）
- * @returns {Promise<{saved_to: string, filename: string, size: number}>}
+ * @param {string} filename          agent-media 文件名（如 a38f18f3e137dc74.mp3）
+ * @param {string} [display]         期望的保存文件名（如《下》大肥鱼翻唱，扩展名自动补）
+ * @param {string} [targetPath]      "另存为"对话框选中的绝对路径；空 = 落桌面
+ * @returns {Promise<{saved_to: string, filename: string, size: number, mode: string}>}
  */
-export const saveAgentMediaToDesktop = (filename, display = '') => apiRequest(
+export const saveAgentMediaToDesktop = (filename, display = '', targetPath = '') => apiRequest(
   `/api/companion/agent-media/${encodeURIComponent(String(filename || ''))}/save-to-desktop`,
   {
     method: 'POST',
-    body: JSON.stringify({ display: String(display || '').slice(0, 120) }),
+    body: JSON.stringify({
+      display: String(display || '').slice(0, 120),
+      target_path: String(targetPath || '').slice(0, 500),
+    }),
   },
 )
+
+/**
+ * 轮询翻唱任务进度（2026-10-29"进度可视化"）。
+ * 后端返回 { busy, title?, stage?, elapsed_sec?, ... }；空闲时只有 { busy: false }。
+ * @returns {Promise<{busy: boolean, title?: string, stage?: string, elapsed_sec?: number}>}
+ */
+export const fetchCoverStatus = () => apiRequest('/api/companion/cover/status')
 
 /**
  * 读取聊天共享设置（模型 / 思考档位 / 语音语言）。

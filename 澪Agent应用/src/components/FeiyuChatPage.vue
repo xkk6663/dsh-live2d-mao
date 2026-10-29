@@ -40,7 +40,7 @@ import {
 // 传输助手抽屉（电脑↔微信零 token 直传）：锚定在本组件根（.xz-chat 相对定位）内部左缘
 import FeiyuRelayPanel from './FeiyuRelayPanel.vue'
 // 保存到桌面：渲染进程（Electron Low 完整性）写桌面必被拒，由后端（Medium）代存
-import { saveAgentMediaToDesktop } from '../services/companionChatApi.js'
+import { saveAgentMediaToDesktop, fetchCoverStatus } from '../services/companionChatApi.js'
 
 const props = defineProps({
   /* ---------------- 数据 ---------------- */
@@ -263,9 +263,12 @@ function formatFileSize(bytes) {
  * 聊天页跑在 Electron（Low 完整性）里，<audio> 原生下载菜单写桌面必被 Windows
  * 强制完整性策略拒绝（用户实测「权限不够」）——所以原生下载入口直接隐藏
  * （controlslist="nodownload"），保存动作交给后端（Medium 完整性）代存。
+ * 路径：Electron 外壳提供 mioDesktop.pickSavePath（原生"另存为"对话框，主进程
+ * 代弹）→ 用户选哪存哪；没有这个桥（浏览器/旧外壳）→ 直接落桌面。
  * ------------------------------------------------------------------------- */
 const audioSaveBusyKey = ref('')
 const audioSaveDoneKey = ref('')
+const audioSaveLastPath = ref('')
 let audioSaveDoneTimer = null
 
 function audioSaveKey(turn, attIndex) {
@@ -281,14 +284,29 @@ function audioMediaFilename(att) {
   }
 }
 
+function suggestedSaveName(att) {
+  const base = String(att.display || '').replace(/[<>:"/\\|?*\u0000-\u001f]/g, '').trim() || '音频'
+  if (/\.[a-z0-9]+$/i.test(base)) return base
+  const extMatch = audioMediaFilename(att).match(/\.[a-z0-9]+$/i)
+  return base + (extMatch ? extMatch[0] : '.mp3')
+}
+
 async function saveAudioToDesktop(att, key) {
   if (audioSaveBusyKey.value) return
   const filename = audioMediaFilename(att)
   if (!filename) return
   audioSaveBusyKey.value = key
   try {
-    await saveAgentMediaToDesktop(filename, att.display || '')
+    // 先弹"另存为"（Electron 主进程代弹）；取消 = 什么都不发生
+    let targetPath = ''
+    if (window.mioDesktop?.pickSavePath) {
+      const picked = await window.mioDesktop.pickSavePath(suggestedSaveName(att))
+      if (!picked || picked.canceled || (!picked.ok && !picked.filePath)) return
+      targetPath = String(picked.filePath || '')
+    }
+    const saved = await saveAgentMediaToDesktop(filename, att.display || '', targetPath)
     audioSaveDoneKey.value = key
+    audioSaveLastPath.value = saved?.saved_to || ''
     clearTimeout(audioSaveDoneTimer)
     audioSaveDoneTimer = setTimeout(() => { audioSaveDoneKey.value = '' }, 2500)
   } catch (error) {
@@ -315,11 +333,48 @@ function isMultiParagraph(message) {
 
 onMounted(() => {
   if (followChat.value) nextTick(scrollToBottom)
+  startCoverStatusPolling()
 })
 
 onBeforeUnmount(() => {
   // 组件卸载时不需要做清理（无定时器、无 listener），保留钩子便于后续加
+  stopCoverStatusPolling()
 })
+
+/* ---------------------------------------------------------------------------
+ * 翻唱进度条（2026-10-29）：管线一次 8-15 分钟，用户"不知道卡住还是在跑"。
+ * 5s 轮询后端 /cover/status（内存态任务快照，阶段由管线 stderr 日志驱动），
+ * busy 时在输入区上方显示"正在唱《X》· 阶段 · 已等 N 分钟"。
+ * ------------------------------------------------------------------------- */
+const coverStatus = ref({ busy: false })
+let coverStatusTimer = null
+
+async function refreshCoverStatus() {
+  try {
+    coverStatus.value = await fetchCoverStatus()
+  } catch {
+    /* 后端短暂不可达不打扰用户，下一轮再试 */
+  }
+}
+
+function startCoverStatusPolling() {
+  if (coverStatusTimer) return
+  refreshCoverStatus()
+  coverStatusTimer = window.setInterval(refreshCoverStatus, 5000)
+}
+
+function stopCoverStatusPolling() {
+  if (coverStatusTimer) {
+    window.clearInterval(coverStatusTimer)
+    coverStatusTimer = null
+  }
+}
+
+function formatCoverElapsed(sec) {
+  const s = Math.max(0, Number(sec) || 0)
+  if (s < 60) return `${s} 秒`
+  return `${Math.floor(s / 60)} 分 ${s % 60} 秒`
+}
 
 defineExpose({ scrollToBottom })
 
@@ -491,17 +546,20 @@ watch(
                       preload="none"
                       :title="att.display || '音频'"
                     />
+                    <!-- 保存按钮只对后端落盘的附件（/api/... URL）有意义；
+                         乐观上屏的本地 base64 附件后端没有对应文件，隐藏避免点了报错 -->
                     <button
+                      v-if="!String(att.url || '').startsWith('data:')"
                       type="button"
                       class="message-audio-save"
-                      :title="audioSaveDoneKey === audioSaveKey(turn, attIndex) ? '已保存到桌面' : '保存到桌面'"
+                      :title="audioSaveDoneKey === audioSaveKey(turn, attIndex) ? (audioSaveLastPath ? `已保存到 ${audioSaveLastPath}` : '已保存') : '保存（可自选位置）'"
                       :disabled="audioSaveBusyKey === audioSaveKey(turn, attIndex)"
                       @click="saveAudioToDesktop(att, audioSaveKey(turn, attIndex))"
                     >
                       <Download :size="13" />
                       {{ audioSaveDoneKey === audioSaveKey(turn, attIndex)
                         ? '已保存'
-                        : (audioSaveBusyKey === audioSaveKey(turn, attIndex) ? '保存中…' : '保存到桌面') }}
+                        : (audioSaveBusyKey === audioSaveKey(turn, attIndex) ? '保存中…' : '保存') }}
                     </button>
                   </div>
                   <a
@@ -581,6 +639,14 @@ watch(
 
       <!-- 底部输入区 -->
       <div class="composer-wrap">
+        <!-- 翻唱进度条（2026-10-29）：管线 8-15 分钟，轮询 /cover/status 显示阶段+耗时，缓解等待焦虑 -->
+        <div v-if="coverStatus.busy" class="cover-progress-bar">
+          <span class="cover-progress-spinner" aria-hidden="true" />
+          <span class="cover-progress-text">
+            正在唱<em>《{{ coverStatus.title || '…' }}》</em>· {{ coverStatus.stage || '准备中' }}
+            <small v-if="coverStatus.elapsed_sec >= 10">· 已 {{ formatCoverElapsed(coverStatus.elapsed_sec) }}</small>
+          </span>
+        </div>
         <div class="composer">
           <!-- 附件暂存条 -->
           <div v-if="attachments.length" class="attachment-preview-list">

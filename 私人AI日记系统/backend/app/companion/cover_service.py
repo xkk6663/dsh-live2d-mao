@@ -322,6 +322,11 @@ def _run_pipeline(source_mp3: Path, slug: str, pitch: int, mode: str = "full") -
 
     mode: full=整条人声转换（独唱默认）| lead=只转主唱（双声部歌，见 _cover_mode_for）。
     瞬时 WSL 故障（exit=0xFFFFFFFF / E_ACCESSDENIED）自动重试，最多 3 次、间隔 30s。
+
+    ★ 流式进度（2026-10-29 用户诉求"判断卡住还是在跑"）：旧实现 subprocess.run(
+      capture_output=True) 跑完才有输出，中途前端全靠猜。改 Popen 逐行读 stderr ——
+      cover_smart.sh 的 log() 把阶段标记（separating/rvc converting/mixing/done）
+      打到 stderr，解析后实时写 _task_status 供 /cover/status 轮询。
     """
     out_mp3 = source_mp3.parent / f"cover_{slug}_{int(time.time())}.mp3"
     # 路径换算：C:\... → /mnt/c/...（subprocess 直接传 list 参数，无 shell 转义问题）
@@ -336,27 +341,85 @@ def _run_pipeline(source_mp3: Path, slug: str, pitch: int, mode: str = "full") -
         to_wsl(source_mp3), slug, str(pitch), to_wsl(out_mp3),
         _COVER_INDEX_RATE, mode,
     ]
+    # 脚本 log() 标记 → 人话阶段名（顺序即管线顺序；最耗时的换声排最长）
+    stage_map = (
+        ("second-pass: split", "二次分离主唱/和声"),
+        ("separating vocals", "分离伴奏和人声"),
+        ("rvc converting", "换肥鱼音色（最久的一步）"),
+        ("rvc done", "换声完成，准备混音"),
+        ("mixing", "混音中"),
+    )
+
+    def _stage_from_line(line: str):
+        for marker, label in stage_map:
+            if marker in line:
+                return label
+        return None
+
     last_tail = ""
+    returncode = None
     for attempt in range(1, 4):
         started = time.monotonic()
+        stderr_lines: list[str] = []
+        stdout_lines: list[str] = []
         try:
-            completed = subprocess.run(command, capture_output=True, timeout=1800)
-        except subprocess.TimeoutExpired:
-            raise RuntimeError("翻唱管线超时（30 分钟无输出）") from None
+            proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            # 两个流都必须持续排空，否则缓冲写满子进程会 block。
+            # stderr 是阶段标记主通道；stdout 只有最后 echo 的成品路径。
+            def _drain(stream, sink):
+                with stream:
+                    for raw in iter(stream.readline, b""):
+                        sink.append(_decode_proc_output(raw).rstrip())
+
+            t_err = threading.Thread(target=_drain, args=(proc.stderr, stderr_lines), daemon=True)
+            t_out = threading.Thread(target=_drain, args=(proc.stdout, stdout_lines), daemon=True)
+            t_err.start()
+            t_out.start()
+            prev_stage = None
+            while True:
+                try:
+                    proc.wait(timeout=5)
+                    break
+                except subprocess.TimeoutExpired:
+                    if time.monotonic() - started > 1800:
+                        proc.kill()
+                        raise RuntimeError("翻唱管线超时（30 分钟无输出）") from None
+                    new_stage = None
+                    for line in reversed(stderr_lines):
+                        st = _stage_from_line(line)
+                        if st:
+                            new_stage = st
+                            break
+                    if new_stage and new_stage != prev_stage:
+                        prev_stage = new_stage
+                        _status_update(stage=new_stage, stage_at=time.time())
+                        logger.info("[cover] stage: %s", new_stage)
+            t_err.join(timeout=5)
+            t_out.join(timeout=5)
+            returncode = proc.returncode
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            returncode = -1
+            stderr_lines.append(f"wsl launch failed: {exc}")
         elapsed = time.monotonic() - started
-        logger.info("[cover] pipeline attempt %d finished in %.1fs (exit=%s)", attempt, elapsed, completed.returncode)
-        if completed.returncode == 0 and out_mp3.is_file():
+        logger.warning("[cover] pipeline attempt %d finished in %.1fs (exit=%s)", attempt, elapsed, returncode)
+        if returncode not in (0,) and returncode != 0:
+            logger.warning("[cover] command=%s", " ".join(command))
+            logger.warning("[cover] stderr_tail=%r", "\n".join(stderr_lines[-8:]))
+            logger.warning("[cover] stdout_tail=%r", "\n".join(stdout_lines[-4:]))
+        if returncode == 0 and out_mp3.is_file():
+            _status_update(stage="唱完了，正在发给你", stage_at=time.time())
             return out_mp3.read_bytes()
-        stderr = _decode_proc_output(completed.stderr or b"")
-        stdout = _decode_proc_output(completed.stdout or b"")
-        last_tail = "\n".join((stderr or stdout).splitlines()[-12:])
-        blob = stderr or stdout
-        transient = completed.returncode in (0xFFFFFFFF, -1) or any(m in blob for m in _TRANSIENT_WSL_MARKERS)
+        blob = "\n".join(stderr_lines[-12:]) or "\n".join(stdout_lines[-12:])
+        last_tail = blob
+        transient = returncode in (0xFFFFFFFF, -1) or any(m in blob for m in _TRANSIENT_WSL_MARKERS)
         if not transient or attempt == 3:
             break
-        logger.warning("[cover] transient wsl failure (exit=%s), retrying in 30s", completed.returncode)
+        logger.warning("[cover] transient wsl failure (exit=%s), retrying in 30s", returncode)
+        _status_update(stage="WSL 打了个嗝，30 秒后自动重试", stage_at=time.time())
         time.sleep(30)
-    raise RuntimeError(f"翻唱管线失败（exit={completed.returncode}）：{last_tail}")
+    raise RuntimeError(f"翻唱管线失败（exit={returncode}）：{last_tail}")
 
 
 # ---- 任务编排 ---------------------------------------------------------------
@@ -364,6 +427,31 @@ def _run_pipeline(source_mp3: Path, slug: str, pitch: int, mode: str = "full") -
 # 单飞开关：同一时刻只跑一个翻唱任务（WSL CPU 管线 8-10 分钟，排队没有意义，
 # 直接告诉用户"正忙着唱上一首"）。
 _cover_busy = False
+
+# ---- 进度可视化（2026-10-29 用户诉求"判断卡住还是在跑，缓解等待焦虑"）--------
+# 任务状态快照：前端聊天页轮询 GET /cover/status 显示"正在唱《X》· 第几步 · 已等 y 分钟"。
+# 只存内存（单进程消费，重启清零无所谓）；管线各阶段由 stderr 流式日志驱动。
+_task_status: dict = {}
+_STATUS_LOCK = threading.Lock()
+
+
+def _status_update(**fields) -> None:
+    with _STATUS_LOCK:
+        _task_status.update(fields)
+        _task_status["updated_at"] = time.time()
+
+
+def _status_clear() -> None:
+    with _STATUS_LOCK:
+        _task_status.clear()
+
+
+def current_status() -> dict:
+    with _STATUS_LOCK:
+        snap = dict(_task_status)
+    if snap:
+        snap["elapsed_sec"] = int(time.time() - snap.get("started_at", time.time()))
+    return snap
 
 
 def is_busy() -> bool:
@@ -382,6 +470,7 @@ def start_cover_task(
         _publish_bubble("等我唱完手上这首再来点歌嘛～一次只能唱一首哦")
         return False
     _cover_busy = True
+    _status_update(title=title, stage="准备音源", started_at=time.time(), stage_at=time.time())
 
     def worker() -> None:
         global _cover_busy
@@ -403,6 +492,7 @@ def start_cover_task(
                 logger.exception("[cover] failure notice also failed")
         finally:
             _cover_busy = False
+            _status_clear()
 
     threading.Thread(target=worker, name=f"cover-{_slugify(title)}", daemon=True).start()
     return True
@@ -462,6 +552,7 @@ def start_cover_task_from_source(
         _publish_bubble("这个音频文件好像没传完整，再发一次试试？")
         return False
     _cover_busy = True
+    _status_update(title=title, stage="接收音频", started_at=time.time(), stage_at=time.time())
 
     def worker() -> None:
         global _cover_busy
@@ -485,6 +576,7 @@ def start_cover_task_from_source(
                 logger.exception("[cover] failure notice also failed")
         finally:
             _cover_busy = False
+            _status_clear()
 
     threading.Thread(target=worker, name=f"cover-up-{_slugify(title)}", daemon=True).start()
     return True
@@ -561,6 +653,7 @@ def _run_cover_task(title: str, *, request_id: str, conversation_id: str) -> Non
         _save_history(bubble_text, meta, request_id, conversation_id)
         return
     with _music_client() as client:
+        _status_update(stage="在音源库里搜歌")
         song = _search_song(client, title)
         if not song:
             _publish_bubble(f"音源库里没找到《{title}》，换个歌名试试？")
@@ -573,6 +666,7 @@ def _run_cover_task(title: str, *, request_id: str, conversation_id: str) -> Non
             _publish_bubble(f"《{display_song}》这首歌没有直链（可能要 VIP），换首试试？")
             return
         _publish_bubble(f"找到《{display_song}》了！我去练歌，唱好叫你～")
+        _status_update(stage="下载原曲")
         source_mp3 = _COVER_TMP / f"src_{slug}_{int(time.time())}.mp3"
         with client.stream("GET", direct_url, timeout=120.0) as stream:
             stream.raise_for_status()

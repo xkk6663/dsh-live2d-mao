@@ -99,7 +99,13 @@ function toBackendAudios(attachments) {
       return (item?.kind === 'audio' || mime.startsWith('audio/')) && item?.data_url
     })
     .slice(0, 1)
-    .map((item) => ({ name: item.name || 'audio.mp3', data_url: item.data_url }))
+    .map((item) => ({
+      name: item.name || 'audio.mp3',
+      data_url: item.data_url,
+      // ★ 必须带上：后端落库 attachments_json 读 audio_item.mime_type
+      //   （2026-10-29 实测漏发导致模型取值抛 AttributeError，附件落库成 []）
+      mime_type: item.mime_type || 'audio/mpeg',
+    }))
 }
 
 /**
@@ -1077,11 +1083,22 @@ export function useCompanionChat(deps) {
     activeRequestId = requestId
 
     // 乐观上屏
+    // ★ 音频附件直接带 base64 url 渲染成可播放的音频条（2026-10-29 用户实测
+    //   "发出去的音频前端 UI 不渲染"）—— 以前只拼进文本 "[音频] xxx"，不是真气泡。
     setMessages([...messages.value, {
       id: `local-${requestId}`,
       role: 'user',
-      text: content ? `${content}${audios.length ? `\n[音频] ${audios[0].name}` : ''}` : (audios.length ? `[音频] ${audios[0].name}` : '[图片]'),
+      text: content || (audios.length ? '[音频]' : '[图片]'),
       images: (attachments || []).filter((item) => item?.kind === 'image' && item?.preview_url).map((item) => item.preview_url),
+      attachments: audios.length ? [{
+        media: 'audio',
+        kind: 'audio',
+        url: audios[0].data_url,
+        display: audios[0].name || '音频',
+        filename: audios[0].name || '',
+        mime_type: audios[0].mime_type || 'audio/mpeg',
+        size: 0,
+      }] : [],
       ts: Date.now(),
       timeLabel: formatChatTime(new Date().toISOString()),
       sourceLabel: '',

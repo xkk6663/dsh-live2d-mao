@@ -93,20 +93,31 @@ function Start-Detached($exe, $argList, $workdir, $stdoutLog, $stderrLog) {
 # 关闭/杀掉启动终端、父脚本均不影响该进程存活
 function Start-Wmi($exe, $argList, $workdir) {
     $cmdline = '"' + $exe + '" ' + $argList
-    # ★ 环境变量透传（2026-10-17）：WMI Create 不继承 $env: 修改，故经
-    #   cmd /c "set ... && " 前缀显式注入 MIO_PET_INSTANCE_DIR / MIO_PET_STATE_DIR。
-    $envPrefix = ''
+    # ★ 2026-10-29 去黑窗（用户实测反馈"后端界面启动后自己放到后台，不要显示"）：
+    #   旧实现 `cmd.exe /c "set ... && electron.exe ..."` —— WMI 创建的 cmd.exe 是
+    #   控制台程序，会弹出一个**常驻黑窗**（electron 的 stdout 全打在里面）。
+    #   改为：动态生成 .vbs（wscript.exe 是 GUI 宿主，无控制台），由 vbs 注入
+    #   PROCESS 级环境变量后以隐藏窗口拉起 electron —— 全链无可见窗口。
+    $vbsLines = @('Set sh = CreateObject("WScript.Shell")')
     foreach ($k in @('MIO_PET_INSTANCE_DIR', 'MIO_PET_STATE_DIR', 'MIO_PET_API_BASE')) {
         $v = [Environment]::GetEnvironmentVariable($k, 'Process')
-        if ($v) { $envPrefix += "set $k=$v&& " }
+        if ($v) { $vbsLines += ('sh.Environment("PROCESS")("' + $k + '") = "' + ($v -replace '"', '""') + '"') }
     }
-    if ($envPrefix) {
-        $cmdline = 'cmd.exe /c "' + $envPrefix + $cmdline + '"'
-    }
+    $vbsLines += 'sh.CurrentDirectory = "' + ($workdir -replace '"', '""') + '"'
+    $vbsLines += 'sh.Run "' + ($cmdline -replace '"', '""') + '", 0, False'
+    # ★ 自删必须放在 vbs 末尾、由 wscript 自己执行（2026-10-29 竞态教训）：
+    #   PowerShell 侧"WMI Create 返回后立刻删 vbs"会抢在 wscript 打开文件之前 ——
+    #   wscript 读到空/不存在的文件 → 静默退出 → electron 根本没被拉起（实测踩到）。
+    #   wscript 是启动时一次性读入源码再执行，执行到末行删自己完全安全。
+    $vbsLines += 'CreateObject("Scripting.FileSystemObject").DeleteFile WScript.ScriptFullName, True'
+    $vbsPath = Join-Path $env:TEMP ("mao-pet-launch-{0}.vbs" -f ([Guid]::NewGuid().ToString('N').Substring(0, 8)))
     try {
+        # ★ 显式 GBK(936)：wscript 按 ANSI 解析 vbs，中文路径必须 GBK。
+        #   不能用 [Text.Encoding]::Default —— pwsh 7 (.NET Core) 的 Default 是 UTF-8，
+        #   写出的"澪Agent应用"会乱码 → Run 找不到 electron.exe → 静默失败（2026-10-29 实测踩到）。
+        [IO.File]::WriteAllText($vbsPath, ($vbsLines -join "`r`n"), [Text.Encoding]::GetEncoding(936))
         $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
-            CommandLine = $cmdline
-            CurrentDirectory = $workdir
+            CommandLine = 'wscript.exe //B //Nologo "' + $vbsPath + '"'
         }
         if ($r.ReturnValue -eq 0) { return $r.ProcessId }
         Write-Step "      WMI 启动返回 $($r.ReturnValue)，改用直接启动"

@@ -15,6 +15,9 @@ contextBridge.exposeInMainWorld('mioDesktop', {
   showChatWindow: (anchor) => ipcRenderer.invoke('mio-desktop:show-chat-window', anchor || {}),
   restoreVisibility: () => ipcRenderer.send('mio-desktop:restore-visibility'),
   importModel: () => ipcRenderer.invoke('mio-desktop:import-model'),
+  // 聊天页「保存文件」另存为对话框：主进程弹原生 showSaveDialog（渲染层 Low
+  // 完整性写不了常规目录，路径选择必须主进程代劳），返回 {ok, filePath} 或 {ok:false, canceled}
+  pickSavePath: (defaultName) => ipcRenderer.invoke('mio-desktop:pick-save-path', String(defaultName || '')),
   selectModel: (modelId) => ipcRenderer.invoke('mio-desktop:select-model', String(modelId || '')),
   openAgent: () => ipcRenderer.invoke('mio-desktop:open-agent'),
   // 双击桌宠直达 DSH 面板（主进程打开管理窗并触发 dsh-panel.show()）

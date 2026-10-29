@@ -1200,6 +1200,24 @@ function registerIpc() {
   ipcMain.on('mio-pet-chat:open-admin', () => openPetAdmin())
   ipcMain.on('mio-desktop:restore-visibility', () => restoreWindowVisibility())
   ipcMain.handle('mio-desktop:import-model', importModel)
+  // ★ 聊天页「保存文件」另存为对话框（2026-10-29）：
+  //   渲染层（Low 完整性令牌）写桌面/自定义目录必被 Windows 强制完整性策略拒绝，
+  //   所以路径选择用主进程原生 dialog.showSaveDialog 代劳；真正写盘仍由后端
+  //   （Medium 完整性）完成 —— 这里只负责"让用户挑一个保存位置"。
+  ipcMain.handle('mio-desktop:pick-save-path', async (_event, defaultName) => {
+    const name = String(defaultName || '').replace(/[<>:"/\\|?*\u0000-\u001f]/g, '').trim() || '保存文件'
+    try {
+      const result = await dialog.showSaveDialog({
+        title: '保存文件',
+        defaultPath: name,
+        properties: ['createDirectory', 'showOverwriteConfirmation'],
+      })
+      if (result.canceled || !result.filePath) return { ok: false, canceled: true }
+      return { ok: true, filePath: result.filePath }
+    } catch (error) {
+      return { ok: false, error: String(error?.message || error) }
+    }
+  })
   ipcMain.handle('mio-desktop:select-model', (_event, modelId) => {
     const id = String(modelId || '')
     const available = modelCatalog().some((model) => model.id === id)

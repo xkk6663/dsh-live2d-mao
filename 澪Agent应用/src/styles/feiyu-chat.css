@@ -1256,6 +1256,56 @@
   min-width: 260px;
 }
 
+/* ---------------------------------------------------------------------------
+ * 翻唱进度条（2026-10-29）：输入区上方的一条轻量状态行。
+ * 管线 8-15 分钟，用户此前"不知道卡住还是在跑"——这里轮询 /cover/status 显示
+ * 阶段 + 已等时长。busy=false 时整条不渲染（v-if），不占任何空间。
+ * ------------------------------------------------------------------------- */
+.xz-chat .cover-progress-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 auto 8px;
+  max-width: 720px;
+  padding: 7px 14px;
+  border-radius: 12px;
+  background: var(--xz-panel, rgba(120, 170, 255, 0.12));
+  border: 1px solid var(--xz-border, rgba(120, 170, 255, 0.25));
+  font-size: 12.5px;
+  color: var(--xz-text-dim, inherit);
+  animation: cover-progress-in 0.25s ease;
+}
+
+@keyframes cover-progress-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+.xz-chat .cover-progress-spinner {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid rgba(120, 170, 255, 0.35);
+  border-top-color: var(--xz-accent, #6a9dfa);
+  animation: cover-progress-spin 0.9s linear infinite;
+}
+
+@keyframes cover-progress-spin {
+  to { transform: rotate(360deg); }
+}
+
+.xz-chat .cover-progress-text em {
+  font-style: normal;
+  font-weight: 600;
+  color: var(--xz-accent, #6a9dfa);
+}
+
+.xz-chat .cover-progress-text small {
+  opacity: 0.75;
+  margin-left: 2px;
+}
+
 /* 9.10b 音频条 + 「保存到桌面」按钮（2026-10-29）
    背景：聊天页跑在 Electron（Low 完整性）里，<audio> 原生下载菜单写桌面
    （Medium 完整性）必被 Windows 强制完整性策略拒绝 → 用户实测「权限不够」。
