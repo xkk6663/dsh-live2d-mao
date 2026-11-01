@@ -5,6 +5,39 @@
 
 ---
 
+## v1.5.0（2026-11-01）· **插件市场远程安装（阶段 A + B）：在线搜索 / 预览 / 安装 / 挂载**
+
+社区插件由独立 GitHub 仓库托管（仓库根放 `mao-plugin.json` 清单），市场端自动发现、
+零人工维护、零人工审核；安装期零代码执行（后端模块落隔离区、重启后由挂载协议接管）。
+大肥鱼仓（mao-plugin-feiyu v1.2.0）是第一个样板插件。
+
+### 阶段 A：前端资源件远程安装
+
+- 新增 `app/kernel/plugin_source_service.py`：topic 自动发现 + 可选精选 registry（混合索引）、
+  清单强校验 `validate_manifest`、安装计划 `_build_plan`、zip 成员五步防护 `safe_join`
+  （拒 `..` / 盘符 / 绝对路径，resolve 后必须在目标区内）、体积上限（≤200MB / ≤3000 文件 / 单文件 ≤100MB）
+- 端点：`GET /api/plugin/market/remote/search`、`POST /remote/preview`、`POST /remote/install`
+- 网络通道：`_http_get` 直连优先（`trust_env=False`），系统代理只兜底；zipball 超时 600s
+- 市场面板新增「⤓ 远程安装」折叠区（搜索卡片 / 预览 / 安装 / 未审核强确认，全量 `esc()` 防注入）；
+  `manifest.js` 补 version 字段并升至 1.2.0（loader 缓存键）
+
+### 阶段 B：后端 Python 模块安装与挂载
+
+- 新增隔离区 `app/plugins_host/`（内容 .gitignore，删目录即卸载）与挂载协议
+  `mount_installed()`：main.py 最顶部执行，按清单 `backend.provides` 把缺失模块
+  别名挂进 `app.*` 命名空间（父链须是宿主真实包）；两条铁律：宿主优先、坏一个插件不连坐
+- 安装引擎 backend 整树落 `plugins_host/<id>/`，响应带 `needs_restart`，绝不热执行
+- 自检 191 → 224（新增 validate_manifest / safe_join / _build_plan / 条件出厂用例）
+- 契约文档 `docs/插件市场-契约.md` 新增 §8（§8.1–§8.6：包规范 / 索引 / 端点 / 安全红线 / 网络通道 / 挂载）
+
+### 验收
+
+- 自检 224/224 全绿；worktree 模拟新 clone：未装插件优雅降级（503 / 跳过注册）→
+  远程安装 feiyu 1.2.0 → 重启后全功能复活（243 路由）
+- e2e_stream_pet 18/18（逐 token 流式渲染全套）
+
+---
+
 ## v1.4.0（2026-11-01）· **大肥鱼拆分：仓库纯净化（只留桌宠端 + DSH 插件）**
 
 大肥鱼（cloud_feiyu / FeiyuChatPage / 翻唱 / da-feiyu 模型）整体迁往独立仓库

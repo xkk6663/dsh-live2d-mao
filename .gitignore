@@ -272,3 +272,7 @@ _probe*.py
 澪Agent应用/dist/live2d-pet/models/da-feiyu/
 澪Agent应用/dist/live2d-pet/quotes/da-feiyu.json
 澪Agent应用/tests/market/_market_fixtures/plugin_feiyu.json
+
+# --- 插件宿主隔离区（阶段 B）：挂载协议在位，已装插件内容不入库 ---
+私人AI日记系统/backend/app/plugins_host/*
+!私人AI日记系统/backend/app/plugins_host/__init__.py

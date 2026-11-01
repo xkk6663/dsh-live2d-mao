@@ -344,6 +344,159 @@ def test_feiyu_conditional_default() -> None:
     check("还原 manifest → cloud_feiyu 重新出厂", "cloud_feiyu" in _ids(), True)
 
 
+def test_remote_source() -> None:
+    """★ 2026-11-01 阶段 A 远程安装（契约 §8）：plugin_source_service 纯函数。
+
+    只测不触网的部分：清单校验 / zip 成员路径安全 / 落盘计划。
+    网络路径（search/preview/install）由真机 E2E 覆盖（对 mao-plugin-feiyu 实装）。
+    """
+    print("\n[2.6] 远程插件源：清单校验 / 路径安全 / zip 计划")
+    import io
+    import json as _json
+    import tempfile
+    import zipfile
+
+    from . import plugin_source_service as src
+
+    # 1) 清单校验
+    good = {"schema": 1, "id": "demo", "name": "示例",
+            "frontend": {"distPlugins": "frontend/dist-plugins",
+                         "distAssets": "frontend/dist-assets"}}
+    mf = src.validate_manifest(good)
+    check_eq("远程清单校验：agentId 回落 id", mf["agentId"], "demo")
+    for name, bad in [
+        ("schema 非 1", {"schema": 2, "id": "x", "name": "n",
+                         "frontend": {"distPlugins": "a"}}),
+        ("缺 distPlugins", {"schema": 1, "id": "x", "name": "n"}),
+        ("backend.provides 缺失", {"schema": 1, "id": "x", "name": "n",
+                                   "frontend": {"distPlugins": "a"},
+                                   "backend": {"package": "b"}}),
+        ("backend.provides 含大写", {"schema": 1, "id": "x", "name": "n",
+                                     "frontend": {"distPlugins": "a"},
+                                     "backend": {"package": "b", "provides": ["Foo"]}}),
+        ("backend.package 越界", {"schema": 1, "id": "x", "name": "n",
+                                  "frontend": {"distPlugins": "a"},
+                                  "backend": {"package": "../b", "provides": ["x"]}}),
+        ("id 大写", {"schema": 1, "id": "X", "name": "n",
+                     "frontend": {"distPlugins": "a"}}),
+        ("assets 项缺 dest", {"schema": 1, "id": "x", "name": "n",
+                              "frontend": {"distPlugins": "a"},
+                              "assets": [{"src": "a"}]}),
+    ]:
+        try:
+            src.validate_manifest(bad)
+            check(f"远程清单校验拒绝：{name}", False, "竟然通过了")
+        except src.RemoteSourceError:
+            check(f"远程清单校验拒绝：{name}", True)
+
+    # 2) 路径安全（safe_join：.. / 盘符 / 绝对路径全拒）
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        check_eq("远程路径安全：正常相对路径",
+                 str(src.safe_join(root, "plugins/a/manifest.js")),
+                 str((root / "plugins" / "a" / "manifest.js").resolve()))
+        for bad in ["../x", "a/../../x", "C:/win", "/abs", "a/..", ""]:
+            try:
+                src.safe_join(root, bad)
+                check(f"远程路径安全拒绝：{bad!r}", False, "竟然通过了")
+            except src.RemoteSourceError:
+                check(f"远程路径安全拒绝：{bad!r}", True)
+
+    # 3) zip 计划：剥顶层目录 + 三组来源映射 + entry 可定位
+    good2 = dict(good)
+    good2["assets"] = [{"src": "assets", "dest": "misc"}]
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("demo-main/mao-plugin.json", _json.dumps(good2, ensure_ascii=False))
+        zf.writestr("demo-main/frontend/dist-plugins/demo/manifest.js", "// m\n")
+        zf.writestr("demo-main/frontend/dist-plugins/demo/demo-panel.js", "// p\n")
+        zf.writestr("demo-main/frontend/dist-assets/chunk-abc.js", "// c\n")
+        zf.writestr("demo-main/assets/logo.png", "png")
+    with zipfile.ZipFile(buf) as zf:
+        check_eq("远程 zip：顶层目录剥离",
+                 src._strip_top("demo-main/mao-plugin.json"), "mao-plugin.json")
+        _, mf2 = src._read_manifest_from_zip(zf)
+        plan = src._build_plan(zf, mf2)
+    dests = {p["rel_dest"] for p in plan}
+    check("远程 zip 计划：manifest → plugins/demo/manifest.js",
+          "plugins/demo/manifest.js" in dests, str(sorted(dests)))
+    check("远程 zip 计划：panel → plugins/demo/demo-panel.js",
+          "plugins/demo/demo-panel.js" in dests, str(sorted(dests)))
+    check("远程 zip 计划：distAssets → assets/chunk-abc.js",
+          "assets/chunk-abc.js" in dests, str(sorted(dests)))
+    check("远程 zip 计划：assets → misc/logo.png",
+          "misc/logo.png" in dests, str(sorted(dests)))
+
+    # 3.5) 阶段 B：backend 字段 → plugins_host/<id>/ 隔离区映射 + area 标注
+    good3 = dict(good)
+    good3["backend"] = {"package": "backend", "provides": ["demo_mod", "pkg.sub_mod"]}
+    mf3 = src.validate_manifest(good3)
+    check_eq("阶段 B 清单：backend.package 归一化",
+             mf3["backend"]["package"], "backend")
+    buf3 = io.BytesIO()
+    with zipfile.ZipFile(buf3, "w") as zf:
+        zf.writestr("demo-main/mao-plugin.json", _json.dumps(good3, ensure_ascii=False))
+        zf.writestr("demo-main/frontend/dist-plugins/demo/manifest.js", "// m\n")
+        zf.writestr("demo-main/backend/demo_mod.py", "VALUE = 1\n")
+        zf.writestr("demo-main/backend/pkg/__init__.py", "")
+        zf.writestr("demo-main/backend/pkg/sub_mod.py", "VALUE = 2\n")
+        zf.writestr("demo-main/backend/__pycache__/x.cpython.pyc", "junk")  # 也会映射（简单前缀映射）
+    with zipfile.ZipFile(buf3) as zf:
+        plan3 = src._build_plan(zf, mf3)
+    back = {p["rel_dest"]: p for p in plan3 if p["area"] == "backend"}
+    check("阶段 B 计划：backend → plugins_host/demo/demo_mod.py",
+          "plugins_host/demo/demo_mod.py" in back, str(sorted(back)))
+    check("阶段 B 计划：子包 → plugins_host/demo/pkg/sub_mod.py",
+          "plugins_host/demo/pkg/sub_mod.py" in back, str(sorted(back)))
+    check("阶段 B 计划：backend dest_abs 落在 app 根内",
+          all(p["dest_abs"].startswith(str(src.backend_root().resolve()))
+              for p in back.values()), str(src.backend_root()))
+
+    # 4) 阶段 B：plugins_host 挂载协议（临时目录 + 假模块名，不碰真实 app.* 模块）
+    import sys as _sys
+    from .. import plugins_host as _ph
+    _probe = "zz_selftest_probe_mod"
+    _saved = _sys.modules.pop(f"app.{_probe}", None)
+    try:
+        with tempfile.TemporaryDirectory() as td2:
+            fake = Path(td2) / "selftest_plug"
+            fake.mkdir()
+            (fake / _ph.MANIFEST_NAME).write_text(_json.dumps(
+                {"schema": 1, "id": "selftest_plug", "name": "t",
+                 "frontend": {"distPlugins": "f"},
+                 "backend": {"package": "b", "provides": [_probe]}}), encoding="utf-8")
+            (fake / (_probe + ".py")).write_text("VALUE = 42\n", encoding="utf-8")
+            # 真实优先：本机 cloud_feiyu 在位（本地保活副本）→ 不应被挂载
+            real_probe = Path(td2) / "selftest_real"
+            real_probe.mkdir()
+            (real_probe / _ph.MANIFEST_NAME).write_text(_json.dumps(
+                {"schema": 1, "id": "selftest_real", "name": "t",
+                 "frontend": {"distPlugins": "f"},
+                 "backend": {"package": "b", "provides": ["cloud_feiyu"]}}), encoding="utf-8")
+            mounted = _ph.mount_installed(base=Path(td2))
+            check("挂载协议：宿主已有模块（cloud_feiyu）→ 宿主优先不挂载",
+                  "app.cloud_feiyu" not in mounted, str(mounted))
+            check("挂载协议：缺失模块进 sys.modules",
+                  f"app.{_probe}" in _sys.modules, str(mounted))
+            check_eq("挂载协议：模块内容可执行",
+                     getattr(_sys.modules[f"app.{_probe}"], "VALUE", None), 42)
+            check("挂载协议：返回值含挂载全名",
+                  f"app.{_probe}" in mounted, str(mounted))
+    finally:
+        mod = _sys.modules.pop(f"app.{_probe}", None)
+        import app as _app_pkg
+        if hasattr(_app_pkg, _probe):
+            delattr(_app_pkg, _probe)
+        del mod, _saved
+    check_eq("远程 zip 计划：文件数", len(plan), 4)
+
+    # 4) 落盘目标全部落在 dist 根之内（越界防护的最后兜底）
+    dist_root = svc.frontend_root().resolve()
+    for p in plan:
+        check(f"远程 zip 计划：{p['rel_dest']} 在 dist 内",
+              Path(p["dest_abs"]).is_relative_to(dist_root), p["dest_abs"])
+
+
 # ---------------------------------------------------------------------------
 # 3) 增删幂等
 # ---------------------------------------------------------------------------
@@ -766,13 +919,17 @@ def test_live_app() -> None:
         getattr(r, "path", "") for r in real_app.routes
         if "plugin/market" in str(getattr(r, "path", ""))
     })
-    check_eq("契约 §2 的 8 个端点全部挂载", market_paths, [
+    # 契约 §2（8 个管理端点）+ §8（2026-11-01 新增 3 个远程安装端点）
+    check_eq("契约 §2+§8 的 11 个端点全部挂载", market_paths, [
         "/api/plugin/market/catalog",
         "/api/plugin/market/diagnostics",
         "/api/plugin/market/plugins",
         "/api/plugin/market/plugins/{agentId}",
         "/api/plugin/market/plugins/{agentId}/enable",
         "/api/plugin/market/reload",
+        "/api/plugin/market/remote/install",
+        "/api/plugin/market/remote/preview",
+        "/api/plugin/market/remote/search",
     ])
     methods = sorted({
         m for r in real_app.routes
@@ -968,6 +1125,7 @@ def main() -> int:
         test_symlink_escape()
         test_defaults_match_manifests()
         test_feiyu_conditional_default()
+        test_remote_source()
         sandbox.reset()
 
         test_add_remove()

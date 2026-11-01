@@ -4,6 +4,17 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
+# ★ 2026-11-01 阶段 B（插件市场远程安装，契约 §8.6）：在任何插件 try-import
+#   降级点之前，把 app/plugins_host/<id>/ 里已装插件声明的后端模块按 provides
+#   别名挂进 app.* 命名空间（宿主已有同名模块时宿主优先，本地保活副本不受影响）。
+#   挂载失败不拦启动 —— 缺的模块走下方既有降级路径（503 / 任务不注册）。
+from .plugins_host import mount_installed as _mount_installed_plugins
+
+try:
+    _mount_installed_plugins()
+except Exception:  # noqa: BLE001
+    logging.getLogger(__name__).warning("插件后端模块挂载失败（app/plugins_host）", exc_info=True)
+
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles

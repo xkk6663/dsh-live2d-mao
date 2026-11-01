@@ -30,6 +30,10 @@ window.__mioPluginManifests['market'] = {
   agentId: 'market',
   name: '插件市场',
 
+  // ★ loader 的脚本缓存键（?v=<version>）。改 market-panel.js 必须同步升这里，
+  //   否则管理窗按 URL 缓存拿旧面板（v1.1.0 起加远程安装，曾因此漏升）。
+  version: '1.2.0',
+
   // ★ 内置：恒可见、不可停用、不可下架（理由见文件头）。
   //   与后端 plugin_market_service.DEFAULT_PLUGINS 里 market 条目的 builtin 必须一致，
   //   否则会出现"后端让它可停用、前端却恒显示"的口径分裂。

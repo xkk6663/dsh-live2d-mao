@@ -439,6 +439,27 @@ def build_entry(payload: dict[str, Any], *, existing: dict[str, Any] | None = No
         "enabled": enabled,
         "added": str(base.get("added") or _now_iso()),
     }
+    # ★ 2026-11-01 远程安装（契约 §8）：origin 记录插件包的 GitHub 来处
+    #   （repo/ref/version），"检查更新"靠它比对远端版本。仅 add 时可设置，
+    #   PATCH 走 base 沿用旧值（不改出来源漂移）；本地手动上架的插件没有该字段。
+    origin_raw = data.get("origin", base.get("origin"))
+    if isinstance(origin_raw, dict) and origin_raw.get("repo"):
+        entry["origin"] = {
+            "repo": _clean_text(origin_raw.get("repo"), field="origin.repo", limit=120),
+            "ref": _clean_text(origin_raw.get("ref"), field="origin.ref", limit=120, default="main"),
+            "version": _clean_text(origin_raw.get("version"), field="origin.version", limit=32),
+            "installed_at": _clean_text(origin_raw.get("installed_at"),
+                                        field="origin.installed_at", limit=40),
+        }
+        # ★ 阶段 B（契约 §8.6）：origin 可带 backend 子对象（package + provides），
+        #   "检查更新"阶段要用它判断远端是否新增了后端模块；无则不落该键。
+        be_raw = origin_raw.get("backend")
+        if isinstance(be_raw, dict) and isinstance(be_raw.get("provides"), list):
+            entry["origin"]["backend"] = {
+                "package": _clean_text(be_raw.get("package"), field="origin.backend.package",
+                                       limit=120, default="backend"),
+                "provides": [str(p) for p in be_raw["provides"] if isinstance(p, str) and p][:16],
+            }
     # 记录解析结果供调用方（add）使用，不必二次解析
     entry["_entry_path"] = str(entry_path)
     return entry

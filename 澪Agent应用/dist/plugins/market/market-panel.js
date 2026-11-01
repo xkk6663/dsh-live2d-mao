@@ -10,6 +10,9 @@
  *   DELETE /api/plugin/market/plugins/{id}         下架（只删清单条目，不动磁盘）
  *   POST   /api/plugin/market/reload               重新扫描（丢后端缓存重读盘）
  *   GET    /api/plugin/market/diagnostics          清单健康度
+ *   GET    /api/plugin/market/remote/search        远程搜索（GitHub 社区插件，契约 §8）
+ *   POST   /api/plugin/market/remote/preview       安装前预览（将落盘的文件清单）
+ *   POST   /api/plugin/market/remote/install       远程安装（下载→校验→白名单落盘→上架）
  *   全部请求收口在 fetchAll() / callApi() 两个函数里 —— 方便打桩单测（见文件末尾注释）。
  *
  * ── 设计取舍（为什么这么做）────────────────────────────────────────────────
@@ -65,8 +68,9 @@
 
   // 面板级缓存：跨 renderInto 保留（切走再切回不必重新等网络）
   var cache = { plugins: null, diag: null, at: 0 }
-  // 视图状态：搜索词 / 分类筛选 / 上架表单展开与否 / 表单里已填的值
-  var view = { q: '', cat: 'all', formOpen: false, form: {} }
+  // 视图状态：搜索词 / 分类筛选 / 上架表单展开与否 / 表单里已填的值 / 远程安装
+  var view = { q: '', cat: 'all', formOpen: false, form: {},
+               remote: { open: false, q: '', results: null } }
   var lastError = ''
 
   // ── DOM 小工具（与 pet-panel.js / dsh-panel.js 同一套写法，ES5 风格）────────
@@ -399,10 +403,17 @@
     btnScan.title = '让后端丢掉清单缓存重新读盘，再让前端重新注入插件脚本'
     btnScan.addEventListener('click', function () { manualRescan(wrap, btnScan) })
 
+    var btnRemote = el('button', C.btn, '⤓ 远程安装')
+    btnRemote.type = 'button'
+    btnRemote.setAttribute('data-mio-market-remote', '1')
+    btnRemote.title = '搜索 GitHub 托管的社区插件并一键安装（契约 §8）'
+    btnRemote.addEventListener('click', function () { toggleRemote(wrap, !view.remote.open) })
+
     bar.appendChild(search)
     bar.appendChild(cat)
     bar.appendChild(btnAdd)
     bar.appendChild(btnScan)
+    bar.appendChild(btnRemote)
     wrap.appendChild(bar)
 
     // 操作结果 / 错误提示条（成功绿、失败红；后端 detail 原样显示）
@@ -421,6 +432,9 @@
     // ── 上架表单（可折叠；默认收起 —— 绝大多数时间用户只是来看状态的）────────
     wrap.appendChild(buildForm(wrap))
 
+    // ── 远程安装（可折叠；GitHub 社区插件，契约 §8）─────────────────────────
+    wrap.appendChild(buildRemote(wrap))
+
     // ── 诊断 ────────────────────────────────────────────────────────────────
     var diag = el('div', '')
     diag.setAttribute('data-mio-market-diag', '1')
@@ -431,6 +445,7 @@
 
     // 首次渲染时上架表单是收着的（除非上次是打开的）
     toggleForm(wrap, view.formOpen)
+    toggleRemote(wrap, view.remote.open)
   }
 
   function rerenderList(wrap) {
@@ -723,6 +738,222 @@
       var first = $q('[data-mio-market-field="agentId"]', wrap)
       if (first) { try { first.focus() } catch (e) { /* ignore */ } }
     }
+  }
+
+  // ── 远程安装（契约 §8：GitHub 托管社区插件）────────────────────────────────
+  // 数据面：GET /remote/search · POST /remote/preview · POST /remote/install
+  // 安全面：远端仓库内容是**不可信输入**——名称/描述/作者/文件名全部过 esc()，
+  // 绝不 innerHTML 原样渲染；安装与否永远经过用户确认（未审核作者加强确认）。
+  function buildRemote(wrap) {
+    var box = el('div', '')
+    box.setAttribute('data-mio-market-remotebox', '1')
+    box.style.cssText = 'display:none;margin-top:14px;'
+    box.appendChild(section('远程安装 · GitHub 社区插件'))
+
+    var panelBox = el('div', 'border:1px solid var(--line,#d9e2e6);border-radius:10px;background:var(--surface-soft,#f2f6f7);padding:12px;')
+    panelBox.appendChild(el('div', C.desc + 'margin-bottom:10px;',
+      '搜索 GitHub 上带 mao-plugin.json 清单的插件仓库并一键安装。' +
+      '搜索结果有 6 小时缓存（GitHub API 有每小时配额）；' +
+      '「未审核」= 作者不在可信清单里，安装前请确认仓库来源可信。' +
+      '支持前端件 + assets；含后端 Python 模块的插件会装进隔离区' +
+      '（app/plugins_host/<id>/），重启后端后挂载生效，宿主已有同名模块时宿主优先。'))
+
+    var bar = el('div', 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;')
+    var inp = document.createElement('input')
+    inp.type = 'search'
+    inp.placeholder = '关键词（名称 / id / 作者）…'
+    inp.style.cssText = C.input + 'flex:1 1 160px;min-width:120px;'
+    inp.value = view.remote.q
+    inp.setAttribute('data-mio-market-remoteq', '1')
+    inp.addEventListener('input', function () { view.remote.q = inp.value })
+    inp.addEventListener('keydown', function (e) {
+      if (e && e.key === 'Enter') doRemoteSearch(wrap, false)
+    })
+    var bSearch = el('button', C.btnPrimary, '搜索远程插件')
+    bSearch.type = 'button'
+    bSearch.setAttribute('data-mio-market-remotesearch', '1')
+    bSearch.addEventListener('click', function () { doRemoteSearch(wrap, false) })
+    var bRefresh = el('button', C.btn, '⟳ 强制刷新')
+    bRefresh.type = 'button'
+    bRefresh.title = '无视 6 小时缓存回 GitHub 重拉'
+    bRefresh.addEventListener('click', function () { doRemoteSearch(wrap, true) })
+    bar.appendChild(inp)
+    bar.appendChild(bSearch)
+    bar.appendChild(bRefresh)
+    panelBox.appendChild(bar)
+
+    var results = el('div', '')
+    results.setAttribute('data-mio-market-remoteresults', '1')
+    results.appendChild(el('div', C.desc, '输入关键词或直接点「搜索远程插件」浏览全部社区插件。'))
+    panelBox.appendChild(results)
+
+    box.appendChild(panelBox)
+    return box
+  }
+
+  function toggleRemote(wrap, open) {
+    view.remote.open = !!open
+    var box = $q('[data-mio-market-remotebox]', wrap)
+    if (box) box.style.display = open ? 'block' : 'none'
+    var b = $q('[data-mio-market-remote]', wrap)
+    if (b) b.innerHTML = open ? '收起远程安装' : '⤓ 远程安装'
+  }
+
+  function doRemoteSearch(wrap, force) {
+    var out = $q('[data-mio-market-remoteresults]', wrap)
+    if (!out) return
+    var btn = $q('[data-mio-market-remotesearch]', wrap)
+    var done = busy(btn, '搜索中…')
+    out.innerHTML = ''
+    out.appendChild(el('div', C.desc, '正在' + (force ? '回 GitHub 重拉' : '查询远程索引') + '…'))
+    var q = encodeURIComponent(String(view.remote.q || '').trim())
+    callApi('GET', API + '/remote/search?q=' + q + (force ? '&force=true' : ''))
+      .then(function (j) {
+        view.remote.results = j && j.items ? j : { items: [], cached: false }
+        paintRemoteResults(wrap)
+      })
+      .catch(function (e) {
+        out.innerHTML = ''
+        out.appendChild(el('div', C.desc, '搜索失败：' + esc((e && e.message) || e)))
+      })
+      .then(function () { done() })
+  }
+
+  function paintRemoteResults(wrap) {
+    var out = $q('[data-mio-market-remoteresults]', wrap)
+    if (!out) return
+    out.innerHTML = ''
+    var res = view.remote.results
+    var items = (res && res.items) || []
+    if (!items.length) {
+      out.appendChild(el('div', C.desc, '没有匹配的远程插件。想被搜到：插件仓库根放 mao-plugin.json，' +
+        '再给仓库加 topic「mao-plugin-market」。'))
+      return
+    }
+    var head = el('div', C.desc + 'margin-bottom:8px;',
+      esc('共 ' + items.length + ' 个' + (res.cached ? '（缓存）' : '') + '。点「预览」看将落盘的文件，确认后再安装。'))
+    out.appendChild(head)
+    var grid = el('div', C.grid)
+    for (var i = 0; i < items.length; i++) grid.appendChild(buildRemoteCard(wrap, items[i]))
+    out.appendChild(grid)
+  }
+
+  function buildRemoteCard(wrap, it) {
+    var card = el('div', C.card)
+    var titleRow = el('div', 'display:flex;align-items:center;gap:6px;flex-wrap:wrap;')
+    titleRow.appendChild(el('div', C.title,
+      esc(it.name || it.id) + ' <span style="font-weight:400;color:var(--muted,#687984)">v' +
+      esc(it.version || '?') + '</span>'))
+    titleRow.appendChild(it.verified
+      ? badge('可信作者', SEMANTIC.ok, '作者在可信清单里（数据/插件市场-远程.json 的 verified_authors）')
+      : badge('未审核', SEMANTIC.warn, '作者不在可信清单里——安装前请自己确认仓库来源可信'))
+    card.appendChild(titleRow)
+
+    if (it.description) card.appendChild(el('div', C.desc, esc(String(it.description).slice(0, 120))))
+    var meta = el('div', C.desc,
+      '作者 ' + esc(it.author || '?') +
+      (it.stars ? ' · ★ ' + esc(it.stars) : '') +
+      (it.source === 'registry' ? ' · 精选' : '') +
+      '<br><span style="opacity:.75">repo: ' + esc(it.repo || '') + '</span>')
+    card.appendChild(meta)
+
+    var row = el('div', 'display:flex;gap:8px;margin-top:auto;')
+    var bPreview = el('button', C.btn, '预览')
+    bPreview.type = 'button'
+    bPreview.addEventListener('click', function () { doRemotePreview(wrap, bPreview, it) })
+    var bInstall = el('button', C.btnPrimary, '安装')
+    bInstall.type = 'button'
+    bInstall.addEventListener('click', function () { confirmAndInstall(wrap, bInstall, it, false) })
+    row.appendChild(bPreview)
+    row.appendChild(bInstall)
+    card.appendChild(row)
+
+    var detail = el('div', '')
+    detail.setAttribute('data-mio-market-remotedetail', it.repo)
+    detail.style.cssText = 'display:none;'
+    card.appendChild(detail)
+    return card
+  }
+
+  function doRemotePreview(wrap, btn, it) {
+    var detail = $q('[data-mio-market-remotedetail="' + it.repo + '"]', wrap)
+    if (!detail) return
+    var done = busy(btn, '拉取中…')
+    callApi('POST', API + '/remote/preview', { repo: it.repo, ref: it.ref })
+      .then(function (j) {
+        detail.innerHTML = ''
+        detail.style.display = 'block'
+        var mb = ((j.total_bytes || 0) / 1048576).toFixed(1)
+        var nBack = 0
+        for (var fi = 0; fi < (j.files || []).length; fi++) {
+          if (j.files[fi].area === 'backend') nBack++
+        }
+        var lines = '将写入 ' + (j.files ? j.files.length : 0) + ' 个文件，共 ' + mb + ' MB。' +
+          '版本 v' + esc(j.manifest && j.manifest.version || '?') +
+          '，作者 ' + esc(j.owner || '?') +
+          (j.verified ? '（可信）' : '（未审核，请确认来源）')
+        detail.appendChild(el('div', C.desc + 'margin:8px 0 6px;', esc(lines)))
+        if (j.backend && j.backend.provides && j.backend.provides.length) {
+          detail.appendChild(el('div', C.desc + 'margin:0 0 6px;',
+            esc('⚠ 含后端 Python 模块 ' + nBack + ' 个文件（装进隔离区 plugins_host/，' +
+                '提供：' + j.backend.provides.join('、') + '），重启后端后生效。')))
+        }
+        // 文件清单折叠展示（前 12 条 + 溢出提示）
+        var ul = el('div', C.desc + 'max-height:130px;overflow:auto;border:1px solid var(--line,#d9e2e6);' +
+          'border-radius:8px;padding:6px 8px;background:var(--surface,#fff);')
+        var files = j.files || []
+        for (var i = 0; i < files.length && i < 12; i++) {
+          ul.appendChild(el('div', '', esc(files[i].dest)))
+        }
+        if (files.length > 12) ul.appendChild(el('div', '', '…以及另外 ' + (files.length - 12) + ' 个文件'))
+        detail.appendChild(ul)
+      })
+      .catch(function (e) {
+        detail.innerHTML = ''
+        detail.style.display = 'block'
+        detail.appendChild(el('div', C.desc, '预览失败：' + esc((e && e.message) || e)))
+      })
+      .then(function () { done() })
+  }
+
+  function confirmAndInstall(wrap, btn, it, force) {
+    var name = String(it.name || it.id || it.repo)
+    var tip = force
+      ? '覆盖安装「' + name + '」？\n\n将用仓库最新版覆盖本地同名插件文件，并更新清单条目。'
+      : (it.verified
+        ? '安装「' + name + '」（来自 ' + it.repo + '）？'
+        : '「' + name + '」的作者不在可信清单里（未审核）。\n\n' +
+          '安装 = 把该仓库的脚本注入桌宠运行。请确认你信任仓库 ' + it.repo + ' 的作者。')
+    if (!window.confirm(tip)) return
+    var done = busy(btn, '安装中…')
+    callApi('POST', API + '/remote/install', { repo: it.repo, ref: it.ref, force: !!force })
+      .then(function (j) {
+        // 装完走既有链路：后端重读盘 → 前端重注入 → 面板数据刷新
+        return callApi('POST', API + '/reload', {}).then(function () { return j })
+      })
+      .then(function (j) {
+        return rescanFrontend().then(function () { return j })
+      })
+      .then(function (j) {
+        var p = j && j.plugin
+        var msg = '已安装 ' + ((p && p.agentId) || it.id) +
+          ' v' + ((p && p.version) || '?') + '。插件已登记进清单并重新注入。'
+        if (j && j.needs_restart) {
+          msg += '\n⚠ 该插件含后端 Python 模块（已装进隔离区），需重启后端才能生效。'
+        }
+        setMsg(wrap, msg, 'ok')
+        return refreshData(wrap.parentNode || document.body).catch(function () { /* 面板刷新失败不影响安装结果 */ })
+      })
+      .then(function () { done() }, function (e) {
+        if (e && e.status === 409 && !force) {
+          // 已有同名插件 → 问一次是否覆盖（升级语义），用户同意后带 force 重来
+          done()
+          confirmAndInstall(wrap, btn, it, true)
+          return
+        }
+        setMsg(wrap, '安装失败：' + ((e && e.message) || e), 'danger')
+        done()
+      })
   }
 
   // ── 诊断区 ────────────────────────────────────────────────────────────────

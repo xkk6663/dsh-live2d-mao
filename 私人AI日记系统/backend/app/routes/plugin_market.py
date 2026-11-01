@@ -29,6 +29,7 @@ from fastapi import APIRouter, Body, Response
 from fastapi.responses import JSONResponse
 
 from ..kernel import plugin_market_service
+from ..kernel import plugin_source_service
 
 logger = logging.getLogger(__name__)
 
@@ -188,3 +189,55 @@ async def market_diagnostics() -> dict[str, Any]:
         # 但把 ok 置 False 并带上原因，比 500 更有助于排障。
         logger.exception("插件市场诊断失败")
         return {"ok": False, "checks": [], "error": str(exc)}
+
+
+# ---------------------------------------------------------------------------
+# 远程插件源（契约 §8：GitHub 托管社区插件的搜索 / 预览 / 安装）
+# 实现：app/kernel/plugin_source_service.py（三层设计：包规范 → 索引 → 安装引擎）
+# 注意：这些端点会真的访问 GitHub。search/preview 是只读的；
+#       install 落盘文件 + 写清单（走既有 LocalControlMiddleware 锁，与其他写端点同权）。
+# ---------------------------------------------------------------------------
+def _source_error(exc: plugin_source_service.RemoteSourceError) -> JSONResponse:
+    return JSONResponse(status_code=exc.status, content={"detail": str(exc)})
+
+
+@router.get("/remote/search")
+async def market_remote_search(q: str = "", force: bool = False) -> Response:
+    """搜索 GitHub 托管的社区插件（topic 自动发现 + 精选清单，带本地缓存）。
+
+    ``force=true`` 无视缓存回 GitHub 重拉（配额 60 次/小时，面板按钮别狂点）。
+    """
+    try:
+        return await asyncio.to_thread(plugin_source_service.search, q=q, force=force)
+    except plugin_source_service.RemoteSourceError as exc:
+        return _source_error(exc)
+
+
+@router.post("/remote/preview")
+async def market_remote_preview(payload: dict[str, Any] = Body(...)) -> Response:
+    """安装前预览：返回将落盘的文件清单/体积/来源作者/审核状态。零副作用。"""
+    try:
+        result = await asyncio.to_thread(
+            plugin_source_service.preview,
+            str(payload.get("repo") or ""), payload.get("ref"))
+    except plugin_source_service.RemoteSourceError as exc:
+        return _source_error(exc)
+    return JSONResponse(content=result)
+
+
+@router.post("/remote/install")
+async def market_remote_install(payload: dict[str, Any] = Body(...)) -> Response:
+    """远程安装：下载 zipball → 校验 → 白名单落盘（只进 dist/）→ 登记上架。
+
+    - ``force=true`` 覆盖安装（升级语义：先摘旧清单条目再登记）；
+    - 阶段 A 不支持 backend 字段的插件包（校验直接拒绝，见 source 服务）；
+    - 装完前端须调 ``POST /reload`` + loader 重扫——面板已有这条链路。
+    """
+    try:
+        result = await asyncio.to_thread(
+            plugin_source_service.install,
+            str(payload.get("repo") or ""), payload.get("ref"),
+            force=bool(payload.get("force")))
+    except plugin_source_service.RemoteSourceError as exc:
+        return _source_error(exc)
+    return JSONResponse(content=result)
