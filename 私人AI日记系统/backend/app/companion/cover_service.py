@@ -891,6 +891,24 @@ def _has_sung_today_in_db(today: str) -> bool:
 
 
 def _run_daily_cover() -> None:
+    """每日翻唱入口：占用单飞开关 + 暴露进度快照，再交给 impl 干活。
+
+    2026-10-30 实战教训：busy 以前只在聊天点歌路径（start_cover_task）置位，
+    每日翻唱跑 10 分钟期间 /cover/status 一直 busy:false → 前端进度条全程不亮，
+    过程气泡又是瞬态的，用户看到"她要翻唱"闪一下后打开对话页啥也没有，
+    以为消息丢了。现在每日翻唱与点歌共用同一条 busy + 进度通路。
+    """
+    global _cover_busy
+    _cover_busy = True
+    _status_update(title="每日翻唱", stage="挑歌", started_at=time.time(), stage_at=time.time())
+    try:
+        _run_daily_cover_impl()
+    finally:
+        _cover_busy = False
+        _status_clear()
+
+
+def _run_daily_cover_impl() -> None:
     """挑一首云盘歌 → 下载 → 走翻唱管线 → 推送。worker 线程调用。
 
     ★ 开工前最后一道闸：哪怕 state/手动触发路径漏了，只要今天已经推送过
@@ -961,6 +979,7 @@ def _run_daily_cover() -> None:
             blob = cache.read_bytes()
         else:
             _publish_bubble(f"今天去云盘挑了《{display}》，先把伴奏下下来练一练…")
+            _status_update(stage=f"下载《{display}》伴奏", stage_at=time.time())
             blob = _download_remote_song(pick)
             try:
                 cache.write_bytes(blob)

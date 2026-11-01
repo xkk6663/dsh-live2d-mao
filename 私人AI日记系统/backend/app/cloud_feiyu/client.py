@@ -777,6 +777,22 @@ class CloudFeiyuClient:
                     att.error = "云端返回空文件"
                     return att
 
+                # ★★ 2026-10-29 防呆：云端偶尔用 **HTTP 200 包 JSON 错误体**
+                #   （实测 {"status":"error","message":"File access error"}，文件不在
+                #   data/attachments/ 时）。旧代码看到 200 就把字节收下，
+                #   48 字节的错误 JSON 被存成 .jpg → 前端裂图还看不出来。
+                #   现在识别"响应体是 JSON 且 status=error"→ 判为下载失败。
+                #   注意不能一刀切拒 JSON：relay/crosssend 清单本身就是合法 JSON 附件。
+                if raw.lstrip()[:1] in (b"{", b"["):
+                    try:
+                        probe = json.loads(raw.decode("utf-8", "replace"))
+                        if isinstance(probe, dict) and str(probe.get("status", "")).lower() == "error":
+                            att.error = f"云端拒绝: {probe.get('message') or '未知错误'}"
+                            att.size = len(raw)
+                            return att
+                    except Exception:
+                        pass  # 不是 JSON 或解析失败 → 按普通字节继续
+
                 # ★★ 2026-10-24：先按数据头认出**真实类型**，再决定上限和 MIME。
                 #   错位场景下占位符写 record、字节却是 1.6MB 的 GIF；
                 #   旧代码按占位符 kind 选上限，会把大表情图当"音频"放过 MAX_IMAGE_BYTES 检查。

@@ -80,7 +80,9 @@ async def _deliver_entry(entry: dict) -> None:
     from ..routes.companion import (
         FEIYU_AGENT_ID,
         FEIYU_BUBBLE_ACCENT,
+        _desktop_pet_conversation_id,
         _save_agent_media,
+        db,
     )
     from . import get_client as get_feiyu_client
 
@@ -163,6 +165,46 @@ async def _deliver_entry(entry: dict) -> None:
             "duration_ms": 6000,
         })
     logger.info("[crosssend] 投递完成 %s: %d 成功 / %d 失败", entry_id, len(saved_items), len(failed))
+
+    # ★★ 2026-10-29 修「桌宠气泡看得到图、聊天页看不到」：
+    #   投递此前**只走 WS 广播**，一次性的 —— 聊天页那一瞬间不在线（没开/刚刷新/
+    #   断线重连中）就永远错过，而 cloud_feiyu 直通分支又不写本地消息表，
+    #   历史（/chat/history）里也没有 → 聊天页怎么刷都补不回来。
+    #   现在投递成功就写一条 assistant 消息进 desktop_pet 会话：
+    #   · 聊天页不在线 → 下次轮询 loadHistory 从历史补到；
+    #   · 聊天页在线（WS 已建 text=note 的附件消息）→ 前端 appendHistoryRows 按
+    #     内容指纹（同文本+10min 窗口）合并进同一条，附件按 url 去重，不会出双份。
+    try:
+        import json as _json
+
+        attachments_payload = [
+            {
+                "media": media_kind,
+                "kind": media_kind,
+                "url": meta.get("url") or "",
+                "display": meta.get("display") or meta.get("filename") or "",
+                "filename": meta.get("filename") or "",
+                "mime_type": meta.get("mime_type") or "",
+                "size": meta.get("size") or 0,
+            }
+            for media_kind, meta in saved_items
+        ]
+        has_files_in_entry = bool(files)
+        # 成功投了附件 → 落库；清单条目只有文字没有附件 → 也落（此前文字传输是黑洞）
+        if saved_items or (not has_files_in_entry and note):
+            db.save_message(
+                "assistant",
+                note,
+                source="desktop_pet",
+                conversation_id=_desktop_pet_conversation_id(),
+                request_id=f"crosssend-{entry_id}",
+                model_id="cloud_feiyu",
+                provider_model="crosssend",
+                reasoning_level="off",
+                attachments_json=_json.dumps(attachments_payload, ensure_ascii=False),
+            )
+    except Exception:
+        logger.exception("[crosssend] 投递历史落库失败：%s", entry_id)
 
 
 async def transfer_poll_loop() -> None:

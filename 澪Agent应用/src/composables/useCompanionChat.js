@@ -465,7 +465,7 @@ export function useCompanionChat(deps) {
    *   （2026-10-22 曾误按 response_id 放宽，误解了需求 —— 用户要的是"云端表情库能重复选同一张"，
    *     不是"对话里要能连发同一张图"，已改回按 url。）
    */
-  function attachToCurrentReply(item) {
+  function attachToCurrentReply(item, noteText = '') {
     if (!item) return
 
     // ★★★ 2026-10-22 最终修「同一张表情复制成 3 份」（用户截图：2x2 网格里同一个 emoji 三张）。
@@ -508,7 +508,8 @@ export function useCompanionChat(deps) {
     setMessages([...list, {
       id: newId,
       role: 'assistant',
-      text: '',
+      // ★ 2026-10-29：crosssend 随帧的说明文字落在消息上（与后端历史行指纹合并）
+      text: String(noteText || ''),
       images: [],
       attachments: [item],
       ts: Date.now(),
@@ -611,7 +612,10 @@ export function useCompanionChat(deps) {
           responseId: String(payload.response_id || ''),
         }], [])[0]
         if (!item) return
-        attachToCurrentReply(item)
+        // ★ 2026-10-29：随帧携带的说明文字（跨设备传输 crosssend 的 note）要落进
+        //   本地消息 —— 后端投递时会写一条同文本的历史行，前端按内容指纹合并成
+        //   一条；这里 text 为空的话两边对不上，会出"图一条、图+字一条"两份。
+        attachToCurrentReply(item, String(payload.text || payload.note || ''))
         return
       }
       if (message?.type !== 'agent_stream') return
