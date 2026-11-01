@@ -86,6 +86,11 @@ class Sandbox:
         (self.frontend / "plugins" / "alpha" / "manifest.js").write_text("// a\n", encoding="utf-8")
         (self.frontend / "plugins" / "alpha" / "alpha-panel.js").write_text("// ap\n", encoding="utf-8")
         (self.frontend / "plugins" / "beta" / "manifest.js").write_text("// b\n", encoding="utf-8")
+        # ★ 2026-11-01 v1.4.0 拆分：沙箱默认带 feiyu manifest（模拟本机装有
+        #   mao-plugin-feiyu 本地副本），条件出厂用例自己控制它的在位/缺席。
+        (self.frontend / "plugins" / "feiyu").mkdir(parents=True, exist_ok=True)
+        (self.frontend / "plugins" / "feiyu" / "manifest.js").write_text("// f\n", encoding="utf-8")
+        (self.frontend / "plugins" / "feiyu" / "feiyu-panel.js").write_text("// fp\n", encoding="utf-8")
         self.data_dir.mkdir(parents=True, exist_ok=True)
         object.__setattr__(settings, "data_dir", self.data_dir)
         object.__setattr__(settings, "agent_frontend_dir", self.frontend)
@@ -259,6 +264,11 @@ def test_defaults_match_manifests() -> None:
     by_dir = {p["entry"].split("/")[1]: p for p in plugins}
     for agent_id in ("dsh", "feiyu", "pet", "market"):
         manifest = real_root / "plugins" / agent_id / "manifest.js"
+        if agent_id == "feiyu" and not manifest.is_file():
+            # ★ 2026-11-01 v1.4.0 拆分：大肥鱼随 mao-plugin-feiyu 分发，
+            #   新 clone 的 dist 里没有 feiyu/ → 跳过比对（本机装了则照常比对）。
+            print(f"      {agent_id}: manifest 不在位（随 mao-plugin-feiyu 分发），跳过比对")
+            continue
         check(f"{agent_id}: manifest.js 存在", manifest.is_file(), str(manifest))
         if not manifest.is_file():
             continue
@@ -296,6 +306,42 @@ def test_defaults_match_manifests() -> None:
             check(f"{p['agentId']}: 预期已注册进总线（导入即注册的身份应在此）",
                   p["agentId"] in {"dsh", "cloud_feiyu"},
                   f"已注册={sorted(registered)}")
+
+
+def test_feiyu_conditional_default() -> None:
+    """★ 2026-11-01 v1.4.0 拆分：大肥鱼条目"manifest 在位才出厂"。
+
+    大肥鱼随 mao-plugin-feiyu 分发；dist/plugins/feiyu/ 缺席时（新 clone），
+    默认清单不允许出现 cloud_feiyu 幽灵条目。
+    """
+    print("\n[2.5] 大肥鱼条目：manifest 在位才出厂")
+
+    def _ids() -> list[str]:
+        plugins = svc.plugin_market.load().get("plugins") or []
+        return sorted(p.get("agentId") for p in plugins)
+
+    def _reset_defaults() -> None:
+        svc.catalog_path().unlink(missing_ok=True)
+        svc.plugin_market.reload()
+
+    feiyu_dir = Path(settings.agent_frontend_dir) / "plugins" / "feiyu"
+
+    # 前置：Sandbox.__enter__ 已放好 feiyu manifest → 应出厂
+    check("有 feiyu manifest → 默认清单含 cloud_feiyu",
+          "cloud_feiyu" in _ids(), True)
+
+    # 撤掉 manifest → 不出厂
+    shutil.rmtree(feiyu_dir, ignore_errors=True)
+    _reset_defaults()
+    check_eq("无 feiyu manifest → 默认清单不含 cloud_feiyu",
+             _ids(), ["dsh", "market", "pet"])
+
+    # 还原 manifest → 重新出厂
+    feiyu_dir.mkdir(parents=True, exist_ok=True)
+    (feiyu_dir / "manifest.js").write_text("// feiyu\n", encoding="utf-8")
+    (feiyu_dir / "feiyu-panel.js").write_text("// feiyu panel\n", encoding="utf-8")
+    _reset_defaults()
+    check("还原 manifest → cloud_feiyu 重新出厂", "cloud_feiyu" in _ids(), True)
 
 
 # ---------------------------------------------------------------------------
@@ -921,6 +967,8 @@ def main() -> int:
         test_path_safety()
         test_symlink_escape()
         test_defaults_match_manifests()
+        test_feiyu_conditional_default()
+        sandbox.reset()
 
         test_add_remove()
         sandbox.reset()

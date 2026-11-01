@@ -475,6 +475,15 @@ class PluginMarket:
         now = _now_iso()
         plugins: list[dict[str, Any]] = []
         for spec in DEFAULT_PLUGINS:
+            # ★ 2026-11-01 v1.4.0 拆分：大肥鱼（cloud_feiyu）条目仅在其 manifest
+            #   在位时出厂 —— 插件随 mao-plugin-feiyu 分发，新 clone 不产生幽灵条目。
+            #   dsh / pet / market 是第一方内置件，保持无条件出厂。
+            if str(spec.get("agentId")) == "cloud_feiyu":
+                try:
+                    if not (frontend_root() / str(spec.get("entry", ""))).exists():
+                        continue
+                except Exception:  # noqa: BLE001 - 探测失败按"在位"处理，保持原行为
+                    pass
             entry = dict(spec)
             entry.setdefault("version", "1.0.0")
             entry.setdefault("author", "Mio")

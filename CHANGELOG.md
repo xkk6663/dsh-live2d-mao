@@ -5,6 +5,39 @@
 
 ---
 
+## v1.4.0（2026-11-01）· **大肥鱼拆分：仓库纯净化（只留桌宠端 + DSH 插件）**
+
+大肥鱼（cloud_feiyu / FeiyuChatPage / 翻唱 / da-feiyu 模型）整体迁往独立仓库
+**[mao-plugin-feiyu](https://github.com/xkk6663/mao-plugin-feiyu)**（v1.1.0 收编全部源码与文档），
+本仓库自此只有桌宠端 + DSH 插件。**本机工作区保留不入库的本地运行副本**（.gitignore），
+本地桌宠的大肥鱼功能不受影响；新 clone 未装插件时后端全链路优雅降级。
+
+### 移出清单（git rm --cached，共 49 文件）
+
+- 后端：`app/cloud_feiyu/**`（7 模块）、`app/companion/cover_service.py`（翻唱）、`test_feiyu_client.py`、`tools/diag/feiyu_vision_e2e.py`
+- 前端：`FeiyuChatPage.vue` / `FeiyuRelayPanel.vue` / `CompanionPage.vue`、`useCompanion*.js`、`companionChatApi.js`、`companion.css` / `feiyu-chat.css`、对应 dist 编译产物、`dist/plugins/feiyu/**`、`models/da-feiyu/**`（33MB）、`quotes/da-feiyu.json`
+- 文档随插件仓库分发；市场 fixture `plugin_feiyu.json` 同步移出
+
+### 主体适配（全部可选降级，装了插件行为不变）
+
+| 位置 | 降级行为（未装插件时） |
+|---|---|
+| `main.py` | transfer_receiver / cover_service 空安全；MCP 路由跳过；上下线通知静默返回 |
+| `routes/companion.py` | 通用文本清洗归主体新模块 `app/chat/text_cleaning.py`（/chat/history 不再依赖插件）；feiyu 客户端获取统一 503；翻唱服务占位对象 503 |
+| `routes/relay.py` | relay_service 占位对象，端点统一"未安装"降级 |
+| `model_registry.py` | 大肥鱼虚拟模型仅在插件在位时注册（新 clone 无死条目） |
+| `kernel/plugin_market_service.py` | 出厂清单的 cloud_feiyu 条目改为 **manifest 在位才出厂**（第一方 dsh/pet/market 不受影响） |
+| `screen_observation_service.py` | 观察链路 feiyu 导入包护，未安装报明确 RuntimeError |
+
+### 验证
+
+- 后端：`dsh_adapter_selftest` 201/201、`ingest_selftest` 63/63、`plugin_market_selftest` 191/191（新增 feiyu 条件出厂用例）
+- 插件：`npm run test:fast` 223/223；前端 `npm run guard` 全通过
+- 本地保活验证：feiyu 在位时 `app.main` 正常启动（240 路由），模型/客户端/翻唱全部走真实现
+- `tests/e2e_stream_pet.cjs` 本轮 8 项"渲染端未能在纯 Chrome 中完成初始化"——渲染端文件与 v1.3.0 磁盘一致，判定为环境问题（非本版回归），后续单独排查
+
+---
+
 ## v1.3.0（2026-11-01）· **翻唱进度可视化 + 跨设备传输落库 + 云端错误体防呆**
 
 ### 新增能力

@@ -16,7 +16,14 @@ from . import (
     runtime_diagnostics,
     subservice_health,
 )
-from .companion import companion_service, cover_service, pet_event_service
+from .companion import companion_service, pet_event_service
+# ★ 2026-11-01 v1.4.0 拆分：cover_service（翻唱）随大肥鱼插件分发（独立仓库
+#   mao-plugin-feiyu）。本仓库工作区保留不入库的本地运行副本（.gitignore）；
+#   未安装（新 clone）时降级为 None，翻唱任务不注册、相关端点由调用方兜 503。
+try:
+    from .companion import cover_service
+except ImportError:
+    cover_service = None
 from .creation import creation_service
 from .screen import screen_observation_service
 from .kernel import agent_bus_service, agent_task_service
@@ -54,7 +61,12 @@ logger = logging.getLogger(__name__)
 
 
 # 后台任务：仅保留桌宠/小智链路所需（原版 QQ/日记/备份/周月报/费用对账等任务已随功能阉割移除）
-from .cloud_feiyu import transfer_receiver
+# ★ 2026-11-01 v1.4.0 拆分：cloud_feiyu 模块随大肥鱼插件分发（mao-plugin-feiyu），
+#   未安装时 transfer_receiver = None，跨设备传输轮询不注册。
+try:
+    from .cloud_feiyu import transfer_receiver
+except ImportError:
+    transfer_receiver = None
 
 BACKGROUND_TASK_FACTORIES = {
     "runtime_diagnostics_task": runtime_diagnostics.monitor_loop,
@@ -69,14 +81,18 @@ BACKGROUND_TASK_FACTORIES = {
     # "screen_observation_task": screen_observation_service.observation_loop,
     "pet_event_task": pet_event_service.event_loop,
     "agent_bus_task": agent_bus_service.heartbeat_loop,
-    # 跨平台传输收件箱轮询（2026-10-26，配套云端插件 astrbot_plugin_crosssend）
-    "crosssend_transfer_task": transfer_receiver.transfer_poll_loop,
-    # 每日自动翻唱（2026-10-27：桌宠上线 30 分钟后从云端 alist《音乐》夹挑一首，
-    # 本地 WSL RVC 换声后经 agent_audio 推回对话界面，全程不消耗 token）
-    "daily_cover_task": cover_service.daily_cover_loop,
     "dsh_adapter_task": dsh_adapter.dsh_adapter_loop,
     # DSH 专用化：octop_adapter_task 已移除（Octop 插件整体阉割）
 }
+
+# ★ 2026-11-01 v1.4.0 拆分：大肥鱼专属任务按插件在位情况注册（mao-plugin-feiyu）
+if cover_service is not None:
+    # 每日自动翻唱（2026-10-27：桌宠上线 30 分钟后从云端 alist《音乐》夹挑一首，
+    # 本地 WSL RVC 换声后经 agent_audio 推回对话界面，全程不消耗 token）
+    BACKGROUND_TASK_FACTORIES["daily_cover_task"] = cover_service.daily_cover_loop
+if transfer_receiver is not None:
+    # 跨平台传输收件箱轮询（2026-10-26，配套云端插件 astrbot_plugin_crosssend）
+    BACKGROUND_TASK_FACTORIES["crosssend_transfer_task"] = transfer_receiver.transfer_poll_loop
 
 
 def initialize_runtime() -> None:
@@ -293,13 +309,19 @@ def create_app() -> FastAPI:
     # 每个插件包对外只暴露自己的前缀，互不 import。
     app.include_router(dsh_plugin_routes.router)
     app.include_router(plugin_market_routes.router)
-    # 云端大肥鱼 MCP 工具端点
-    from .cloud_feiyu.mcp_routes import router as feiyu_mcp_router
-    app.include_router(feiyu_mcp_router)
+    # 云端大肥鱼 MCP 工具端点（★ v1.4.0 拆分：未安装 mao-plugin-feiyu 时跳过）
+    try:
+        from .cloud_feiyu.mcp_routes import router as feiyu_mcp_router
+        app.include_router(feiyu_mcp_router)
+    except ImportError:
+        logger.info("大肥鱼插件未安装（mao-plugin-feiyu），跳过 MCP 工具端点")
 
     # 启动时上报桌宠设备在线
     async def _notify_feiyu_online():
-        from .cloud_feiyu import get_client, notify_device_online
+        try:
+            from .cloud_feiyu import get_client, notify_device_online
+        except ImportError:  # 大肥鱼插件未安装
+            return
         client = get_client()
         if client.is_configured:
             await notify_device_online(client, "mao-pet")

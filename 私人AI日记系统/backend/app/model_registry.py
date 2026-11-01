@@ -632,6 +632,14 @@ def list_model_profiles() -> list[ModelProfile]:
     known_ids = {profile.id for profile in profiles}
     profiles.extend(profile for profile in _custom_profiles() if profile.id not in known_ids)
     # 追加云端大肥鱼（AstrBot persona 333）虚拟模型
+    # ★ 2026-11-01 v1.4.0 拆分：仅当大肥鱼插件在位（mao-plugin-feiyu 本地运行副本）
+    #   才注册；新 clone 未装插件时模型列表不再出现"大肥鱼（云端）"死条目。
+    try:
+        from .cloud_feiyu import get_client as _feiyu_probe  # noqa: F401
+
+        _feiyu_installed = True
+    except ImportError:
+        _feiyu_installed = False
     feiyu_profile = ModelProfile(
         id="cloud_feiyu",
         provider_id="astrbot",
@@ -652,7 +660,7 @@ def list_model_profiles() -> list[ModelProfile]:
         base_urls=[],
         api_key="",
     )
-    if "cloud_feiyu" not in known_ids:
+    if _feiyu_installed and "cloud_feiyu" not in known_ids:
         profiles.append(feiyu_profile)
     return profiles
 

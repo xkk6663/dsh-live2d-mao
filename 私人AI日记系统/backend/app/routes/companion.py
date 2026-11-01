@@ -26,7 +26,23 @@ from .. import (
     db,
 )
 from ..screen import local_vision_service, route_observation_service, screen_observation_service, system_audio_service, window_topology_service
-from ..companion import audio_diag, call_session_service, companion_service, cover_service, pet_event_service
+from ..companion import audio_diag, call_session_service, companion_service, pet_event_service
+# ★ 2026-11-01 v1.4.0 拆分：cover_service（翻唱）随大肥鱼插件分发（mao-plugin-feiyu）。
+#   未安装时用占位对象，任何翻唱调用统一 503；本机装了（本地运行副本在位）则行为不变。
+try:
+    from ..companion import cover_service
+except ImportError:
+
+    class _CoverServiceUnavailable:
+        """大肥鱼插件未安装占位：属性访问返回"一律 503"的函数。"""
+
+        def __getattr__(self, name):
+            def _unavailable(*args, **kwargs):
+                raise HTTPException(status_code=503, detail="大肥鱼插件未安装（翻唱服务随 mao-plugin-feiyu 分发）")
+
+            return _unavailable
+
+    cover_service = _CoverServiceUnavailable()
 from ..kernel import agent_bus_service
 from ..agents.dsh import dsh_adapter
 from ..auto_router import AutoRoute, build_task_profile, select_auto_route
@@ -40,9 +56,28 @@ from ..chat.chat_idempotency import (
 from ..kernel.agent_loop_service import abandon_deferred_final_response
 from ..chat.chat_service import chat_with_ai, persist_generated_chat_result
 from ..chat.conversation_runtime import ChatRunCancelledError, chat_run_coordinator
-from ..cloud_feiyu import get_client as get_feiyu_client
-from ..cloud_feiyu.client import attachment_media_kind, strip_device_prefix, strip_tool_payload
-from ..cloud_feiyu.device import build_device_context, is_plugin_command
+# ★ 2026-11-01 v1.4.0 拆分：通用文本清洗归主体（app/chat/text_cleaning.py），
+#   /chat/history 等桌宠核心链路不依赖大肥鱼插件是否安装。
+from ..chat.text_cleaning import strip_device_prefix, strip_tool_payload
+# 大肥鱼后端（mao-plugin-feiyu）：未安装时降级 —— 客户端获取统一 503，
+# 附件分类/设备上下文等仅在大肥鱼分支内使用，给无害 stub 即可。
+try:
+    from ..cloud_feiyu import get_client as get_feiyu_client
+    from ..cloud_feiyu.client import attachment_media_kind
+    from ..cloud_feiyu.device import build_device_context, is_plugin_command
+except ImportError:
+
+    def get_feiyu_client():
+        raise HTTPException(status_code=503, detail="大肥鱼插件未安装（mao-plugin-feiyu）")
+
+    def attachment_media_kind(kind, mime_type="", filename=""):
+        return kind
+
+    def build_device_context(*args, **kwargs):
+        return ""
+
+    def is_plugin_command(*args, **kwargs):
+        return False
 from ..config import settings
 from ..llm import ModelRequestError, resolve_model_id
 from ..image_service import image_attachment_from_data_url

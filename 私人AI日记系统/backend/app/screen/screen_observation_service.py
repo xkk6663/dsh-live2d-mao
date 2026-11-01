@@ -362,8 +362,11 @@ async def _feiyu_vision_call(
       · 观察链路也不需要云端回传的图片/语音字节，所以用 `chat_text_diagnosed()`：
         只取正文，但把帧级诊断带出来（本次是 plain 还是 complete 回的、云端 stats 是什么）。
     """
-    from ..cloud_feiyu import get_client as get_feiyu_client
-    from ..cloud_feiyu.device import build_device_context
+    try:
+        from ..cloud_feiyu import get_client as get_feiyu_client
+        from ..cloud_feiyu.device import build_device_context
+    except ImportError:  # ★ v1.4.0 拆分：大肥鱼插件未安装（mao-plugin-feiyu）
+        raise RuntimeError("大肥鱼插件未安装（mao-plugin-feiyu）")
 
     client = get_feiyu_client()
     reason = _feiyu_unavailable_reason()

@@ -13,7 +13,20 @@ import logging
 from fastapi import APIRouter, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 
-from ..cloud_feiyu import relay_service
+# ★ 2026-11-01 v1.4.0 拆分：relay_service 随大肥鱼插件分发（mao-plugin-feiyu）。
+#   未安装时占位对象让各端点统一走"未安装"降级（本机装了则行为不变）。
+try:
+    from ..cloud_feiyu import relay_service
+except ImportError:
+
+    class _RelayServiceUnavailable:
+        def __getattr__(self, name):
+            def _unavailable(*args, **kwargs):
+                raise RuntimeError("大肥鱼插件未安装（mao-plugin-feiyu）")
+
+            return _unavailable
+
+    relay_service = _RelayServiceUnavailable()
 
 logger = logging.getLogger("routes.relay")
 
@@ -80,8 +93,10 @@ async def relay_media(filename: str):
     """面板 <img>/<audio> 直接引这个 URL 拿中继附件字节。"""
     if not filename or "/" in filename or "\\" in filename or ".." in filename:
         raise HTTPException(status_code=400, detail="文件名无效。")
-    from ..cloud_feiyu import get_client as get_feiyu_client
-
+    try:
+        from ..cloud_feiyu import get_client as get_feiyu_client
+    except ImportError:
+        raise HTTPException(status_code=503, detail="大肥鱼插件未安装（mao-plugin-feiyu）。")
     client = get_feiyu_client()
     if not client.is_configured:
         raise HTTPException(status_code=503, detail="云端大肥鱼未配置。")

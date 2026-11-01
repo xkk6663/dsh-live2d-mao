@@ -245,3 +245,30 @@ _probe*.py
 
 # --- 会话临时产物（不入库） ---
 /hist_tmp.json
+
+# ============================================================================
+# --- 大肥鱼插件（2026-11-01 v1.4.0 拆分，用户裁决）---
+# 大肥鱼（cloud_feiyu / FeiyuChatPage / 翻唱 / da-feiyu 模型）随独立仓库
+# mao-plugin-feiyu（github.com/xkk6663/mao-plugin-feiyu）分发，本仓库
+# 只保留桌宠端 + DSH 插件。**本机工作区保留不入库的本地运行副本**，
+# 本地桌宠功能不受影响；新 clone 未装插件时后端全部优雅降级（503 / 跳过注册）。
+# ============================================================================
+私人AI日记系统/backend/app/cloud_feiyu/
+私人AI日记系统/backend/app/companion/cover_service.py
+私人AI日记系统/backend/test_feiyu_client.py
+私人AI日记系统/backend/tools/diag/feiyu_vision_e2e.py
+澪Agent应用/src/components/CompanionPage.vue
+澪Agent应用/src/components/FeiyuChatPage.vue
+澪Agent应用/src/components/FeiyuRelayPanel.vue
+澪Agent应用/src/composables/useCompanion.js
+澪Agent应用/src/composables/useCompanionChat.js
+澪Agent应用/src/services/companionChatApi.js
+澪Agent应用/src/styles/companion.css
+澪Agent应用/src/styles/feiyu-chat.css
+澪Agent应用/src/useCompanionChat*.test.js
+澪Agent应用/dist/assets/*Feiyu*
+澪Agent应用/dist/assets/*Companion*
+澪Agent应用/dist/plugins/feiyu/
+澪Agent应用/dist/live2d-pet/models/da-feiyu/
+澪Agent应用/dist/live2d-pet/quotes/da-feiyu.json
+澪Agent应用/tests/market/_market_fixtures/plugin_feiyu.json
