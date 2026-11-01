@@ -593,3 +593,90 @@ def install(repo: str, ref: str | None = None, *, force: bool = False) -> dict[s
             "total_bytes": sum(p["bytes"] for p in plan), "repo": repo, "ref": ref,
             "needs_restart": bool(be),
             "backend": ({"provides": list(be.get("provides") or [])} if be else None)}
+
+
+# ---------------------------------------------------------------------------
+# 检查更新（阶段 C，契约 §8.7）：origin 字段 + 远端清单版本比对
+# ---------------------------------------------------------------------------
+def compare_versions(a: str, b: str) -> int:
+    """语义化版本比较（纯函数，selftest 直接覆盖）。
+
+    剥 ``v`` 前缀 → 按 ``.`` 分段逐段比：数字段按数值、非数字段按字符串；
+    段数不齐短侧补零（``1.2`` < ``1.2.0``）。返回 -1 / 0 / 1。
+    """
+    def segs(v: str) -> list[tuple[int, Any]]:
+        parts: list[tuple[int, Any]] = []
+        for raw in str(v or "").strip().lstrip("vV").split("."):
+            digits = ""
+            for ch in raw:
+                if ch.isdigit():
+                    digits += ch
+                else:
+                    break
+            rest = raw[len(digits):]
+            parts.append((1, int(digits), rest) if digits else (0, rest, ""))
+        return parts
+
+    sa, sb = segs(a), segs(b)
+    n = max(len(sa), len(sb))
+    pad = (0, "", "")
+    sa += [pad] * (n - len(sa))
+    sb += [pad] * (n - len(sb))
+    for x, y in zip(sa, sb):
+        if x != y:
+            return -1 if x < y else 1
+    return 0
+
+
+def check_updates(entries: list[dict[str, Any]] | None = None,
+                  cfg: dict[str, Any] | None = None) -> dict[str, Any]:
+    """对每个带 ``origin.repo`` 的已上架插件，拉远端清单版本与本地比对。
+
+    - 逐条目独立容错：单个仓库拉挂了标 ``status: error``，不影响其余；
+    - 远端新增了后端模块（provides 有本地没有的）→ ``backend_added`` +
+      ``needs_restart``，前端升级确认时要提示"重启生效"；
+    - ``entries`` 参数供 selftest 离线注入（默认读市场上架清单）。
+    """
+    cfg = cfg if cfg is not None else load_config()
+    if entries is None:
+        entries = plugin_market_service.list_entries()
+    items: list[dict[str, Any]] = []
+    for entry in entries:
+        origin = entry.get("origin") if isinstance(entry, dict) else None
+        if not isinstance(origin, dict) or not str(origin.get("repo") or "").strip():
+            continue
+        repo = str(origin["repo"]).strip()
+        ref = str(origin.get("ref") or "").strip()
+        local_v = str(origin.get("version") or entry.get("version") or "")
+        item: dict[str, Any] = {
+            "agentId": entry.get("agentId"),
+            "id": entry.get("id") or entry.get("agentId"),
+            "name": entry.get("name"),
+            "repo": repo, "ref": ref,
+            "local_version": local_v, "remote_version": None,
+            "status": "error", "note": "",
+        }
+        try:
+            remote_mf = _fetch_manifest(cfg, repo, ref or None)
+            if remote_mf is None:
+                item["note"] = "远端仓库找不到 mao-plugin.json（仓库可能已删除或转私有）"
+            else:
+                remote_mf = validate_manifest(remote_mf)
+                rv = str(remote_mf.get("version") or "")
+                item["remote_version"] = rv
+                item["status"] = ("update_available"
+                                  if (rv and compare_versions(rv, local_v) > 0)
+                                  else "up_to_date")
+                be = remote_mf.get("backend")
+                if isinstance(be, dict) and isinstance(be.get("provides"), list):
+                    old = set((origin.get("backend") or {}).get("provides") or [])
+                    added = [p for p in be["provides"] if p not in old]
+                    if added:
+                        item["backend_added"] = added
+                        item["needs_restart"] = True
+        except RemoteSourceError as exc:
+            item["note"] = str(exc)
+        items.append(item)
+    return {"ok": True, "count": len(items),
+            "updates": sum(1 for i in items if i["status"] == "update_available"),
+            "items": items}

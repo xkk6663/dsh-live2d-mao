@@ -13,6 +13,7 @@
  *   GET    /api/plugin/market/remote/search        远程搜索（GitHub 社区插件，契约 §8）
  *   POST   /api/plugin/market/remote/preview       安装前预览（将落盘的文件清单）
  *   POST   /api/plugin/market/remote/install       远程安装（下载→校验→白名单落盘→上架）
+ *   GET    /api/plugin/market/remote/updates       检查更新（阶段 C，契约 §8.7：origin 版本比对）
  *   全部请求收口在 fetchAll() / callApi() 两个函数里 —— 方便打桩单测（见文件末尾注释）。
  *
  * ── 设计取舍（为什么这么做）────────────────────────────────────────────────
@@ -70,7 +71,7 @@
   var cache = { plugins: null, diag: null, at: 0 }
   // 视图状态：搜索词 / 分类筛选 / 上架表单展开与否 / 表单里已填的值 / 远程安装
   var view = { q: '', cat: 'all', formOpen: false, form: {},
-               remote: { open: false, q: '', results: null } }
+               remote: { open: false, q: '', results: null, updates: null } }
   var lastError = ''
 
   // ── DOM 小工具（与 pet-panel.js / dsh-panel.js 同一套写法，ES5 风格）────────
@@ -777,10 +778,20 @@
     bRefresh.type = 'button'
     bRefresh.title = '无视 6 小时缓存回 GitHub 重拉'
     bRefresh.addEventListener('click', function () { doRemoteSearch(wrap, true) })
+    var bUpdates = el('button', C.btn, '⤢ 检查更新')
+    bUpdates.type = 'button'
+    bUpdates.setAttribute('data-mio-market-remoteupdates', '1')
+    bUpdates.title = '对每个从 GitHub 装的插件拉远端版本与本地比对（契约 §8.7）'
+    bUpdates.addEventListener('click', function () { doRemoteUpdates(wrap) })
     bar.appendChild(inp)
     bar.appendChild(bSearch)
     bar.appendChild(bRefresh)
+    bar.appendChild(bUpdates)
     panelBox.appendChild(bar)
+
+    var updates = el('div', '')
+    updates.setAttribute('data-mio-market-remoteupdatelist', '1')
+    panelBox.appendChild(updates)
 
     var results = el('div', '')
     results.setAttribute('data-mio-market-remoteresults', '1')
@@ -836,6 +847,75 @@
     var grid = el('div', C.grid)
     for (var i = 0; i < items.length; i++) grid.appendChild(buildRemoteCard(wrap, items[i]))
     out.appendChild(grid)
+  }
+
+  function doRemoteUpdates(wrap) {
+    var out = $q('[data-mio-market-remoteupdatelist]', wrap)
+    if (!out) return
+    var btn = $q('[data-mio-market-remoteupdates]', wrap)
+    var done = busy(btn, '比对中…')
+    out.innerHTML = ''
+    out.appendChild(el('div', C.desc + 'margin-top:10px;', '正在逐个回 GitHub 拉远端清单版本…'))
+    callApi('GET', API + '/remote/updates')
+      .then(function (j) {
+        view.remote.updates = j && j.items ? j : { items: [], updates: 0 }
+        paintRemoteUpdates(wrap)
+      })
+      .catch(function (e) {
+        out.innerHTML = ''
+        out.appendChild(el('div', C.desc, '检查更新失败：' + esc((e && e.message) || e)))
+      })
+      .then(function () { done() })
+  }
+
+  function paintRemoteUpdates(wrap) {
+    var out = $q('[data-mio-market-remoteupdatelist]', wrap)
+    if (!out) return
+    out.innerHTML = ''
+    var res = view.remote.updates
+    var items = (res && res.items) || []
+    if (!items.length) {
+      out.appendChild(el('div', C.desc + 'margin-top:10px;',
+        '还没有从 GitHub 装过插件（安装时清单会记录来源 origin），没有可检查的对象。'))
+      return
+    }
+    var ups = res.updates || 0
+    out.appendChild(section('已装插件更新' + (ups ? ' · ' + ups + ' 个可升级' : ' · 全部最新')))
+    var listBox = el('div', 'display:flex;flex-direction:column;gap:8px;')
+    for (var i = 0; i < items.length; i++) {
+      (function (it) {
+      var row = el('div', C.card)
+      var head = el('div', 'display:flex;align-items:center;gap:8px;flex-wrap:wrap;')
+      head.appendChild(el('div', C.title, esc(it.name || it.id || it.repo)))
+      if (it.status === 'update_available') {
+        head.appendChild(badge('可升级 ' + esc(it.local_version || '?') + ' → v' + esc(it.remote_version),
+          SEMANTIC.ok, '远端仓库有新版本，升级 = 覆盖安装 + 更新清单条目'))
+      } else if (it.status === 'up_to_date') {
+        head.appendChild(badge('最新 v' + esc(it.remote_version || it.local_version || '?'),
+          SEMANTIC.idle, '本地与远端版本一致'))
+      } else {
+        head.appendChild(badge('检查失败', SEMANTIC.warn, esc(it.note || '远端不可达')))
+      }
+      row.appendChild(head)
+      row.appendChild(el('div', C.desc,
+        '<span style="opacity:.75">repo: ' + esc(it.repo || '') +
+        (it.backend_added ? ' · 远端新增后端模块：' + esc(it.backend_added.join('、')) : '') + '</span>'))
+      if (it.status === 'update_available') {
+        var rowBtn = el('div', 'display:flex;gap:8px;margin-top:6px;')
+        var bUp = el('button', C.btnPrimary, '升级到 v' + esc(it.remote_version))
+        bUp.type = 'button'
+        bUp.addEventListener('click', function () {
+          confirmAndInstall(wrap, bUp,
+            { repo: it.repo, ref: it.ref, name: it.name || it.id, id: it.id, verified: true },
+            true)
+        })
+        rowBtn.appendChild(bUp)
+        row.appendChild(rowBtn)
+      }
+      listBox.appendChild(row)
+      })(items[i])
+    }
+    out.appendChild(listBox)
   }
 
   function buildRemoteCard(wrap, it) {

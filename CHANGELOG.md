@@ -5,6 +5,39 @@
 
 ---
 
+## v1.6.0（2026-11-01）· **插件市场阶段 C：检查更新 + 精选 registry 落地**
+
+插件生命周期闭环补齐：从 GitHub 装的插件可一键比对远端版本、确认后覆盖升级。
+契约文档新增 **§8.7**。
+
+### 检查更新
+
+- 新增 `GET /api/plugin/market/remote/updates`（`check_updates`）：对每个带
+  `origin.repo` 的已上架插件，经 Contents API 轻量拉远端清单版本比对；
+  单条目容错（仓库消失/配额/清单非法 → `error` + `note`，不连坐）
+- `compare_versions` 纯函数：剥 v 前缀、数值段比较、短侧补零
+- 远端新增后端模块（provides 有本地没有的）→ `backend_added` + `needs_restart`
+- **升级 = 复用 `POST /remote/install` 带 `force=true`**（先摘旧条目、隔离区整目录
+  重建），没有独立 upgrade 端点——一条安装链路两种用途
+
+### 更新确认流（前端）
+
+- 市场面板新增「⤢ 检查更新」：更新卡片（local → remote 版本徽章 + 新增后端模块提示）
+  →「升级到 vX.Y.Z」→ 覆盖安装确认 → `needs_restart` 提示；升级确认走 §8.6 重启语义
+- `manifest.js` 升 1.3.0（loader 缓存键）
+
+### 精选 registry 落地
+
+- 新仓 **[mao-plugin-registry](https://github.com/xkk6663/mao-plugin-registry)**
+  （registry.json + README，PR 评审制），首条收录大肥鱼 1.2.0
+- `数据/插件市场-远程.json` 的 `registry_repo` 指向它——搜索结果叠加"精选"条目
+
+### 验收
+
+- 自检 236/236（新增 compare_versions 5 用例 + check_updates 离线注入 6 用例 + 端点数 12）
+
+---
+
 ## v1.5.0（2026-11-01）· **插件市场远程安装（阶段 A + B）：在线搜索 / 预览 / 安装 / 挂载**
 
 社区插件由独立 GitHub 仓库托管（仓库根放 `mao-plugin.json` 清单），市场端自动发现、

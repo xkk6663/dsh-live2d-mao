@@ -229,8 +229,8 @@ async def market_remote_preview(payload: dict[str, Any] = Body(...)) -> Response
 async def market_remote_install(payload: dict[str, Any] = Body(...)) -> Response:
     """远程安装：下载 zipball → 校验 → 白名单落盘（只进 dist/）→ 登记上架。
 
-    - ``force=true`` 覆盖安装（升级语义：先摘旧清单条目再登记）；
-    - 阶段 A 不支持 backend 字段的插件包（校验直接拒绝，见 source 服务）；
+    - ``force=true`` 覆盖安装（升级语义：先摘旧清单条目再登记，隔离区整目录重建）；
+    - 含 backend 字段的插件包装进隔离区 plugins_host/<id>/，重启后端挂载生效（§8.6）；
     - 装完前端须调 ``POST /reload`` + loader 重扫——面板已有这条链路。
     """
     try:
@@ -238,6 +238,17 @@ async def market_remote_install(payload: dict[str, Any] = Body(...)) -> Response
             plugin_source_service.install,
             str(payload.get("repo") or ""), payload.get("ref"),
             force=bool(payload.get("force")))
+    except plugin_source_service.RemoteSourceError as exc:
+        return _source_error(exc)
+    return JSONResponse(content=result)
+
+
+@router.get("/remote/updates")
+async def market_remote_updates() -> Response:
+    """检查更新（阶段 C，契约 §8.7）：对每个带 origin.repo 的已上架插件，
+    拉远端清单版本与本地比对；有更新时前端引导走 preview → install(force)。"""
+    try:
+        result = await asyncio.to_thread(plugin_source_service.check_updates)
     except plugin_source_service.RemoteSourceError as exc:
         return _source_error(exc)
     return JSONResponse(content=result)

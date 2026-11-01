@@ -496,6 +496,64 @@ def test_remote_source() -> None:
         check(f"远程 zip 计划：{p['rel_dest']} 在 dist 内",
               Path(p["dest_abs"]).is_relative_to(dist_root), p["dest_abs"])
 
+    # 5) 阶段 C（契约 §8.7）：版本比较 + 检查更新（entries 注入，全程离线）
+    check_eq("版本比较：1.2.0 < 1.3.0", src.compare_versions("1.2.0", "1.3.0"), -1)
+    check_eq("版本比较：1.10.0 > 1.9.0（数值段比较）",
+             src.compare_versions("1.10.0", "1.9.0"), 1)
+    check_eq("版本比较：v 前缀剥离相等", src.compare_versions("v1.2.0", "1.2.0"), 0)
+    check_eq("版本比较：1.2 < 1.2.0（短侧补零）", src.compare_versions("1.2", "1.2.0"), -1)
+    check_eq("版本比较：非数字段字符串比", src.compare_versions("1.0-beta", "1.0-rc"), -1)
+
+    _fake_cfg = {"topic": "t", "verified_authors": [], "registry_repo": "",
+                 "cache_hours": 6, "token": ""}
+
+    def _fake_fetch(cfg, repo, ref):
+        table = {
+            "x/newer": {"schema": 1, "id": "demo", "name": "d", "version": "2.0.0",
+                        "frontend": {"distPlugins": "f"}},
+            "x/same": {"schema": 1, "id": "d2", "name": "d", "version": "1.0.0",
+                       "frontend": {"distPlugins": "f"}},
+            "x/gone": None,
+            "x/beadd": {"schema": 1, "id": "d3", "name": "d", "version": "1.1.0",
+                        "frontend": {"distPlugins": "f"},
+                        "backend": {"package": "b", "provides": ["old_mod", "new_mod"]}},
+        }
+        return table.get(repo)
+
+    saved_fetch = src._fetch_manifest
+    src._fetch_manifest = _fake_fetch
+    try:
+        rep = src.check_updates(entries=[
+            {"agentId": "demo", "id": "demo", "name": "d",
+             "version": "1.0.0",
+             "origin": {"repo": "x/newer", "ref": "main", "version": "1.0.0"}},
+            {"agentId": "d2", "id": "d2", "name": "d",
+             "origin": {"repo": "x/same", "ref": "main", "version": "1.0.0"}},
+            {"agentId": "d3", "id": "d3", "name": "d",
+             "origin": {"repo": "x/beadd", "ref": "main", "version": "1.0.0",
+                        "backend": {"package": "b", "provides": ["old_mod"]}}},
+            {"agentId": "d4", "id": "d4", "name": "d",
+             "origin": {"repo": "x/gone", "ref": "main", "version": "1.0.0"}},
+            {"agentId": "local_only", "id": "local", "name": "本地手动上架，无 origin"},
+        ], cfg=_fake_cfg)
+        check_eq("检查更新：只扫带 origin 的条目", rep["count"], 4)
+        check_eq("检查更新：可升级计数", rep["updates"], 2)
+        by_id = {i["agentId"]: i for i in rep["items"]}
+        check_eq("检查更新：有新版 → update_available",
+                 by_id["demo"]["status"], "update_available")
+        check_eq("检查更新：版本一致 → up_to_date",
+                 by_id["d2"]["status"], "up_to_date")
+        check("检查更新：远端新增后端模块 → backend_added+needs_restart",
+              by_id["d3"].get("backend_added") == ["new_mod"]
+              and by_id["d3"].get("needs_restart") is True, str(by_id["d3"]))
+        check("检查更新：远端仓库消失 → error + note",
+              by_id["d4"]["status"] == "error" and "找不到" in by_id["d4"]["note"],
+              str(by_id["d4"]))
+        check("检查更新：无 origin 条目不误报",
+              all(i["agentId"] != "local_only" for i in rep["items"]))
+    finally:
+        src._fetch_manifest = saved_fetch
+
 
 # ---------------------------------------------------------------------------
 # 3) 增删幂等
@@ -919,8 +977,8 @@ def test_live_app() -> None:
         getattr(r, "path", "") for r in real_app.routes
         if "plugin/market" in str(getattr(r, "path", ""))
     })
-    # 契约 §2（8 个管理端点）+ §8（2026-11-01 新增 3 个远程安装端点）
-    check_eq("契约 §2+§8 的 11 个端点全部挂载", market_paths, [
+    # 契约 §2（8 个管理端点）+ §8（远程安装 3 个 + 阶段 C 检查更新 1 个）
+    check_eq("契约 §2+§8 的 12 个端点全部挂载", market_paths, [
         "/api/plugin/market/catalog",
         "/api/plugin/market/diagnostics",
         "/api/plugin/market/plugins",
@@ -930,6 +988,7 @@ def test_live_app() -> None:
         "/api/plugin/market/remote/install",
         "/api/plugin/market/remote/preview",
         "/api/plugin/market/remote/search",
+        "/api/plugin/market/remote/updates",
     ])
     methods = sorted({
         m for r in real_app.routes
