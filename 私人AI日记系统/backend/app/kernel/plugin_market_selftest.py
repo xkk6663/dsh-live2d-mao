@@ -554,6 +554,24 @@ def test_remote_source() -> None:
     finally:
         src._fetch_manifest = saved_fetch
 
+    # 6) 搜索合并去重（同 repo 不出两张卡，curated 叠加；旧缓存自愈）
+    topic_item = {"id": "feiyu", "name": "大肥鱼", "version": "1.2.0",
+                  "repo": "x/feiyu", "source": "topic", "stars": 3}
+    reg_hit = {"id": "feiyu", "repo": "x/feiyu", "name": "大肥鱼"}       # 撞仓 → 不加卡
+    reg_new = {"id": "other", "repo": "x/other", "name": "他插件"}       # 不撞 → 追加
+    merged = src.merge_registry([dict(topic_item)], [reg_hit, reg_new], {"x"})
+    check_eq("搜索合并：撞仓不重复出卡", len(merged), 2)
+    check_eq("搜索合并：撞仓 → curated 叠加到 topic 条目",
+             merged[0].get("curated"), True)
+    check_eq("搜索合并：未撞仓 registry 条目照常追加",
+             (merged[1]["source"], merged[1]["curated"]), ("registry", True))
+    cached_dup = [dict(topic_item),
+                  {"id": "feiyu", "repo": "x/feiyu", "name": "大肥鱼", "source": "registry"}]
+    dedup = src.dedupe_by_repo(cached_dup)
+    check_eq("缓存去重：旧缓存重复条目自愈为一张卡", len(dedup), 1)
+    check_eq("缓存去重：保留条目获得 curated + 版本不丢",
+             (dedup[0].get("curated"), dedup[0].get("version")), (True, "1.2.0"))
+
 
 # ---------------------------------------------------------------------------
 # 3) 增删幂等

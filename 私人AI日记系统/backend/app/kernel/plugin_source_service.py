@@ -299,13 +299,62 @@ def _repo_manifest_entry(cfg: dict[str, Any], item: dict[str, Any], source: str)
     }
 
 
+def merge_registry(items: list[dict[str, Any]], reg_items: list[Any],
+                   verified: set[str]) -> list[dict[str, Any]]:
+    """精选清单并入搜索结果（纯函数，selftest 直接覆盖；契约 §8.2/§8.7）。
+
+    **同仓库去重**：registry 条目若与 topic 自动发现撞了同一个 repo，
+    不出两张卡——把 ``curated: true`` 叠加到自动发现条目上（它带版本/星标/简介，
+    信息更全；registry 侧通常只有 repo+id），registry 副本丢弃。
+    未撞仓的 registry 条目照常追加（source=registry）。
+    """
+    by_repo = {str(i.get("repo") or ""): i for i in items}
+    for it in reg_items:
+        if not (isinstance(it, dict) and it.get("repo") and it.get("id")):
+            continue
+        existing = by_repo.get(str(it["repo"]))
+        if existing is not None:
+            existing["curated"] = True
+            continue
+        reg = dict(it)
+        reg.setdefault("source", "registry")
+        reg.setdefault("verified", str(it.get("author") or "") in verified)
+        reg["curated"] = True
+        by_repo[str(it["repo"])] = reg
+        items.append(reg)
+    return items
+
+
+def dedupe_by_repo(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """同 repo 只留第一条（纯函数）：被丢的若是精选来源，把 curated 叠到保留条目。
+
+    兜底用途：v1.6.0 及之前的搜索缓存里已存了"topic + registry 各一张卡"的
+    重复条目——缓存命中路径也过一遍这里，旧缓存自愈，不必等 TTL 或强刷。
+    """
+    seen: dict[str, dict[str, Any]] = {}
+    out: list[dict[str, Any]] = []
+    for it in items:
+        repo = str(it.get("repo") or "")
+        kept = seen.get(repo)
+        if kept is None:
+            seen[repo] = it
+            out.append(it)
+            continue
+        if it.get("source") == "registry" or it.get("curated"):
+            kept["curated"] = True
+        # 精选副本缺版本号（registry 侧只有 repo+id）→ 别把保留条目的版本弄丢
+        if it.get("version") and not kept.get("version"):
+            kept["version"] = it["version"]
+    return out
+
+
 def search(*, q: str = "", force: bool = False) -> dict[str, Any]:
     """远程插件搜索。缓存新鲜且非 force → 直接过滤缓存；否则回 GitHub 拉。"""
     cfg = load_config()
     cache = _cache_load()
     ttl = float(cfg.get("cache_hours") or 6) * 3600
     if not force and cache and (time.time() - cache.get("at", 0)) < ttl:
-        items = cache.get("items", [])
+        items = dedupe_by_repo(cache.get("items", []))
         stale = False
     else:
         items, stale = [], True
@@ -317,11 +366,9 @@ def search(*, q: str = "", force: bool = False) -> dict[str, Any]:
             entry = _repo_manifest_entry(cfg, it, "topic")
             if entry:
                 items.append(entry)
-        for it in _read_registry(cfg):
-            if isinstance(it, dict) and it.get("repo") and it.get("id"):
-                it.setdefault("source", "registry")
-                it.setdefault("verified", it.get("author") in set(cfg.get("verified_authors") or []))
-                items.append(it)
+        merge_registry(items, _read_registry(cfg),
+                       set(cfg.get("verified_authors") or []))
+        items = dedupe_by_repo(items)
         _cache_save(items)
     needle = q.strip().lower()
     if needle:

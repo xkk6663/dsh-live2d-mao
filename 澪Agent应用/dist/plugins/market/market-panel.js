@@ -933,7 +933,7 @@
     var meta = el('div', C.desc,
       '作者 ' + esc(it.author || '?') +
       (it.stars ? ' · ★ ' + esc(it.stars) : '') +
-      (it.source === 'registry' ? ' · 精选' : '') +
+      (it.source === 'registry' || it.curated ? ' · 精选' : '') +
       '<br><span style="opacity:.75">repo: ' + esc(it.repo || '') + '</span>')
     card.appendChild(meta)
 
